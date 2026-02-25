@@ -19,6 +19,9 @@ final class ToastWindow: NSPanel {
         isMovableByWindowBackground = false
     }
 
+    // TODO: Performance — creates a new NSHostingView on every log event.
+    // Refactor to use CurrentValueSubject<LogEntry?, Never> so the hosting view
+    // is created once and entry updates are pushed via binding.
     func setContent<V: View>(_ view: V) {
         let hosting = NSHostingView(rootView: AnyView(view))
         hosting.frame = contentView?.bounds ?? .zero

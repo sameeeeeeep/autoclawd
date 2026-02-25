@@ -80,8 +80,8 @@ final class AutoClawdLogger: @unchecked Sendable {
         let entry = LogEntry(timestamp: Date(), level: level, component: component, message: message)
         queue.async { [weak self] in
             self?.write(entry)
+            AutoClawdLogger.toastPublisher.send(entry)
         }
-        AutoClawdLogger.toastPublisher.send(entry)
     }
 
     // Convenience shorthand

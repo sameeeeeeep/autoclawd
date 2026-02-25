@@ -91,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Toast
 
     private func showToast(_ entry: LogEntry) {
+        guard appState.showFlowBar else { return }
         // Cancel any pending dismiss
         toastDismissWork?.cancel()
 
