@@ -13,6 +13,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
     case qa = "AI Search"
     case timeline = "Timeline"
     case profile = "Profile"
+    case projects = "Projects"
 
     var id: String { rawValue }
 
@@ -27,6 +28,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .qa: return "magnifyingglass"
         case .timeline: return "clock"
         case .profile: return "person.crop.circle"
+        case .projects: return "folder"
         }
     }
 }
@@ -135,6 +137,7 @@ struct MainPanelView: View {
         case .qa: QAView(store: appState.qaStore)
         case .timeline: SessionTimelineView()
         case .profile: UserProfileChatView().environmentObject(appState)
+        case .projects: ProjectsTabView(appState: appState)
         }
     }
 
@@ -178,32 +181,393 @@ struct MainPanelView: View {
 
 // MARK: - Todo Tab
 
+private func priorityRank(_ priority: String?) -> Int {
+    switch priority {
+    case "HIGH":   return 0
+    case "MEDIUM": return 1
+    case "LOW":    return 2
+    default:       return 3
+    }
+}
+
 struct TodoTabView: View {
     @ObservedObject var appState: AppState
-    @State private var content: String = ""
+    @State private var rawContent: String = ""
+    @State private var showRaw = false
+    @State private var runningTodo: StructuredTodo? = nil
+
+    var sortedTodos: [StructuredTodo] {
+        appState.structuredTodos.sorted {
+            priorityRank($0.priority) < priorityRank($1.priority)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             TabHeader("TO-DO LIST") {
-                Button("Refresh") { loadContent() }
+                Button("Refresh") {
+                    appState.refreshStructuredTodos()
+                    rawContent = appState.todosContent
+                }
+                .buttonStyle(.bordered)
+            }
+            Divider()
+
+            if appState.structuredTodos.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Text("No structured todos yet.")
+                        .font(BrutalistTheme.monoSM)
+                        .foregroundColor(.white.opacity(0.4))
+                    Text("Voice-captured todos appear here after synthesis.")
+                        .font(BrutalistTheme.monoSM)
+                        .foregroundColor(.white.opacity(0.25))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                List {
+                    ForEach(sortedTodos) { todo in
+                        StructuredTodoRow(todo: todo, appState: appState, onRun: { runningTodo = todo })
+                    }
+                }
+                .listStyle(.plain)
+            }
+
+            Divider()
+
+            DisclosureGroup("Raw Notes (LLM context)", isExpanded: $showRaw) {
+                TextEditor(text: $rawContent)
+                    .font(.custom("JetBrains Mono", size: 11))
+                    .frame(minHeight: 120)
+                    .padding(4)
+            }
+            .font(BrutalistTheme.monoSM)
+            .foregroundColor(.white.opacity(0.5))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+        .onAppear {
+            rawContent = appState.todosContent
+            appState.refreshStructuredTodos()
+        }
+        .onChange(of: rawContent) { newVal in appState.saveTodos(newVal) }
+        .sheet(item: $runningTodo) { todo in
+            ExecutionOutputView(todo: todo, appState: appState)
+        }
+    }
+}
+
+// MARK: - StructuredTodoRow
+
+struct StructuredTodoRow: View {
+    let todo: StructuredTodo
+    @ObservedObject var appState: AppState
+    let onRun: () -> Void
+
+    private var projectName: String {
+        appState.projects.first(where: { $0.id == todo.projectID })?.name ?? "No Project"
+    }
+
+    private var canRun: Bool {
+        todo.projectID != nil && ClaudeCodeRunner.findCLI() != nil
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            priorityBadge
+            Text(todo.content)
+                .font(.custom("JetBrains Mono", size: 11))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            projectMenu
+            Button(action: onRun) {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(canRun ? BrutalistTheme.neonGreen : .white.opacity(0.2))
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canRun)
+
+            if todo.isExecuted {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(BrutalistTheme.neonGreen)
+                    .font(.system(size: 12))
+            }
+
+            Button(action: { appState.deleteTodo(id: todo.id) }) {
+                Image(systemName: "trash")
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.3))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var priorityBadge: some View {
+        let (label, color): (String, Color) = {
+            switch todo.priority {
+            case "HIGH":   return ("H", .red)
+            case "MEDIUM": return ("M", .orange)
+            case "LOW":    return ("L", Color.white.opacity(0.4))
+            default:       return ("·", Color.white.opacity(0.2))
+            }
+        }()
+        return Text(label)
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .foregroundColor(color)
+            .frame(width: 16, height: 16)
+            .background(RoundedRectangle(cornerRadius: 3).fill(color.opacity(0.15)))
+    }
+
+    private var projectMenu: some View {
+        Menu {
+            Button("No Project") { appState.setTodoProject(todoID: todo.id, projectID: nil) }
+            Divider()
+            ForEach(appState.projects) { project in
+                Button(project.name) { appState.setTodoProject(todoID: todo.id, projectID: project.id) }
+            }
+        } label: {
+            Text(projectName)
+                .font(BrutalistTheme.monoSM)
+                .foregroundColor(.white.opacity(0.5))
+                .lineLimit(1)
+                .frame(maxWidth: 90, alignment: .trailing)
+        }
+        .menuStyle(.borderlessButton)
+    }
+}
+
+// MARK: - ExecutionOutputView
+
+struct ExecutionOutputView: View {
+    let todo: StructuredTodo
+    @ObservedObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var outputLines: [String] = []
+    @State private var isRunning = false
+    @State private var errorMessage: String? = nil
+    @State private var runTask: Task<Void, Never>? = nil
+
+    private var project: Project? {
+        appState.projects.first(where: { $0.id == todo.projectID })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(todo.content)
+                        .font(BrutalistTheme.monoMD)
+                        .lineLimit(2)
+                    if let p = project {
+                        Text(p.name + " · " + p.localPath)
+                            .font(BrutalistTheme.monoSM)
+                            .foregroundColor(.white.opacity(0.4))
+                    }
+                }
+                Spacer()
+                if isRunning { ProgressView().controlSize(.small) }
+            }
+            .padding()
+
+            Divider()
+
+            // Output
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(outputLines.enumerated()), id: \.offset) { idx, line in
+                            Text(line)
+                                .font(.custom("JetBrains Mono", size: 11))
+                                .textSelection(.enabled)
+                                .id(idx)
+                        }
+                    }
+                    .padding()
+                }
+                .onChange(of: outputLines.count) { _ in
+                    if let last = outputLines.indices.last {
+                        proxy.scrollTo(last, anchor: .bottom)
+                    }
+                }
+            }
+            .frame(minHeight: 300)
+
+            if let err = errorMessage {
+                Text("Error: \(err)")
+                    .font(BrutalistTheme.monoSM)
+                    .foregroundColor(.red)
+                    .padding(.horizontal)
+            }
+
+            Divider()
+
+            HStack {
+                Button("Copy Output") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(outputLines.joined(separator: "\n"), forType: .string)
+                }
+                .buttonStyle(.bordered)
+                .disabled(outputLines.isEmpty)
+
+                Spacer()
+
+                Button("Done") {
+                    runTask?.cancel()
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
+        }
+        .frame(minWidth: 560, minHeight: 440)
+        .onAppear { startExecution() }
+    }
+
+    private func startExecution() {
+        guard let proj = project else {
+            errorMessage = "No project assigned."
+            return
+        }
+        isRunning = true
+        let apiKey = SettingsManager.shared.anthropicAPIKey
+        let runner = ClaudeCodeRunner()
+        runTask = Task {
+            do {
+                for try await line in runner.run(todo: todo, project: proj, apiKey: apiKey.isEmpty ? nil : apiKey) {
+                    await MainActor.run { outputLines.append(line) }
+                }
+                let fullOutput = outputLines.joined(separator: "\n")
+                await MainActor.run {
+                    isRunning = false
+                    appState.markTodoExecuted(id: todo.id, output: fullOutput)
+                }
+            } catch {
+                await MainActor.run {
+                    isRunning = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+}
+
+
+// MARK: - Projects Tab
+
+struct ProjectsTabView: View {
+    @ObservedObject var appState: AppState
+    @State private var showAddSheet = false
+    @State private var newName = ""
+    @State private var newPath = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TabHeader("PROJECTS") {
+                Button("+ Add") { showAddSheet = true }
                     .buttonStyle(.bordered)
             }
             Divider()
-            ScrollView {
-                TextEditor(text: $content)
-                    .font(.custom("JetBrains Mono", size: 12))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding()
+
+            if appState.projects.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Text("No projects yet.")
+                        .font(BrutalistTheme.monoSM)
+                        .foregroundColor(.white.opacity(0.4))
+                    Text("Add a project folder to enable todo execution.")
+                        .font(BrutalistTheme.monoSM)
+                        .foregroundColor(.white.opacity(0.25))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                List {
+                    ForEach(appState.projects) { project in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(project.name)
+                                    .font(BrutalistTheme.monoMD)
+                                Text(project.localPath)
+                                    .font(BrutalistTheme.monoSM)
+                                    .foregroundColor(.white.opacity(0.4))
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Button(action: { appState.deleteProject(id: project.id) }) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.white.opacity(0.3))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .listStyle(.plain)
             }
         }
-        .onAppear { loadContent() }
-        .onChange(of: content) { newVal in
-            appState.saveTodos(newVal)
+        .sheet(isPresented: $showAddSheet) {
+            AddProjectSheet(isPresented: $showAddSheet, onAdd: { name, path in
+                appState.addProject(name: name, path: path)
+            })
         }
     }
+}
 
-    private func loadContent() {
-        content = appState.todosContent
+struct AddProjectSheet: View {
+    @Binding var isPresented: Bool
+    let onAdd: (String, String) -> Void
+    @State private var name = ""
+    @State private var path = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("ADD PROJECT").font(BrutalistTheme.monoLG)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Name").font(.caption).foregroundStyle(.secondary)
+                TextField("e.g. My App", text: $name)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Folder").font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    TextField("Path", text: $path)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Choose...") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseDirectories = true
+                        panel.canChooseFiles = false
+                        panel.allowsMultipleSelection = false
+                        panel.prompt = "Select Folder"
+                        if panel.runModal() == .OK, let url = panel.url {
+                            path = url.path
+                            if name.isEmpty { name = url.lastPathComponent }
+                        }
+                    }
+                }
+            }
+
+            HStack {
+                Button("Cancel") { isPresented = false }
+                Spacer()
+                Button("Add") {
+                    guard !name.isEmpty, !path.isEmpty else { return }
+                    onAdd(name, path)
+                    isPresented = false
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(name.isEmpty || path.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }
 
@@ -300,6 +664,7 @@ struct TranscriptRowView: View {
 struct SettingsTabView: View {
     @ObservedObject var appState: AppState
     @State private var groqKey = ""
+    @State private var anthropicKey = ""
     @State private var isValidating = false
     @State private var validationResult: Bool? = nil
 
@@ -309,9 +674,29 @@ struct SettingsTabView: View {
                 TabHeader("SETTINGS") { EmptyView() }
 
                 GroupBox("Display") {
-                    Toggle("Show Ambient Widget", isOn: $appState.showAmbientWidget)
-                        .font(BrutalistTheme.monoMD)
-                        .padding(8)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Show Ambient Widget", isOn: $appState.showAmbientWidget)
+                            .font(BrutalistTheme.monoMD)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Pill Appearance").font(.caption).foregroundStyle(.secondary)
+                            Picker("", selection: $appState.appearanceMode) {
+                                ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                                    Text(mode.displayName).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                        }
+                    }
+                    .padding(8)
+                }
+
+                GroupBox("Claude Code") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Anthropic API Key").font(.caption).foregroundStyle(.secondary)
+                        SecureField("sk-ant-...", text: $anthropicKey)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    .padding(8)
                 }
 
                 GroupBox("Transcription") {
@@ -376,8 +761,12 @@ struct SettingsTabView: View {
             }
             .padding()
         }
-        .onAppear { groqKey = appState.groqAPIKey }
+        .onAppear {
+            groqKey = appState.groqAPIKey
+            anthropicKey = SettingsManager.shared.anthropicAPIKey
+        }
         .onChange(of: groqKey) { appState.groqAPIKey = $0; validationResult = nil }
+        .onChange(of: anthropicKey) { SettingsManager.shared.anthropicAPIKey = $0 }
     }
 
     private func validateKey() {

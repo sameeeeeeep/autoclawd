@@ -28,5 +28,7 @@
 	<string>AutoClawd listens to your conversations to build your world model and to-do list.</string>
 	<key>NSPasteboardUsageDescription</key>
 	<string>AutoClawd monitors your clipboard to correlate copied content with transcripts.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>AutoClawd uses on-device speech recognition to transcribe audio privately without sending data to the internet.</string>
 </dict>
 </plist>

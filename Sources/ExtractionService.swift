@@ -10,12 +10,14 @@ final class ExtractionService: @unchecked Sendable {
     private let worldModel: WorldModelService
     private let todos: TodoService
     private let store: ExtractionStore
+    private let structuredTodoStore: StructuredTodoStore
 
-    init(ollama: OllamaService, worldModel: WorldModelService, todos: TodoService, store: ExtractionStore) {
+    init(ollama: OllamaService, worldModel: WorldModelService, todos: TodoService, store: ExtractionStore, structuredTodoStore: StructuredTodoStore) {
         self.ollama = ollama
         self.worldModel = worldModel
         self.todos = todos
         self.store = store
+        self.structuredTodoStore = structuredTodoStore
     }
 
     // MARK: - Pass 1: Classify Chunk
@@ -280,6 +282,11 @@ Start immediately with <WORLD_MODEL>.
 
         let ids = pending.map { $0.id }
         store.markApplied(ids: ids)
+
+        // Persist todo items into structured store for project-based execution
+        for item in pending where item.type == .todo {
+            structuredTodoStore.insert(content: item.content, priority: item.priority)
+        }
 
         Log.info(.extract, "Pass 2 complete: \(pending.count) items applied")
     }

@@ -22,11 +22,13 @@ enum AudioRetention: Int, CaseIterable {
 enum AppearanceMode: String, CaseIterable {
     case frosted     = "frosted"
     case transparent = "transparent"
+    case dynamic     = "dynamic"
 
     var displayName: String {
         switch self {
         case .frosted:     return "Frosted"
         case .transparent: return "Transparent"
+        case .dynamic:     return "Dynamic"
         }
     }
 }
@@ -89,6 +91,13 @@ final class SettingsManager: @unchecked Sendable {
     var groqAPIKey: String {
         get { AppSettingsStorage.load(account: kGroqAPIKey) ?? "" }
         set { AppSettingsStorage.save(newValue, account: kGroqAPIKey) }
+    }
+
+    private let kAnthropicAPIKey = "anthropic_api_key_storage"
+
+    var anthropicAPIKey: String {
+        get { AppSettingsStorage.load(account: kAnthropicAPIKey) ?? "" }
+        set { AppSettingsStorage.save(newValue, account: kAnthropicAPIKey) }
     }
 
     var showAmbientWidget: Bool {

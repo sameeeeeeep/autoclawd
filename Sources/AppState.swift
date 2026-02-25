@@ -65,10 +65,15 @@ final class AppState: ObservableObject {
         didSet { SettingsManager.shared.synthesizeThreshold = synthesizeThreshold }
     }
 
+    @Published var projects: [Project] = []
+    @Published var structuredTodos: [StructuredTodo] = []
+
     // MARK: - Services
 
     private let storage = FileStorageManager.shared
     let chunkManager: ChunkManager
+    private(set) var projectStore: ProjectStore
+    private(set) var structuredTodoStore: StructuredTodoStore
     let locationService = LocationService.shared
     private let ollama = OllamaService()
     private let worldModelService = WorldModelService()
@@ -104,13 +109,20 @@ final class AppState: ObservableObject {
         pillMode = savedMode
 
         transcriptStore = TranscriptStore(url: FileStorageManager.shared.transcriptsDatabaseURL)
+        let root = FileStorageManager.shared.rootDirectory
+        projectStore        = ProjectStore(url: root.appendingPathComponent("projects.db"))
+        structuredTodoStore = StructuredTodoStore(url: root.appendingPathComponent("structured_todos.db"))
+        projects            = projectStore.all()
+        structuredTodos     = structuredTodoStore.all()
+
         let exStore = ExtractionStore(url: FileStorageManager.shared.intelligenceDatabaseURL)
         extractionStore = exStore
         extractionService = ExtractionService(
             ollama: OllamaService(),
             worldModel: WorldModelService(),
             todos: TodoService(),
-            store: exStore
+            store: exStore,
+            structuredTodoStore: structuredTodoStore
         )
         pasteService = TranscriptionPasteService()
         qaService    = QAService(ollama: OllamaService())
@@ -237,7 +249,10 @@ final class AppState: ObservableObject {
 
     func synthesizeNow() async {
         await extractionService.synthesize()
-        await MainActor.run { refreshExtractionItems() }
+        await MainActor.run {
+            refreshExtractionItems()
+            refreshStructuredTodos()
+        }
     }
 
     func toggleExtraction(id: String) {
@@ -286,6 +301,36 @@ final class AppState: ObservableObject {
         if alert.runModal() == .alertFirstButtonReturn {
             deleteAllData()
         }
+    }
+
+    // MARK: - Project & Todo Management
+
+    func refreshProjects()        { projects = projectStore.all() }
+    func refreshStructuredTodos() { structuredTodos = structuredTodoStore.all() }
+
+    func addProject(name: String, path: String) {
+        _ = projectStore.insert(name: name, localPath: path)
+        refreshProjects()
+    }
+
+    func deleteProject(id: String) {
+        projectStore.delete(id: id)
+        refreshProjects()
+    }
+
+    func setTodoProject(todoID: String, projectID: String?) {
+        structuredTodoStore.setProject(id: todoID, projectID: projectID)
+        refreshStructuredTodos()
+    }
+
+    func deleteTodo(id: String) {
+        structuredTodoStore.delete(id: id)
+        refreshStructuredTodos()
+    }
+
+    func markTodoExecuted(id: String, output: String) {
+        structuredTodoStore.markExecuted(id: id, output: output)
+        refreshStructuredTodos()
     }
 
     // Callback set by AppDelegate so Settings tab can re-open the setup window

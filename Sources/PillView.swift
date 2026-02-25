@@ -77,10 +77,10 @@ struct PillView: View {
                 waveformBars
                 if state == .processing { scanLine }
             }
-            .frame(width: 100, height: 24)
+            .frame(width: 80, height: 24)
             .clipShape(Rectangle())
 
-            stateLabel
+            stateDot
 
             pausePlayButton
         }
@@ -99,12 +99,10 @@ struct PillView: View {
 
     private var modeButton: some View {
         Button(action: onCycleMode) {
-            Text(pillMode.shortLabel)
-                .font(.custom("JetBrains Mono", size: 10).weight(.bold))
-                .foregroundColor(state == .paused
-                    ? .white.opacity(0.4)
-                    : BrutalistTheme.neonGreen)
-                .frame(width: 36, height: 18)
+            Image(systemName: pillMode.icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(state == .paused ? .white.opacity(0.35) : BrutalistTheme.neonGreen)
+                .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -114,11 +112,11 @@ struct PillView: View {
 
     private var pausePlayButton: some View {
         Button(action: onTogglePause) {
-            Text(state == .paused ? "[▶]" : "[⏸]")
-                .font(.custom("JetBrains Mono", size: 10).weight(.bold))
-                .foregroundColor(.white.opacity(state == .paused ? 0.9 : 0.5))
-                .frame(width: 28, height: 18)
-                .contentShape(Rectangle())
+            Image(systemName: state == .paused ? "play.fill" : "pause.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(state == .paused ? 0.85 : 0.55))
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Color.white.opacity(state == .paused ? 0.15 : 0.08)))
         }
         .buttonStyle(.plain)
     }
@@ -185,23 +183,26 @@ struct PillView: View {
         scanTimer = nil
     }
 
-    // MARK: - Label
+    // MARK: - State Dot
 
-    private var stateLabel: some View {
-        Text(labelText)
-            .font(.custom("JetBrains Mono", size: 10).weight(.medium))
-            .foregroundColor(.white.opacity(0.7))
-            .monospacedDigit()
+    private var stateDot: some View {
+        Circle()
+            .fill(stateDotColor)
+            .frame(width: 6, height: 6)
     }
 
-    private var labelText: String {
+    private var stateDotColor: Color {
         switch state {
-        case .listening:  return "LIVE"
-        case .processing: return "PROC"
-        case .paused:     return "PAUSE"
-        case .silence:    return "SIL"
-        case .minimal:    return ""
+        case .listening:  return BrutalistTheme.neonGreen
+        case .processing: return Color(red: 1.0, green: 0.65, blue: 0.0)
+        case .paused:     return Color.white.opacity(0.30)
+        case .silence:    return Color.white.opacity(0.15)
+        case .minimal:    return Color.clear
         }
+    }
+
+    private var isActiveState: Bool {
+        state == .listening || state == .processing
     }
 
     // MARK: - Background & Border
@@ -215,6 +216,16 @@ struct PillView: View {
             case .transparent:
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .fill(Color.black.opacity(0.35))
+            case .dynamic:
+                ZStack {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .opacity(isActiveState ? 1 : 0)
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(Color.black.opacity(0.35))
+                        .opacity(isActiveState ? 0 : 1)
+                }
+                .animation(.easeInOut(duration: 0.4), value: isActiveState)
             }
             // Specular sheen (both modes)
             LinearGradient(
