@@ -128,6 +128,11 @@ nonrelevant|-|-|-|Filler phrase
             Log.info(.extract, "\(symbol) \(item.modelDecision) | \(item.bucket.rawValue) | \(item.type.rawValue) | \(item.content)")
         }
 
+        // Speak the first relevant item as a brief ambient notification
+        if let firstRelevant = items.first(where: { $0.isAccepted }) {
+            SpeechService.shared.speak(firstRelevant.content)
+        }
+
         return items
     }
 

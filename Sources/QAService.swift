@@ -24,6 +24,7 @@ Question: \(question)
         let answer = try await ollama.generate(prompt: prompt, numPredict: 512)
         let elapsed = Date().timeIntervalSince(t0)
         Log.info(.qa, "Answer in \(String(format: "%.1f", elapsed))s: \"\(String(answer.prefix(80)))\"")
+        SpeechService.shared.speak(answer)
         return answer
     }
 }
