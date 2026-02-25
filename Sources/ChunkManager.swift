@@ -32,7 +32,8 @@ final class ChunkManager: ObservableObject {
 
     private var currentSessionID: String?
     private let sessionStore = SessionStore.shared
-    private var _transcriptBuffer: [String] = []
+    private let locationService = LocationService.shared
+    private var transcriptBuffer: [String] = []
 
     private var chunkTimer: Task<Void, Never>?
     private var transcriptionService: TranscriptionService?
@@ -77,7 +78,7 @@ final class ChunkManager: ObservableObject {
         Log.info(.system, "ChunkManager: startListening() called")
         beginChunkCycle()
         // Begin a new session row
-        let ssid = LocationService.shared.currentSSID
+        let ssid = locationService.currentSSID
         currentSessionID = sessionStore.beginSession(wifiSSID: ssid)
     }
 
@@ -90,7 +91,7 @@ final class ChunkManager: ObservableObject {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
             currentSessionID = nil
         }
-        _transcriptBuffer.removeAll()
+        transcriptBuffer.removeAll()
         state = .stopped
         Log.info(.system, "ChunkManager: stopped")
     }
@@ -102,7 +103,7 @@ final class ChunkManager: ObservableObject {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
             currentSessionID = nil
         }
-        _transcriptBuffer.removeAll()
+        transcriptBuffer.removeAll()
         let silenceRatio = audioRecorder.silenceRatio
         let duration = Int(Date().timeIntervalSince(chunkStartTime ?? Date()))
         let savedURL = audioRecorder.stopRecording()
@@ -149,7 +150,7 @@ final class ChunkManager: ObservableObject {
         guard case .paused = state else { return }
         Log.info(.system, "ChunkManager: resuming")
         // Start a fresh session on resume
-        let ssid = LocationService.shared.currentSSID
+        let ssid = locationService.currentSSID
         currentSessionID = sessionStore.beginSession(wifiSSID: ssid)
         beginChunkCycle()
     }
@@ -157,7 +158,7 @@ final class ChunkManager: ObservableObject {
     // MARK: - Session Helpers
 
     private func latestTranscriptSnippet() -> String {
-        let combined = _transcriptBuffer.suffix(3).joined(separator: " ")
+        let combined = transcriptBuffer.suffix(3).joined(separator: " ")
         return String(combined.prefix(120))
     }
 
@@ -290,16 +291,16 @@ final class ChunkManager: ObservableObject {
             audioFilePath: audioURL.path
         )
 
+        // Resolve SSID on main actor, then do SQLite work off main actor
+        let (currentSID, ssid) = await MainActor.run { (self.currentSessionID, self.locationService.currentSSID) }
+        let placeID = ssid.flatMap { SessionStore.shared.findPlace(wifiSSID: $0)?.id }
+        if let sid = currentSID, let pid = placeID {
+            SessionStore.shared.updateSessionPlace(id: sid, placeID: pid)
+        }
+
         await MainActor.run {
             self.onTranscriptReady?(transcript, audioURL)
-            // Append to session transcript buffer
-            self._transcriptBuffer.append(transcript)
-            // Update session place if location is now known
-            if let sid = self.currentSessionID,
-               let ssid = LocationService.shared.currentSSID,
-               let place = SessionStore.shared.findPlace(wifiSSID: ssid) {
-                SessionStore.shared.updateSessionPlace(id: sid, placeID: place.id)
-            }
+            self.transcriptBuffer.append(transcript)
         }
 
         switch pillMode {
