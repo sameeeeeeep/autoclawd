@@ -129,7 +129,7 @@ final class ClaudeCodeRunner: Sendable {
                 process.currentDirectoryURL = URL(fileURLWithPath: project.localPath)
 
                 var env = ProcessInfo.processInfo.environment
-                let apiKeyVal = SettingsManager.shared.groqAPIKey
+                let apiKeyVal = SettingsManager.shared.anthropicAPIKey
                 if !apiKeyVal.isEmpty {
                     env["ANTHROPIC_API_KEY"] = apiKeyVal
                 }
