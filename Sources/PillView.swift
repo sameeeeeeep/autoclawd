@@ -19,6 +19,8 @@ struct PillView: View {
     let onTogglePause: () -> Void
     let onOpenLogs: () -> Void
     let onToggleMinimal: () -> Void
+    let pillMode: PillMode = .ambientIntelligence
+    let onCycleMode: () -> Void = {}
 
     @State private var scanOffset: CGFloat = -120
     @State private var scanTimer: Timer? = nil
@@ -41,7 +43,7 @@ struct PillView: View {
 
     private var fullPillView: some View {
         HStack(spacing: 8) {
-            stateIcon
+            modeButton
 
             ZStack {
                 waveformBars
@@ -59,6 +61,19 @@ struct PillView: View {
         .background(pillBackground)
         .overlay(pillBorder)
         .frame(height: 40)
+    }
+
+    // MARK: - Mode Button
+
+    private var modeButton: some View {
+        Button(action: onCycleMode) {
+            Image(systemName: pillMode.icon)
+                .font(.system(size: 11))
+                .foregroundColor(.white.opacity(state == .paused ? 0.4 : 1.0))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Pause/Play Button
@@ -136,20 +151,7 @@ struct PillView: View {
         scanTimer = nil
     }
 
-    // MARK: - Icon & Label
-
-    private var stateIcon: some View {
-        Group {
-            switch state {
-            case .listening:  Image(systemName: "mic.fill").foregroundColor(.white)
-            case .processing: Image(systemName: "waveform").foregroundColor(.white.opacity(0.7))
-            case .paused:     Image(systemName: "pause.fill").foregroundColor(.white.opacity(0.5))
-            case .silence:    Image(systemName: "mic.slash").foregroundColor(.white.opacity(0.3))
-            case .minimal:    EmptyView()
-            }
-        }
-        .font(.system(size: 11))
-    }
+    // MARK: - Label
 
     private var stateLabel: some View {
         Text(labelText)
@@ -186,6 +188,8 @@ struct PillView: View {
         Group {
             Button("Open Panel") { onOpenPanel() }
             Button(state == .paused ? "Resume Listening" : "Pause Listening") { onTogglePause() }
+            Divider()
+            Button("Mode: \(pillMode.displayName) → \(pillMode.next().displayName)") { onCycleMode() }
             Divider()
             Button("View Logs") { onOpenLogs() }
         }
