@@ -30,7 +30,16 @@
       "Bash(echo:*)",
       "Bash(else)",
       "Bash(fi)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/PillMode.swift:*)",
+      "Bash(/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/QAStore.swift:*)",
+      "Bash(/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/TranscriptionPasteService.swift:*)",
+      "Bash(/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/QAService.swift:*)",
+      "Bash(git init:*)",
+      "Bash(\"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/ChunkManager.swift\":*)",
+      "Bash(\"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/QAView.swift\":*)",
+      "Bash(\"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/AppState.swift\":*)",
+      "Bash(\"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/PillView.swift\":*)"
     ]
   }
 }
