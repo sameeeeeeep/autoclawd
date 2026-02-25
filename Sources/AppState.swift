@@ -40,6 +40,14 @@ final class AppState: ObservableObject {
         }
     }
 
+    @Published var pillMode: PillMode {
+        didSet {
+            UserDefaults.standard.set(pillMode.rawValue, forKey: "pillMode")
+            chunkManager.pillMode = pillMode
+            Log.info(.system, "Pill mode → \(pillMode.rawValue)")
+        }
+    }
+
     @Published var extractionItems: [ExtractionItem] = []
     @Published var pendingExtractionCount: Int = 0
     @Published var synthesizeThreshold: Int {
@@ -57,6 +65,9 @@ final class AppState: ObservableObject {
     private let transcriptStore: TranscriptStore
     let extractionStore: ExtractionStore
     private let extractionService: ExtractionService
+    private let pasteService: TranscriptionPasteService
+    private let qaService: QAService
+    let qaStore: QAStore
 
     // MARK: - Derived Content (refreshed on demand)
 
@@ -74,6 +85,10 @@ final class AppState: ObservableObject {
         groqAPIKey          = settings.groqAPIKey
         synthesizeThreshold = settings.synthesizeThreshold
 
+        let savedMode = UserDefaults.standard.string(forKey: "pillMode")
+            .flatMap { PillMode(rawValue: $0) } ?? .ambientIntelligence
+        pillMode = savedMode
+
         transcriptStore = TranscriptStore(url: FileStorageManager.shared.transcriptsDatabaseURL)
         let exStore = ExtractionStore(url: FileStorageManager.shared.intelligenceDatabaseURL)
         extractionStore = exStore
@@ -83,6 +98,9 @@ final class AppState: ObservableObject {
             todos: TodoService(),
             store: exStore
         )
+        pasteService = TranscriptionPasteService()
+        qaService    = QAService(ollama: OllamaService())
+        qaStore      = QAStore()
         chunkManager = ChunkManager()
 
         setupLogger()
@@ -139,6 +157,10 @@ final class AppState: ObservableObject {
             pillState = .listening
             Log.info(.ui, "Mic resumed")
         }
+    }
+
+    func cyclePillMode() {
+        pillMode = pillMode.next()
     }
 
     // MARK: - Transcript Access
@@ -258,7 +280,10 @@ final class AppState: ObservableObject {
         chunkManager.configure(
             transcriptionService: ts,
             extractionService: extractionService,
-            transcriptStore: transcriptStore
+            transcriptStore: transcriptStore,
+            pasteService: pasteService,
+            qaService: qaService,
+            qaStore: qaStore
         )
     }
 
