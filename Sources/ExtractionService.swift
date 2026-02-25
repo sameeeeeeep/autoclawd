@@ -21,8 +21,12 @@ final class ExtractionService: @unchecked Sendable {
     // MARK: - Pass 1: Classify Chunk
 
     func classifyChunk(transcript: String, chunkIndex: Int) async -> [ExtractionItem] {
+        let contextBlock = SessionStore.shared.buildContextBlock(
+            currentSSID: await MainActor.run { LocationService.shared.currentSSID }
+        )
+        let contextPrefix = contextBlock.isEmpty ? "" : "\(contextBlock)\n\n---\n\n"
         let prompt = """
-You classify spoken transcript ideas into structured knowledge items.
+\(contextPrefix)You classify spoken transcript ideas into structured knowledge items.
 
 TRANSCRIPT:
 \(transcript)

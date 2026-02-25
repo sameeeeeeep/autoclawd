@@ -291,3 +291,45 @@ final class SessionStore: @unchecked Sendable {
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+// MARK: - Context Block Builder
+
+extension SessionStore {
+    /// Builds the context preamble injected into every LLM prompt.
+    func buildContextBlock(currentSSID: String?) -> String {
+        var lines: [String] = []
+
+        // User profile
+        if let blob = userContextBlob(), !blob.isEmpty {
+            lines.append("[USER CONTEXT]\n\(blob)")
+        }
+
+        // Current session location
+        let place: String
+        if let ssid = currentSSID, let p = findPlace(wifiSSID: ssid) {
+            place = p.name.isEmpty ? "Unknown" : p.name
+        } else {
+            place = "Unknown"
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE d MMM, h:mma"
+        let timeStr = formatter.string(from: Date())
+        lines.append("[CURRENT SESSION]\nLocation: \(place) | Time: \(timeStr)")
+
+        // Last 3 sessions
+        let recent = recentSessions(limit: 3)
+        if !recent.isEmpty {
+            let sessionSummaries = recent.map { s -> String in
+                let df = DateFormatter()
+                df.dateFormat = "EEE d MMM"
+                let day = df.string(from: s.startedAt)
+                let loc = s.placeName.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown"
+                let snippet = s.transcriptSnippet.isEmpty ? "(no transcript)" : s.transcriptSnippet
+                return "\(day) at \(loc) — \(snippet)"
+            }.joined(separator: "\n")
+            lines.append("[RECENT SESSIONS]\n\(sessionSummaries)")
+        }
+
+        return lines.joined(separator: "\n\n")
+    }
+}

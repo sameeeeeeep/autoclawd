@@ -10,8 +10,12 @@ final class QAService: @unchecked Sendable {
     }
 
     func answer(question: String) async throws -> String {
+        let contextBlock = SessionStore.shared.buildContextBlock(
+            currentSSID: await MainActor.run { LocationService.shared.currentSSID }
+        )
+        let contextPrefix = contextBlock.isEmpty ? "" : "\(contextBlock)\n\n---\n\n"
         let prompt = """
-Answer this question concisely in 1-3 sentences. If you don't know, say so.
+\(contextPrefix)Answer this question concisely in 1-3 sentences. If you don't know, say so.
 
 Question: \(question)
 """
