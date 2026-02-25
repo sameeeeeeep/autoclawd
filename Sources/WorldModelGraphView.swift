@@ -55,7 +55,7 @@ struct WorldModelGraphView: View {
 
     private var rawEditor: some View {
         TextEditor(text: $rawContent)
-            .font(.custom("JetBrains Mono", size: 12))
+            .font(BrutalistTheme.monoMD)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(8)
             .onChange(of: rawContent) { newVal in
@@ -103,7 +103,7 @@ struct WorldModelGraphView: View {
     private func refresh() {
         let content = appState.worldModelContent
         var parsed = WorldModelGraphParser.parse(content)
-        let size = CGSize(width: max(800, requiredCanvasWidth), height: max(600, requiredCanvasHeight))
+        let size = CGSize(width: 800, height: 600)
         WorldModelGraphLayout.apply(to: &parsed, in: size)
         model = parsed
         selectedNodeID = nil
