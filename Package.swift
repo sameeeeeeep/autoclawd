@@ -8,7 +8,10 @@ let package = Package(
         .executableTarget(
             name: "AutoClawd",
             path: "Sources",
-            linkerSettings: [.linkedLibrary("sqlite3")]
+            linkerSettings: [
+                .linkedLibrary("sqlite3"),
+                .linkedFramework("CoreWLAN")
+            ]
         )
     ]
 )

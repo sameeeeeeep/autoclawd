@@ -52,6 +52,8 @@ final class AppState: ObservableObject {
         didSet { SettingsManager.shared.showFlowBar = showFlowBar }
     }
 
+    @Published var pendingUnknownSSID: String? = nil
+
     @Published var extractionItems: [ExtractionItem] = []
     @Published var pendingExtractionCount: Int = 0
     @Published var synthesizeThreshold: Int {
@@ -62,6 +64,7 @@ final class AppState: ObservableObject {
 
     private let storage = FileStorageManager.shared
     let chunkManager: ChunkManager
+    let locationService = LocationService.shared
     private let ollama = OllamaService()
     private let worldModelService = WorldModelService()
     private let todoService = TodoService()
@@ -118,6 +121,10 @@ final class AppState: ObservableObject {
     func applicationDidFinishLaunching() {
         Log.info(.system, "AutoClawd started. Mode: \(transcriptionMode.rawValue). RAM: (not measured)")
         ClipboardMonitor.shared.start()
+        locationService.start()
+        locationService.onUnknownSSID = { [weak self] ssid in
+            self?.pendingUnknownSSID = ssid
+        }
 
         if micEnabled {
             startListening()
