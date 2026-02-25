@@ -191,7 +191,7 @@ nonrelevant|-|-|-|Filler phrase
         }
 
         let prompt = """
-You maintain a world model and to-do list.
+You maintain a user's world model and to-do list. Update them with the new information.
 
 CURRENT WORLD MODEL:
 \(currentWorld)
@@ -204,9 +204,15 @@ NEW ACCEPTED FACTS (\(dateStr)):
 NEW ACCEPTED TODOS:
 \(todosSection)
 
-Update both files. Output complete updated versions:
-<WORLD_MODEL>...</WORLD_MODEL>
-<TODOS>...</TODOS>
+Output ONLY the two XML blocks below. No explanation. No markdown. No extra text.
+Start immediately with <WORLD_MODEL>.
+
+<WORLD_MODEL>
+[updated world model text here]
+</WORLD_MODEL>
+<TODOS>
+[updated to-do list text here]
+</TODOS>
 """
 
         let response: String
@@ -220,14 +226,25 @@ Update both files. Output complete updated versions:
         let updatedWorld = extract(from: response, tag: "WORLD_MODEL")
         let updatedTodos = extract(from: response, tag: "TODOS")
 
+        if updatedWorld == nil && updatedTodos == nil {
+            let preview = String(response.prefix(200)).replacingOccurrences(of: "\n", with: " ")
+            Log.error(.extract, "Pass 2: Ollama response missing XML tags. Preview: \(preview)")
+            // Do NOT mark items applied — they will retry next synthesize call
+            return
+        }
+
         if let w = updatedWorld, !w.isEmpty {
             worldModel.write(w)
-            Log.info(.world, "World model updated")
+            Log.info(.world, "World model updated (\(w.count) chars)")
+        } else if updatedWorld == nil {
+            Log.warn(.extract, "Pass 2: WORLD_MODEL tag missing in response")
         }
 
         if let t = updatedTodos, !t.isEmpty {
             todos.write(t)
-            Log.info(.todo, "Todos updated")
+            Log.info(.todo, "Todos updated (\(t.count) chars)")
+        } else if updatedTodos == nil {
+            Log.warn(.extract, "Pass 2: TODOS tag missing in response")
         }
 
         let ids = pending.map { $0.id }

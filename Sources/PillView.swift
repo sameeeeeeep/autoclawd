@@ -88,6 +88,7 @@ struct PillView: View {
         .background(pillBackground)
         .overlay(pillBorder)
         .frame(height: 40)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .opacity(pillOpacity)
         .onAppear { startPulse() }
         .onChange(of: state) { _ in startPulse() }
@@ -208,9 +209,11 @@ struct PillView: View {
         ZStack {
             switch appearanceMode {
             case .frosted:
-                Rectangle().fill(.ultraThinMaterial)
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(.ultraThinMaterial)
             case .transparent:
-                Rectangle().fill(Color.black.opacity(0.35))
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(Color.black.opacity(0.35))
             }
             // Specular sheen (both modes)
             LinearGradient(
@@ -218,11 +221,13 @@ struct PillView: View {
                 startPoint: .top,
                 endPoint: .center
             )
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
     }
 
     private var pillBorder: some View {
-        Rectangle().stroke(Color.white.opacity(0.25), lineWidth: 1)
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .stroke(Color.white.opacity(0.25), lineWidth: 1)
     }
 
     // MARK: - Context Menu
