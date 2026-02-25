@@ -62,15 +62,23 @@ struct MainPanelView: View {
 
             ForEach(PanelTab.allCases) { tab in
                 Button { selectedTab = tab } label: {
-                    Label(tab.rawValue, systemImage: tab.icon)
+                    Label(tab.rawValue.uppercased(), systemImage: tab.icon)
+                        .font(BrutalistTheme.monoMD)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 7)
                         .padding(.horizontal, 10)
                         .background(
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(selectedTab == tab
-                                      ? Color.primary.opacity(0.12)
-                                      : Color.clear)
+                            ZStack(alignment: .leading) {
+                                Rectangle()
+                                    .fill(selectedTab == tab
+                                          ? BrutalistTheme.selectedBG
+                                          : Color.clear)
+                                if selectedTab == tab {
+                                    Rectangle()
+                                        .fill(BrutalistTheme.neonGreen)
+                                        .frame(width: BrutalistTheme.selectedAccentWidth)
+                                }
+                            }
                         )
                 }
                 .buttonStyle(.plain)
@@ -82,16 +90,13 @@ struct MainPanelView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Divider()
                 HStack {
-                    Circle()
-                        .fill(appState.micEnabled ? Color.green : Color.gray)
-                        .frame(width: 6, height: 6)
-                    Text(appState.micEnabled ? "Listening" : "Off")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(appState.micEnabled ? "[ON]" : "[OFF]")
+                        .font(BrutalistTheme.monoSM)
+                        .foregroundColor(appState.micEnabled ? BrutalistTheme.neonGreen : .white.opacity(0.4))
                     Spacer()
-                    Text(appState.transcriptionMode == .groq ? "Groq" : "Local")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    Text(appState.transcriptionMode == .groq ? "[GROQ]" : "[LOCAL]")
+                        .font(BrutalistTheme.monoSM)
+                        .foregroundColor(.white.opacity(0.35))
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -131,7 +136,7 @@ struct TodoTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            tabHeader("To-Do List") {
+            TabHeader("TO-DO LIST") {
                 Button("Refresh") { loadContent() }
                     .buttonStyle(.bordered)
             }
@@ -162,7 +167,7 @@ struct WorldModelTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            tabHeader("World Model") {
+            TabHeader("WORLD MODEL") {
                 Button("Refresh") { loadContent() }
                     .buttonStyle(.bordered)
             }
@@ -194,7 +199,7 @@ struct TranscriptTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            tabHeader("Transcripts") {
+            TabHeader("TRANSCRIPTS") {
                 TextField("Search...", text: $search)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 200)
@@ -253,7 +258,7 @@ struct SettingsTabView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                tabHeader("Settings") { EmptyView() }
+                TabHeader("SETTINGS") { EmptyView() }
 
                 GroupBox("Transcription") {
                     VStack(alignment: .leading, spacing: 12) {
@@ -335,7 +340,7 @@ struct LogsTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            tabHeader("Logs") {
+            TabHeader("LOGS") {
                 HStack {
                     Picker("Component", selection: $filterComponent) {
                         Text("All").tag(LogComponent?.none)
@@ -385,13 +390,25 @@ struct LogsTabView: View {
 
 // MARK: - Shared Header
 
-func tabHeader<Trailing: View>(_ title: String, @ViewBuilder trailing: () -> Trailing) -> some View {
-    HStack {
-        Text(title)
-            .font(.system(size: 14, weight: .semibold))
-        Spacer()
-        trailing()
+struct TabHeader<Trailing: View>: View {
+    let title: String
+    @ViewBuilder let trailing: () -> Trailing
+
+    init(_ title: String, @ViewBuilder trailing: @escaping () -> Trailing) {
+        self.title = title
+        self.trailing = trailing
     }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 10)
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(BrutalistTheme.monoLG)
+                .foregroundColor(.white)
+                .textCase(.uppercase)
+            Spacer()
+            trailing()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
 }

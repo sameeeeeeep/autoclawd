@@ -8,7 +8,7 @@ struct QAView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            tabHeader("AI Search") { EmptyView() }
+            TabHeader("AI SEARCH") { EmptyView() }
             Divider()
 
             if store.items.isEmpty {
