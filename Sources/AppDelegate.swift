@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pillWindow: PillWindow?
     private var mainPanel: MainPanelWindow?
     private var toastWindow: ToastWindow?
+    private var setupWindow: SetupWindow?
     private var toastDismissWork: DispatchWorkItem?
     private var cancellables = Set<AnyCancellable>()
 
@@ -18,8 +19,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         appState.applicationDidFinishLaunching()
+        appState.onShowSetup = { [weak self] in Task { @MainActor in self?.showSetupWindowSync() } }
 
         showPill()
+
+        // Show first-run setup if dependencies are missing
+        showSetupIfNeeded()
 
         // Check microphone permission
         checkMicPermission()
@@ -155,6 +160,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default:
             showMicAlert()
         }
+    }
+
+    // MARK: - Setup Window
+
+    private func showSetupIfNeeded() {
+        // Immediate show if no Groq key
+        if SettingsManager.shared.groqAPIKey.isEmpty {
+            showSetupWindowSync()
+            return
+        }
+        // Background check for Ollama
+        Task {
+            let ollamaOK = await OllamaService().isAvailable()
+            if !ollamaOK { showSetupWindowSync() }
+        }
+    }
+
+    private func showSetupWindowSync() {
+        guard setupWindow == nil else {
+            setupWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let win = SetupWindow { [weak self] in
+            self?.setupWindow?.orderOut(nil)
+            self?.setupWindow = nil
+        }
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        setupWindow = win
+        Log.info(.ui, "Setup window shown")
     }
 
     private func showMicAlert() {

@@ -1,6 +1,7 @@
 import Foundation
+import Speech
 
-// MARK: - TranscriptionService (Groq Whisper)
+// MARK: - TranscriptionService (Groq Whisper + Local SFSpeechRecognizer)
 
 final class TranscriptionService: @unchecked Sendable {
     private let apiKey: String
@@ -104,6 +105,56 @@ final class TranscriptionService: @unchecked Sendable {
             return text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         throw TranscriptionError.failed("Could not parse response")
+    }
+}
+
+// MARK: - Local Transcription (SFSpeechRecognizer, on-device)
+
+final class LocalTranscriptionService: @unchecked Sendable {
+
+    /// Request speech recognition permission. Returns true if granted.
+    static func requestAuthorization() async -> Bool {
+        await withCheckedContinuation { cont in
+            SFSpeechRecognizer.requestAuthorization { status in
+                cont.resume(returning: status == .authorized)
+            }
+        }
+    }
+
+    func transcribe(fileURL: URL) async throws -> String {
+        // Ensure permission
+        let status = SFSpeechRecognizer.authorizationStatus()
+        if status != .authorized {
+            let granted = await LocalTranscriptionService.requestAuthorization()
+            guard granted else { throw TranscriptionError.failed("Speech recognition not authorized") }
+        }
+
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+              recognizer.isAvailable else {
+            throw TranscriptionError.failed("On-device speech recognizer unavailable")
+        }
+
+        let request = SFSpeechURLRecognitionRequest(url: fileURL)
+        request.shouldReportPartialResults = false
+        request.requiresOnDeviceRecognition = true   // no data leaves the device
+
+        return try await withCheckedThrowingContinuation { cont in
+            var resumed = false
+            recognizer.recognitionTask(with: request) { result, error in
+                guard !resumed else { return }
+                if let error {
+                    resumed = true
+                    cont.resume(throwing: TranscriptionError.failed(error.localizedDescription))
+                    return
+                }
+                if let result, result.isFinal {
+                    resumed = true
+                    let text = result.bestTranscription.formattedString
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    cont.resume(returning: text)
+                }
+            }
+        }
     }
 }
 

@@ -359,6 +359,13 @@ struct SettingsTabView: View {
                     .padding(8)
                 }
 
+                GroupBox("Dependencies") {
+                    HStack {
+                        Button("Re-run Setup") { appState.showSetup() }
+                    }
+                    .padding(8)
+                }
+
                 GroupBox("Data") {
                     HStack {
                         Button("Export All") { appState.exportData() }

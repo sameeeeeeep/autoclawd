@@ -270,6 +270,13 @@ final class AppState: ObservableObject {
         }
     }
 
+    // Callback set by AppDelegate so Settings tab can re-open the setup window
+    var onShowSetup: (() -> Void)?
+
+    func showSetup() {
+        onShowSetup?()
+    }
+
     // MARK: - Private Setup
 
     private func setupLogger() {
