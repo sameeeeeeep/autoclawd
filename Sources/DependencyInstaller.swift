@@ -154,6 +154,9 @@ final class DependencyInstaller: ObservableObject {
                 if AXIsProcessTrusted() {
                     accessStatus = .done
                     refreshCompletion()
+                    // Re-register global monitors now that permission is granted
+                    GlobalHotkeyMonitor.shared.stop()
+                    GlobalHotkeyMonitor.shared.start()
                     return
                 }
             }
