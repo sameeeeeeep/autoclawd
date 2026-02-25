@@ -236,7 +236,8 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
 
         totalFrames += frames
         if rms < silenceThreshold { silentFrames += frames }
-        isSilentNow = rms < silenceThreshold
+        let nowSilent = rms < silenceThreshold
+        DispatchQueue.main.async { self.isSilentNow = nowSilent }
 
         // Write to file
         audioFileQueue.sync {

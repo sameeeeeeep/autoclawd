@@ -13,8 +13,9 @@ enum ChunkManagerState: Equatable {
 
 // MARK: - ChunkManager
 
-/// Orchestrates the 5-minute always-on recording cycle.
-/// Recording of chunk N+1 starts immediately when chunk N stops — seamless.
+/// Orchestrates the sentence-aware 10–30s always-on recording cycle.
+/// Flushes at natural silence boundaries (≥10s + 0.8s silence) or force-flushes at 30s.
+/// Recording of chunk N+1 starts immediately after chunk N stops — seamless.
 /// Processing (transcription + extraction) happens in a background Task.
 @MainActor
 final class ChunkManager: ObservableObject {
@@ -117,8 +118,8 @@ final class ChunkManager: ObservableObject {
         Log.info(.system, "ChunkManager: paused at chunk \(index), \(duration)s recorded")
 
         // Process partial chunk if it has meaningful audio
-        guard let savedURL, silenceRatio <= 0.90, duration > 3 else {
-            if duration <= 3 {
+        guard let savedURL, silenceRatio <= 0.90, duration >= 2 else {
+            if duration < 2 {
                 Log.info(.audio, "Chunk \(index) paused: too short (\(duration)s), skipping")
             } else {
                 Log.info(.audio, "Chunk \(index) paused: \(Int(silenceRatio * 100))% silence, skipping")
@@ -191,7 +192,8 @@ final class ChunkManager: ObservableObject {
         }
 
         state = .listening(chunkIndex: index)
-        chunkStartTime = Date()
+        let chunkStart = Date()
+        chunkStartTime = chunkStart
         Log.info(.audio, "Chunk \(index) started → \(fileURL.lastPathComponent)")
 
         var silenceStart: Date? = nil
@@ -200,7 +202,7 @@ final class ChunkManager: ObservableObject {
         // Poll every 0.25s — flush on silence-after-minChunk or hard cap at maxChunk
         while !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(250))
-            elapsed = Date().timeIntervalSince(chunkStartTime ?? Date())
+            elapsed = Date().timeIntervalSince(chunkStart)
 
             let silent = audioRecorder.isSilentNow
 
