@@ -131,7 +131,7 @@ final class ProjectStore: @unchecked Sendable {
         Reply with ONLY the project name exactly as listed, or "none".
         """
 
-        guard let response = try? await ollamaService.generate(prompt: prompt, maxTokens: 20) else {
+        guard let response = try? await ollamaService.generate(prompt: prompt, numPredict: 20) else {
             return nil
         }
         let name = response.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -165,8 +165,10 @@ final class ProjectStore: @unchecked Sendable {
             let id       = String(cString: sqlite3_column_text(stmt, 0))
             let name     = String(cString: sqlite3_column_text(stmt, 1))
             let path     = String(cString: sqlite3_column_text(stmt, 2))
-            let tagsRaw  = sqlite3_column_text(stmt, 3) != nil ? String(cString: sqlite3_column_text(stmt, 3)!) : ""
-            let linkedRaw = sqlite3_column_text(stmt, 4) != nil ? String(cString: sqlite3_column_text(stmt, 4)!) : ""
+            let tagsRaw: String
+            if let ptr = sqlite3_column_text(stmt, 3) { tagsRaw = String(cString: ptr) } else { tagsRaw = "" }
+            let linkedRaw: String
+            if let ptr = sqlite3_column_text(stmt, 4) { linkedRaw = String(cString: ptr) } else { linkedRaw = "" }
             let tsStr    = String(cString: sqlite3_column_text(stmt, 5))
             let ts       = ISO8601DateFormatter().date(from: tsStr) ?? Date()
             let tags     = Project.parseTags(tagsRaw)
