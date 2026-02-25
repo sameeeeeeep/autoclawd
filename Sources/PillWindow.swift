@@ -9,6 +9,9 @@ final class PillWindow: NSPanel {
     private var lastMouseDown: NSPoint = .zero
     private var windowOriginOnDown: NSPoint = .zero
 
+    /// Called when the user right-clicks the pill. Return an NSMenu to show.
+    var menuProvider: (() -> NSMenu)?
+
     init() {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 44),
@@ -59,6 +62,16 @@ final class PillWindow: NSPanel {
             x: windowOriginOnDown.x + delta.x,
             y: windowOriginOnDown.y + delta.y
         ))
+    }
+
+    // MARK: - Right-click context menu
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard let menu = menuProvider?(), let view = contentView else {
+            super.rightMouseDown(with: event)
+            return
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: view)
     }
 
     override var canBecomeKey: Bool { false }

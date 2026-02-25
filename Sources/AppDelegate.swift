@@ -79,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onToggleMinimal: { [weak self] in self?.toggleMinimal() }
         )
         pill.setContent(content)
+        pill.menuProvider = { [weak self] in self?.makePillMenu() ?? NSMenu() }
         pill.orderFront(nil)
         pillWindow = pill
         Log.info(.ui, "Pill window shown")
@@ -92,6 +93,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Log.info(.ui, "Pill state → \(appState.pillState)")
     }
+
+    // MARK: - Pill Context Menu
+
+    private func makePillMenu() -> NSMenu {
+        let menu = NSMenu()
+        let isListening = appState.isListening
+
+        menu.addItem(NSMenuItem(title: "Open Panel", action: #selector(menuOpenPanel), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: isListening ? "Pause Listening  ⌃Z" : "Resume Listening  ⌃Z",
+                                action: #selector(menuTogglePause), keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Ambient Mode  ⌃A",    action: #selector(menuAmbient),    keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "AI Search Mode  ⌃S",  action: #selector(menuSearch),     keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Transcribe Mode  ⌃X", action: #selector(menuTranscribe), keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "View Logs",           action: #selector(menuViewLogs),   keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit AutoClawd",      action: #selector(NSApp.terminate), keyEquivalent: ""))
+
+        // Wire targets so selectors fire on self
+        for item in menu.items where item.action != #selector(NSApp.terminate) {
+            item.target = self
+        }
+        return menu
+    }
+
+    @objc private func menuOpenPanel()    { showMainPanel() }
+    @objc private func menuTogglePause()  { appState.toggleListening() }
+    @objc private func menuViewLogs()     { showMainPanel(tab: .logs) }
+    @objc private func menuAmbient()      { appState.pillMode = .ambientIntelligence; if !appState.isListening { appState.startListening() } }
+    @objc private func menuSearch()       { appState.pillMode = .aiSearch;            if !appState.isListening { appState.startListening() } }
+    @objc private func menuTranscribe()   { appState.pillMode = .transcription;       if !appState.isListening { appState.startListening() } }
 
     // MARK: - Toast
 
