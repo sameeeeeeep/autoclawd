@@ -324,15 +324,14 @@ struct StructuredTodoRow: View {
 
     private var projectMenu: some View {
         Menu {
-            Button("No Project") { appState.setTodoProject(todoID: todo.id, projectID: nil) }
-            Divider()
+            Button("None") { appState.setTodoProject(todoID: todo.id, projectID: nil) }
             ForEach(appState.projects) { project in
                 Button(project.name) { appState.setTodoProject(todoID: todo.id, projectID: project.id) }
             }
         } label: {
-            Text(projectName)
-                .font(BrutalistTheme.monoSM)
-                .foregroundColor(.white.opacity(0.5))
+            Text(todo.projectID != nil ? projectName : "—")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(todo.projectID != nil ? BrutalistTheme.neonGreen : .secondary)
                 .lineLimit(1)
                 .frame(maxWidth: 90, alignment: .trailing)
         }
