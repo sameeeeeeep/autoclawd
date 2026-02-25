@@ -208,6 +208,8 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
     // MARK: - Stop
 
     /// Stop recording and return the file URL.
+    /// Clears tempFileURL so a second call returns nil — prevents double-transcription
+    /// when pause() and runOneChunk() both call stop on the same chunk.
     func stopRecording() -> URL? {
         _recording.withLock { $0 = false }
         audioFileQueue.sync { audioFile = nil }
@@ -216,7 +218,9 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
             self.isRecording = false
             self.audioLevel = 0.0
         }
-        return tempFileURL
+        let url = tempFileURL
+        tempFileURL = nil
+        return url
     }
 
     // MARK: - Buffer Processing

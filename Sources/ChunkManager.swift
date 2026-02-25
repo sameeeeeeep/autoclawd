@@ -306,7 +306,13 @@ final class ChunkManager: ObservableObject {
             let preview = String(transcript.prefix(60))
             Log.info(.transcribe, "Chunk \(index) [\(transcriptionService.modelName)]: \(String(format: "%.1f", elapsed))s, \(wordCount) words — '\(preview)'")
         } catch {
-            Log.error(.transcribe, "Chunk \(index) [\(transcriptionService.modelName)] failed: \(error.localizedDescription)")
+            let msg = error.localizedDescription
+            // SFSpeechRecognizer returns "No speech detected" for silent audio — not a real error
+            if msg.localizedCaseInsensitiveContains("no speech") {
+                Log.info(.transcribe, "Chunk \(index): no speech detected, skipping")
+            } else {
+                Log.error(.transcribe, "Chunk \(index) [\(transcriptionService.modelName)] failed: \(msg)")
+            }
             return
         }
 
