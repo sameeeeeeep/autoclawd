@@ -103,6 +103,11 @@ final class ChunkManager: ObservableObject {
         // End the session
         if let sid = currentSessionID {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
+            if let store = transcriptStore {
+                Task { [weak self] in
+                    self?.transcriptStore?.mergeSessionChunks(sessionID: sid)
+                }
+            }
             currentSessionID = nil
             // Tag people mentioned in this session
             let taggingService = PeopleTaggingService()
@@ -123,6 +128,11 @@ final class ChunkManager: ObservableObject {
         // End the session on pause
         if let sid = currentSessionID {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
+            if let store = transcriptStore {
+                Task { [weak self] in
+                    self?.transcriptStore?.mergeSessionChunks(sessionID: sid)
+                }
+            }
             currentSessionID = nil
         }
         transcriptBuffer.removeAll()

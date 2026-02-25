@@ -11,6 +11,7 @@ struct TranscriptRecord: Identifiable {
     let audioFilePath: String
     let sessionID: String?     // nil for legacy rows
     let sessionChunkSeq: Int   // 0=A, 1=B, 2=C… (0 for legacy rows)
+    var projectID: UUID?
 }
 
 // MARK: - TranscriptStore
@@ -34,10 +35,12 @@ final class TranscriptStore: @unchecked Sendable {
     // MARK: - Write
 
     func save(text: String, durationSeconds: Int, audioFilePath: String,
-              sessionID: String? = nil, sessionChunkSeq: Int = 0) {
+              sessionID: String? = nil, sessionChunkSeq: Int = 0,
+              projectID: UUID? = nil, timestamp: Date? = nil) {
         queue.async { [weak self] in
             self?.insertTranscript(text: text, duration: durationSeconds, path: audioFilePath,
-                                   sessionID: sessionID, sessionChunkSeq: sessionChunkSeq)
+                                   sessionID: sessionID, sessionChunkSeq: sessionChunkSeq,
+                                   projectID: projectID, timestamp: timestamp)
         }
     }
 
@@ -51,6 +54,36 @@ final class TranscriptStore: @unchecked Sendable {
     /// Most recent N transcripts.
     func recent(limit: Int = 50) -> [TranscriptRecord] {
         queue.sync { fetchRecent(limit: limit) }
+    }
+
+    /// All chunks for a session, ordered by sequence ascending.
+    func fetchBySession(sessionID: String) -> [TranscriptRecord] {
+        queue.sync { fetchBySessionInternal(sessionID: sessionID) }
+    }
+
+    /// Merge all chunks for a session into a single transcript row, then delete the originals.
+    func mergeSessionChunks(sessionID: String) {
+        queue.sync {
+            let chunks = fetchBySessionInternal(sessionID: sessionID)
+            guard chunks.count > 1 else { return }
+            let mergedText = chunks.map(\.text).joined(separator: " ")
+            let totalDuration = chunks.map(\.durationSeconds).reduce(0, +)
+            let earliest = chunks.map(\.timestamp).min() ?? Date()
+            let projectID = chunks.first?.projectID
+            for chunk in chunks { deleteInternal(id: chunk.id) }
+            insertTranscript(text: mergedText, duration: totalDuration, path: "",
+                             sessionID: sessionID, sessionChunkSeq: 0,
+                             projectID: projectID, timestamp: earliest)
+            Log.info(.system, "Merged \(chunks.count) transcript chunks for session \(sessionID)")
+        }
+    }
+
+    func delete(id: Int64) {
+        queue.async { [weak self] in self?.deleteInternal(id: id) }
+    }
+
+    func setProject(_ projectID: UUID?, for transcriptID: Int64) {
+        queue.async { [weak self] in self?.setProjectInternal(projectID, for: transcriptID) }
     }
 
     // MARK: - Schema
@@ -81,17 +114,19 @@ final class TranscriptStore: @unchecked Sendable {
         // Safe migrations — "duplicate column" errors are silently swallowed by execSQL
         execSQL("ALTER TABLE transcripts ADD COLUMN session_id TEXT;")
         execSQL("ALTER TABLE transcripts ADD COLUMN session_chunk_seq INTEGER NOT NULL DEFAULT 0;")
+        execSQL("ALTER TABLE transcripts ADD COLUMN project_id TEXT;")
     }
 
     // MARK: - SQL Helpers
 
     private func insertTranscript(text: String, duration: Int, path: String,
-                                  sessionID: String?, sessionChunkSeq: Int) {
-        let ts = ISO8601DateFormatter().string(from: Date())
+                                  sessionID: String?, sessionChunkSeq: Int,
+                                  projectID: UUID?, timestamp: Date?) {
+        let ts = ISO8601DateFormatter().string(from: timestamp ?? Date())
         let sql = """
             INSERT INTO transcripts
-                (timestamp, duration_seconds, text, audio_file_path, session_id, session_chunk_seq)
-            VALUES (?, ?, ?, ?, ?, ?);
+                (timestamp, duration_seconds, text, audio_file_path, session_id, session_chunk_seq, project_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -106,6 +141,11 @@ final class TranscriptStore: @unchecked Sendable {
             sqlite3_bind_null(stmt, 5)
         }
         sqlite3_bind_int(stmt, 6, Int32(sessionChunkSeq))
+        if let pid = projectID {
+            sqlite3_bind_text(stmt, 7, pid.uuidString, -1, SQLITE_TRANSIENT)
+        } else {
+            sqlite3_bind_null(stmt, 7)
+        }
         let result = sqlite3_step(stmt)
         if result == SQLITE_DONE {
             let label = String(UnicodeScalar(UInt32(65 + min(sessionChunkSeq, 25)))!)
@@ -118,7 +158,7 @@ final class TranscriptStore: @unchecked Sendable {
     private func ftsSearch(query: String, limit: Int) -> [TranscriptRecord] {
         let sql = """
             SELECT t.id, t.timestamp, t.duration_seconds, t.text, t.audio_file_path,
-                   t.session_id, t.session_chunk_seq
+                   t.session_id, t.session_chunk_seq, t.project_id
             FROM transcripts t
             JOIN transcripts_fts f ON t.id = f.rowid
             WHERE transcripts_fts MATCH ?
@@ -131,12 +171,46 @@ final class TranscriptStore: @unchecked Sendable {
     private func fetchRecent(limit: Int) -> [TranscriptRecord] {
         let sql = """
             SELECT id, timestamp, duration_seconds, text, audio_file_path,
-                   session_id, session_chunk_seq
+                   session_id, session_chunk_seq, project_id
             FROM transcripts
             ORDER BY id DESC
             LIMIT ?;
         """
         return runQuery(sql, args: [String(limit)])
+    }
+
+    private func fetchBySessionInternal(sessionID: String) -> [TranscriptRecord] {
+        let sql = """
+            SELECT id, timestamp, duration_seconds, text, audio_file_path,
+                   session_id, session_chunk_seq, project_id
+            FROM transcripts
+            WHERE session_id = ?
+            ORDER BY session_chunk_seq ASC;
+        """
+        return runQuery(sql, args: [sessionID])
+    }
+
+    private func deleteInternal(id: Int64) {
+        let sql = "DELETE FROM transcripts WHERE id = ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, id)
+        sqlite3_step(stmt)
+    }
+
+    private func setProjectInternal(_ projectID: UUID?, for transcriptID: Int64) {
+        let sql = "UPDATE transcripts SET project_id = ? WHERE id = ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        if let pid = projectID {
+            sqlite3_bind_text(stmt, 1, pid.uuidString, -1, SQLITE_TRANSIENT)
+        } else {
+            sqlite3_bind_null(stmt, 1)
+        }
+        sqlite3_bind_int64(stmt, 2, transcriptID)
+        sqlite3_step(stmt)
     }
 
     private func runQuery(_ sql: String, args: [String]) -> [TranscriptRecord] {
@@ -157,10 +231,15 @@ final class TranscriptStore: @unchecked Sendable {
                 ? String(cString: sqlite3_column_text(stmt, 5))
                 : nil
             let seq   = Int(sqlite3_column_int(stmt, 6))
+            let pidStr = sqlite3_column_type(stmt, 7) != SQLITE_NULL
+                ? String(cString: sqlite3_column_text(stmt, 7))
+                : nil
+            let pid   = pidStr.flatMap { UUID(uuidString: $0) }
             let ts    = ISO8601DateFormatter().date(from: tsStr) ?? Date()
             results.append(TranscriptRecord(id: id, timestamp: ts, durationSeconds: dur,
                                             text: text, audioFilePath: path,
-                                            sessionID: sid, sessionChunkSeq: seq))
+                                            sessionID: sid, sessionChunkSeq: seq,
+                                            projectID: pid))
         }
         return results
     }
