@@ -10,14 +10,14 @@ final class ExtractionService: @unchecked Sendable {
     private let worldModel: WorldModelService
     private let todos: TodoService
     private let store: ExtractionStore
-    private let structuredTodoStore: StructuredTodoStore
+    private let cleanupService: CleanupService
 
-    init(ollama: OllamaService, worldModel: WorldModelService, todos: TodoService, store: ExtractionStore, structuredTodoStore: StructuredTodoStore) {
+    init(ollama: OllamaService, worldModel: WorldModelService, todos: TodoService, store: ExtractionStore, cleanup: CleanupService) {
         self.ollama = ollama
         self.worldModel = worldModel
         self.todos = todos
         self.store = store
-        self.structuredTodoStore = structuredTodoStore
+        self.cleanupService = cleanup
     }
 
     // MARK: - Pass 1: Classify Chunk
@@ -289,6 +289,7 @@ Start immediately with <WORLD_MODEL>.
         }
 
         Log.info(.extract, "Pass 2 complete: \(pending.count) items applied")
+        await cleanupService.cleanup()
     }
 
     // MARK: - Deprecated Stub
