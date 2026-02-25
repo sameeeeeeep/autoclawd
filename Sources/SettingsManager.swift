@@ -32,6 +32,7 @@ final class SettingsManager: @unchecked Sendable {
     private let kMicEnabled        = "mic_enabled"
     private let kLogLevel          = "log_level"
     private let kGroqAPIKey        = "groq_api_key_storage"
+    private let kShowFlowBar       = "show_flow_bar"
 
     // MARK: - Properties
 
@@ -75,6 +76,11 @@ final class SettingsManager: @unchecked Sendable {
     var groqAPIKey: String {
         get { AppSettingsStorage.load(account: kGroqAPIKey) ?? "" }
         set { AppSettingsStorage.save(newValue, account: kGroqAPIKey) }
+    }
+
+    var showFlowBar: Bool {
+        get { defaults.object(forKey: kShowFlowBar) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: kShowFlowBar) }
     }
 
     private init() {}

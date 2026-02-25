@@ -48,6 +48,10 @@ final class AppState: ObservableObject {
         }
     }
 
+    @Published var showFlowBar: Bool {
+        didSet { SettingsManager.shared.showFlowBar = showFlowBar }
+    }
+
     @Published var extractionItems: [ExtractionItem] = []
     @Published var pendingExtractionCount: Int = 0
     @Published var synthesizeThreshold: Int {
@@ -84,6 +88,7 @@ final class AppState: ObservableObject {
         audioRetentionDays  = settings.audioRetentionDays
         groqAPIKey          = settings.groqAPIKey
         synthesizeThreshold = settings.synthesizeThreshold
+        showFlowBar         = settings.showFlowBar
 
         let savedMode = UserDefaults.standard.string(forKey: "pillMode")
             .flatMap { PillMode(rawValue: $0) } ?? .ambientIntelligence
