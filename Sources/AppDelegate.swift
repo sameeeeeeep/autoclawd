@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Combine
 import SwiftUI
 
 @MainActor
@@ -8,6 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     private var pillWindow: PillWindow?
     private var mainPanel: MainPanelWindow?
+    private var toastWindow: ToastWindow?
+    private var toastDismissWork: DispatchWorkItem?
+    private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Lifecycle
 
@@ -19,6 +23,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Check microphone permission
         checkMicPermission()
+
+        // Log toast subscription
+        AutoClawdLogger.toastPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] entry in self?.showToast(entry) }
+            .store(in: &cancellables)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -51,6 +61,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appState.pillState = .minimal
         }
         Log.info(.ui, "Pill state → \(appState.pillState)")
+    }
+
+    // MARK: - Toast
+
+    private func showToast(_ entry: LogEntry) {
+        // Cancel any pending dismiss
+        toastDismissWork?.cancel()
+
+        // Create window on first use
+        if toastWindow == nil {
+            toastWindow = ToastWindow()
+        }
+        guard let toast = toastWindow, let pill = pillWindow else { return }
+
+        // Update content
+        toast.setContent(ToastView(entry: entry))
+
+        // Position 8pt below pill
+        let pillFrame = pill.frame
+        toast.setFrameOrigin(NSPoint(
+            x: pillFrame.minX,
+            y: pillFrame.minY - 8 - 36  // 36 = toast height
+        ))
+        toast.orderFront(nil)
+
+        // Schedule auto-dismiss after 3 seconds
+        let work = DispatchWorkItem { [weak self] in
+            self?.toastWindow?.orderOut(nil)
+        }
+        toastDismissWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 
     // MARK: - Main Panel
