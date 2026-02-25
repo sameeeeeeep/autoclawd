@@ -46,6 +46,13 @@ final class ExtractionStore: @unchecked Sendable {
         }
     }
 
+    func collapse(keepId: String, canonical: String, dropIds: [String]) {
+        queue.async { [self] in
+            self.updateContent(id: keepId, content: canonical)
+            self.deleteItems(ids: dropIds)
+        }
+    }
+
     // MARK: - Read
 
     func all(chunkIndex: Int? = nil) -> [ExtractionItem] {
@@ -172,6 +179,34 @@ final class ExtractionStore: @unchecked Sendable {
             let result = sqlite3_step(stmt)
             if result != SQLITE_DONE {
                 Log.error(.system, "ExtractionStore markApplied failed for id \(id): \(result)")
+            }
+            sqlite3_reset(stmt)
+        }
+    }
+
+    private func updateContent(id: String, content: String) {
+        let sql = "UPDATE extraction_items SET content = ? WHERE id = ?;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, content, -1, SQLITE_TRANSIENT_ES)
+        sqlite3_bind_text(stmt, 2, id, -1, SQLITE_TRANSIENT_ES)
+        let result = sqlite3_step(stmt)
+        if result != SQLITE_DONE {
+            Log.error(.system, "ExtractionStore updateContent failed: \(result)")
+        }
+    }
+
+    private func deleteItems(ids: [String]) {
+        let sql = "DELETE FROM extraction_items WHERE id = ?;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        for id in ids {
+            sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT_ES)
+            let result = sqlite3_step(stmt)
+            if result != SQLITE_DONE {
+                Log.error(.system, "ExtractionStore deleteItems failed for id \(id): \(result)")
             }
             sqlite3_reset(stmt)
         }
