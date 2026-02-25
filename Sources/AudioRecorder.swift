@@ -118,6 +118,9 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
         return Float(silentFrames) / Float(totalFrames)
     }
 
+    /// True if the most recent audio buffer was below the silence threshold.
+    private(set) var isSilentNow: Bool = false
+
     // MARK: - Start
 
     func startRecording(outputURL: URL, deviceUID: String? = nil) throws {
@@ -233,6 +236,7 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
 
         totalFrames += frames
         if rms < silenceThreshold { silentFrames += frames }
+        isSilentNow = rms < silenceThreshold
 
         // Write to file
         audioFileQueue.sync {

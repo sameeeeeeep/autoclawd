@@ -33,6 +33,10 @@ final class ChunkManager: ObservableObject {
     private var currentSessionID: String?
     private let sessionStore = SessionStore.shared
     private let locationService = LocationService.shared
+
+    private let minChunkSeconds: TimeInterval = 10
+    private let maxChunkSeconds: TimeInterval = 30
+    private let silenceGapSeconds: TimeInterval = 0.8
     private var transcriptBuffer: [String] = []
 
     private var chunkTimer: Task<Void, Never>?
@@ -48,7 +52,7 @@ final class ChunkManager: ObservableObject {
 
     let chunkDuration: TimeInterval  // configurable for testing
 
-    init(chunkDuration: TimeInterval = 300) {
+    init(chunkDuration: TimeInterval = 30) {
         self.chunkDuration = chunkDuration
     }
 
@@ -178,7 +182,6 @@ final class ChunkManager: ObservableObject {
         chunkIndex += 1
         let fileURL = storage.audioFile(date: Date())
 
-        // Start recording this chunk
         do {
             try audioRecorder.startRecording(outputURL: fileURL)
         } catch {
@@ -191,49 +194,67 @@ final class ChunkManager: ObservableObject {
         chunkStartTime = Date()
         Log.info(.audio, "Chunk \(index) started → \(fileURL.lastPathComponent)")
 
-        // Wait for chunk duration
-        let started = Date()
-        do {
-            try await Task.sleep(for: .seconds(chunkDuration))
-        } catch {
-            // Task cancelled — clean up
-            _ = audioRecorder.stopRecording()
-            return
+        var silenceStart: Date? = nil
+        var elapsed: TimeInterval = 0
+
+        // Poll every 0.25s — flush on silence-after-minChunk or hard cap at maxChunk
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(250))
+            elapsed = Date().timeIntervalSince(chunkStartTime ?? Date())
+
+            let silent = audioRecorder.isSilentNow
+
+            if silent {
+                if silenceStart == nil { silenceStart = Date() }
+            } else {
+                silenceStart = nil
+            }
+
+            let silenceDuration = silenceStart.map { Date().timeIntervalSince($0) } ?? 0
+            let shouldFlushForSilence = elapsed >= minChunkSeconds && silenceDuration >= silenceGapSeconds
+            let shouldForceFlush = elapsed >= maxChunkSeconds
+
+            if shouldFlushForSilence || shouldForceFlush {
+                let reason = shouldForceFlush
+                    ? "force(\(Int(elapsed))s)"
+                    : "silence(\(String(format: "%.1f", elapsed))s)"
+                Log.info(.audio, "Chunk \(index): flushing — \(reason)")
+                break
+            }
         }
 
-        // Stop recording (seamless: next chunk starts in next loop iteration)
+        // Stop recording
         let silenceRatio = audioRecorder.silenceRatio
-        let duration = Int(Date().timeIntervalSince(started))
+        let duration = Int(elapsed)
         guard let savedURL = audioRecorder.stopRecording() else { return }
 
-        // File size
         let fileSizeMB = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))
             .flatMap { $0.fileSize }
             .map { Double($0) / 1_048_576 } ?? 0
 
-        Log.info(.audio, "Chunk \(index) recorded: \(duration)s, \(String(format: "%.1f", fileSizeMB))MB, saved to \(fileURL.lastPathComponent)")
+        Log.info(.audio, "Chunk \(index) recorded: \(duration)s, \(String(format: "%.1f", fileSizeMB))MB")
 
-        // Silence detection
-        if silenceRatio > 0.90 {
-            Log.info(.audio, "Chunk \(index) skipped: \(Int(silenceRatio * 100))% silence")
+        // Skip near-silence chunks
+        if silenceRatio > 0.90 || duration < 2 {
+            Log.info(.audio, "Chunk \(index) skipped: \(Int(silenceRatio * 100))% silence / \(duration)s")
             return
         }
 
-        // Process this chunk in background (non-blocking — next chunk starts next loop)
+        // Dispatch background processing (unchanged from before)
+        let capturedIndex = index
         let capturedTranscriptionService = transcriptionService
         let capturedExtractionService = extractionService
         let capturedTranscriptStore = transcriptStore
-        let capturedPillMode     = pillMode
+        let capturedPillMode = pillMode
         let capturedPasteService = pasteService
-        let capturedQAService    = qaService
-        let capturedQAStore      = qaStore
-        let capturedIndex = index
+        let capturedQAService = qaService
+        let capturedQAStore = qaStore
 
         Task.detached { [weak self] in
             await self?.processChunk(
                 index: capturedIndex,
                 audioURL: savedURL,
-                duration: duration,
+                duration: max(duration, 1),
                 transcriptionService: capturedTranscriptionService,
                 extractionService: capturedExtractionService,
                 transcriptStore: capturedTranscriptStore,
