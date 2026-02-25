@@ -23,26 +23,26 @@ final class ExtractionStore: @unchecked Sendable {
     // MARK: - Write
 
     func insert(_ item: ExtractionItem) {
-        queue.async { [weak self] in
-            self?.insertItem(item)
+        queue.async { [self] in
+            self.insertItem(item)
         }
     }
 
     func setUserOverride(id: String, override: String?) {
-        queue.async { [weak self] in
-            self?.updateUserOverride(id: id, override: override)
+        queue.async { [self] in
+            self.updateUserOverride(id: id, override: override)
         }
     }
 
     func setBucket(id: String, bucket: ExtractionBucket) {
-        queue.async { [weak self] in
-            self?.updateBucket(id: id, bucket: bucket)
+        queue.async { [self] in
+            self.updateBucket(id: id, bucket: bucket)
         }
     }
 
     func markApplied(ids: [String]) {
-        queue.async { [weak self] in
-            self?.updateApplied(ids: ids)
+        queue.async { [self] in
+            self.updateApplied(ids: ids)
         }
     }
 
