@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Foundation
 
@@ -35,6 +36,11 @@ final class ChunkManager: ObservableObject {
     private var transcriptStore: TranscriptStore?
     private var chunkStartTime: Date?
 
+    var pillMode: PillMode = .ambientIntelligence
+    var pasteService: TranscriptionPasteService?
+    var qaService: QAService?
+    var qaStore: QAStore?
+
     let chunkDuration: TimeInterval  // configurable for testing
 
     init(chunkDuration: TimeInterval = 300) {
@@ -45,11 +51,17 @@ final class ChunkManager: ObservableObject {
     func configure(
         transcriptionService: TranscriptionService,
         extractionService: ExtractionService,
-        transcriptStore: TranscriptStore
+        transcriptStore: TranscriptStore,
+        pasteService: TranscriptionPasteService,
+        qaService: QAService,
+        qaStore: QAStore
     ) {
         self.transcriptionService = transcriptionService
-        self.extractionService = extractionService
-        self.transcriptStore = transcriptStore
+        self.extractionService    = extractionService
+        self.transcriptStore      = transcriptStore
+        self.pasteService         = pasteService
+        self.qaService            = qaService
+        self.qaStore              = qaStore
     }
 
     // MARK: - Public API
@@ -93,6 +105,10 @@ final class ChunkManager: ObservableObject {
         let capturedTS = transcriptionService
         let capturedES = extractionService
         let capturedStore = transcriptStore
+        let capturedPillMode     = pillMode
+        let capturedPasteService = pasteService
+        let capturedQAService    = qaService
+        let capturedQAStore      = qaStore
 
         Task.detached { [weak self] in
             await self?.processChunk(
@@ -101,7 +117,11 @@ final class ChunkManager: ObservableObject {
                 duration: max(duration, 1),
                 transcriptionService: capturedTS,
                 extractionService: capturedES,
-                transcriptStore: capturedStore
+                transcriptStore: capturedStore,
+                pillMode: capturedPillMode,
+                pasteService: capturedPasteService,
+                qaService: capturedQAService,
+                qaStore: capturedQAStore
             )
         }
     }
@@ -173,6 +193,10 @@ final class ChunkManager: ObservableObject {
         let capturedTranscriptionService = transcriptionService
         let capturedExtractionService = extractionService
         let capturedTranscriptStore = transcriptStore
+        let capturedPillMode     = pillMode
+        let capturedPasteService = pasteService
+        let capturedQAService    = qaService
+        let capturedQAStore      = qaStore
         let capturedIndex = index
 
         Task.detached { [weak self] in
@@ -182,7 +206,11 @@ final class ChunkManager: ObservableObject {
                 duration: duration,
                 transcriptionService: capturedTranscriptionService,
                 extractionService: capturedExtractionService,
-                transcriptStore: capturedTranscriptStore
+                transcriptStore: capturedTranscriptStore,
+                pillMode: capturedPillMode,
+                pasteService: capturedPasteService,
+                qaService: capturedQAService,
+                qaStore: capturedQAStore
             )
         }
     }
@@ -195,7 +223,11 @@ final class ChunkManager: ObservableObject {
         duration: Int,
         transcriptionService: TranscriptionService?,
         extractionService: ExtractionService?,
-        transcriptStore: TranscriptStore?
+        transcriptStore: TranscriptStore?,
+        pillMode: PillMode,
+        pasteService: TranscriptionPasteService?,
+        qaService: QAService?,
+        qaStore: QAStore?
     ) async {
         guard let transcriptionService else {
             Log.warn(.transcribe, "No transcription service configured")
@@ -233,18 +265,38 @@ final class ChunkManager: ObservableObject {
             self.onTranscriptReady?(transcript, audioURL)
         }
 
-        // Run extraction (world model + todos) via Ollama
-        guard let extractionService else {
-            Log.warn(.extract, "No extraction service configured")
-            return
-        }
+        switch pillMode {
+        case .ambientIntelligence:
+            guard let extractionService else {
+                Log.warn(.extract, "No extraction service configured")
+                break
+            }
+            Log.info(.extract, "Chunk \(index): starting extraction (Pass 1)")
+            let items = await extractionService.classifyChunk(
+                transcript: transcript,
+                chunkIndex: index
+            )
+            await MainActor.run { self.onItemsClassified?(items) }
 
-        Log.info(.extract, "Chunk \(index): starting extraction (Pass 1)")
-        let items = await extractionService.classifyChunk(
-            transcript: transcript,
-            chunkIndex: index
-        )
-        await MainActor.run { self.onItemsClassified?(items) }
+        case .transcription:
+            guard let pasteService else { break }
+            await MainActor.run { pasteService.paste(text: transcript) }
+
+        case .aiSearch:
+            guard let qaService, let qaStore else { break }
+            do {
+                let answer = try await qaService.answer(question: transcript)
+                await MainActor.run {
+                    qaStore.append(question: transcript, answer: answer)
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(answer, forType: .string)
+                    Log.info(.qa, "Answer copied to clipboard")
+                }
+            } catch {
+                Log.error(.qa, "QA failed: \(error.localizedDescription)")
+            }
+        }
 
         // Purge old audio
         FileStorageManager.shared.purgeOldAudio(
