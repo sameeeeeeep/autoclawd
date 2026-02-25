@@ -121,10 +121,10 @@ final class AppState: ObservableObject {
     func applicationDidFinishLaunching() {
         Log.info(.system, "AutoClawd started. Mode: \(transcriptionMode.rawValue). RAM: (not measured)")
         ClipboardMonitor.shared.start()
-        locationService.start()
         locationService.onUnknownSSID = { [weak self] ssid in
             self?.pendingUnknownSSID = ssid
         }
+        locationService.start()
 
         if micEnabled {
             startListening()
