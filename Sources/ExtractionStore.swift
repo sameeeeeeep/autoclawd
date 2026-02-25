@@ -48,8 +48,10 @@ final class ExtractionStore: @unchecked Sendable {
 
     func collapse(keepId: String, canonical: String, dropIds: [String]) {
         queue.async { [self] in
+            self.execSQL("BEGIN;")
             self.updateContent(id: keepId, content: canonical)
             self.deleteItems(ids: dropIds)
+            self.execSQL("COMMIT;")
         }
     }
 
