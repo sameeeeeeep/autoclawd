@@ -67,10 +67,12 @@ struct PillView: View {
 
     private var modeButton: some View {
         Button(action: onCycleMode) {
-            Image(systemName: pillMode.icon)
-                .font(.system(size: 11))
-                .foregroundColor(.white.opacity(state == .paused ? 0.4 : 1.0))
-                .frame(width: 18, height: 18)
+            Text(pillMode.shortLabel)
+                .font(.custom("JetBrains Mono", size: 10).weight(.bold))
+                .foregroundColor(state == .paused
+                    ? .white.opacity(0.4)
+                    : BrutalistTheme.neonGreen)
+                .frame(width: 36, height: 18)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -80,10 +82,10 @@ struct PillView: View {
 
     private var pausePlayButton: some View {
         Button(action: onTogglePause) {
-            Image(systemName: state == .paused ? "play.fill" : "pause.fill")
-                .font(.system(size: 9, weight: .bold))
+            Text(state == .paused ? "[▶]" : "[⏸]")
+                .font(.custom("JetBrains Mono", size: 10).weight(.bold))
                 .foregroundColor(.white.opacity(state == .paused ? 0.9 : 0.5))
-                .frame(width: 18, height: 18)
+                .frame(width: 28, height: 18)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -103,7 +105,7 @@ struct PillView: View {
     private var waveformBars: some View {
         HStack(spacing: 3) {
             ForEach(0..<16, id: \.self) { i in
-                RoundedRectangle(cornerRadius: 1)
+                Rectangle()
                     .fill(barColor(index: i))
                     .frame(width: 3, height: barHeight(index: i))
                     .animation(.easeOut(duration: 0.08), value: audioLevel)
@@ -121,7 +123,7 @@ struct PillView: View {
     }
 
     private func barColor(index: Int) -> Color {
-        state == .listening ? .white : .white.opacity(0.3)
+        state == .listening ? BrutalistTheme.neonGreen : Color.white.opacity(0.20)
     }
 
     // MARK: - Scan Line (processing)
@@ -173,13 +175,11 @@ struct PillView: View {
     // MARK: - Background & Border
 
     private var pillBackground: some View {
-        RoundedRectangle(cornerRadius: 6)
-            .fill(Color.black)
+        Rectangle().fill(Color.black)
     }
 
     private var pillBorder: some View {
-        RoundedRectangle(cornerRadius: 6)
-            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        Rectangle().stroke(Color.white.opacity(0.25), lineWidth: 1)
     }
 
     // MARK: - Context Menu
