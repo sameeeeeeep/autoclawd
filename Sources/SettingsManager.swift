@@ -113,5 +113,21 @@ final class SettingsManager: @unchecked Sendable {
         set { defaults.set(newValue.rawValue, forKey: kAppearanceMode) }
     }
 
+
+    var hotWordConfigs: [HotWordConfig] {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: "hotWordConfigs"),
+                  let configs = try? JSONDecoder().decode([HotWordConfig].self, from: data) else {
+                return HotWordConfig.defaults
+            }
+            return configs
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: "hotWordConfigs")
+            }
+        }
+    }
+
     private init() {}
 }
