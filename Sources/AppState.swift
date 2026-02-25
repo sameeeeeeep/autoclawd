@@ -131,6 +131,15 @@ final class AppState: ObservableObject {
         }
         locationService.start()
 
+        let hotkeys = GlobalHotkeyMonitor.shared
+        hotkeys.onTranscribeNow = { [weak self] in
+            Task { @MainActor in self?.chunkManager.pause() }
+        }
+        hotkeys.onToggleMic = { [weak self] in
+            Task { @MainActor in self?.toggleListening() }
+        }
+        hotkeys.start()
+
         if micEnabled {
             startListening()
         }
