@@ -235,9 +235,11 @@ struct PillView: View {
     private var contextMenu: some View {
         Group {
             Button("Open Panel") { onOpenPanel() }
-            Button(state == .paused ? "Resume Listening" : "Pause Listening") { onTogglePause() }
+            Button(state == .paused ? "Resume Listening  ⌃Z" : "Pause Listening  ⌃Z") { onTogglePause() }
             Divider()
-            Button("Mode: \(pillMode.displayName) → \(pillMode.next().displayName)") { onCycleMode() }
+            Button("Ambient Mode  ⌃A") { onCycleMode() }
+            Button("AI Search Mode  ⌃S") { onCycleMode() }
+            Button("Transcribe Mode  ⌃X") { onCycleMode() }
             Divider()
             Button("View Logs") { onOpenLogs() }
         }

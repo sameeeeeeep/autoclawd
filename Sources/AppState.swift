@@ -133,11 +133,29 @@ final class AppState: ObservableObject {
         locationService.start()
 
         let hotkeys = GlobalHotkeyMonitor.shared
-        hotkeys.onTranscribeNow = { [weak self] in
-            Task { @MainActor in self?.chunkManager.pause() }
-        }
         hotkeys.onToggleMic = { [weak self] in
             Task { @MainActor in self?.toggleListening() }
+        }
+        hotkeys.onAmbientMode = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.pillMode = .ambientIntelligence
+                if !self.isListening { self.startListening() }
+            }
+        }
+        hotkeys.onSearchMode = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.pillMode = .aiSearch
+                if !self.isListening { self.startListening() }
+            }
+        }
+        hotkeys.onTranscribeMode = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.pillMode = .transcription
+                if !self.isListening { self.startListening() }
+            }
         }
         hotkeys.start()
 
