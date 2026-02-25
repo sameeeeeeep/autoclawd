@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "autoclawd-app",
+      "runtimeExecutable": "make",
+      "runtimeArgs": ["run"],
+      "port": 0
+    },
+    {
+      "name": "ollama",
+      "runtimeExecutable": "ollama",
+      "runtimeArgs": ["serve"],
+      "port": 11434
+    }
+  ]
+}

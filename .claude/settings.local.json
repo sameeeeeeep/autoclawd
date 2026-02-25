@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ollama show:*)",
+      "Bash(brew list:*)",
+      "Bash(git clone:*)",
+      "Bash(make:*)",
+      "Bash(swift build:*)",
+      "Bash(softwareupdate --list:*)",
+      "Bash(ollama serve:*)",
+      "Bash(python3:*)",
+      "Bash(osascript -e 'do shell script \"\"sh -c '\"''\"'echo \\\\\"\"\\\\\"\" > /Library/Developer/CommandLineTools/usr/include/swift/module.modulemap'\"''\"'\"\" with administrator privileges')",
+      "Bash(pgrep:*)",
+      "Bash(pkill:*)",
+      "Bash(open:*)",
+      "Bash(git commit:*)",
+      "mcp__Desktop_Commander__write_file",
+      "Bash(git add:*)",
+      "Bash(/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/ExtractionItem.swift:*)",
+      "Bash(/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/ExtractionStore.swift:*)",
+      "Bash(/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/SettingsManager.swift:*)",
+      "Bash(/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/ExtractionService.swift:*)",
+      "Bash(/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/ChunkManager.swift:*)",
+      "Bash(/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/AppState.swift:*)",
+      "Bash(/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/IntelligenceView.swift:*)",
+      "Bash(for f in \"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/ExtractionItem.swift\" \"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/ExtractionStore.swift\" \"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/IntelligenceView.swift\" \"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/ExtractionService.swift\")",
+      "Bash(do)",
+      "Bash(if [ -f \"$f\" ])",
+      "Bash(then)",
+      "Bash(echo:*)",
+      "Bash(else)",
+      "Bash(fi)",
+      "Bash(done)"
+    ]
+  }
+}
