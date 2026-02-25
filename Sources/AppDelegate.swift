@@ -29,6 +29,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] entry in self?.showToast(entry) }
             .store(in: &cancellables)
+
+        // Show/hide pill + toast when setting changes
+        appState.$showFlowBar
+            .receive(on: DispatchQueue.main)
+            .dropFirst()  // skip initial value — pill is already shown by showPill()
+            .sink { [weak self] show in
+                guard let self else { return }
+                if show {
+                    self.pillWindow?.setFrameOrigin(self.defaultPillOrigin())
+                    self.pillWindow?.orderFront(nil)
+                } else {
+                    self.toastDismissWork?.cancel()
+                    self.toastWindow?.orderOut(nil)
+                    self.pillWindow?.orderOut(nil)
+                }
+            }
+            .store(in: &cancellables)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -38,6 +55,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Pill Window
+
+    private func defaultPillOrigin() -> NSPoint {
+        guard let screen = NSScreen.main else { return .zero }
+        return NSPoint(
+            x: screen.visibleFrame.maxX - 240,
+            y: screen.visibleFrame.maxY - 60
+        )
+    }
 
     private func showPill() {
         let pill = PillWindow()

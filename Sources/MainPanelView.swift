@@ -260,6 +260,12 @@ struct SettingsTabView: View {
             VStack(alignment: .leading, spacing: 20) {
                 TabHeader("SETTINGS") { EmptyView() }
 
+                GroupBox("Display") {
+                    Toggle("Show Flow bar at all times", isOn: $appState.showFlowBar)
+                        .font(BrutalistTheme.monoMD)
+                        .padding(8)
+                }
+
                 GroupBox("Transcription") {
                     VStack(alignment: .leading, spacing: 12) {
                         Picker("Mode", selection: $appState.transcriptionMode) {
