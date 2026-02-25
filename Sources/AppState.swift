@@ -87,6 +87,7 @@ final class AppState: ObservableObject {
     private let pasteService: TranscriptionPasteService
     private let qaService: QAService
     let qaStore: QAStore
+    let claudeCodeRunner = ClaudeCodeRunner()
 
     // MARK: - Derived Content (refreshed on demand)
 
@@ -379,6 +380,7 @@ final class AppState: ObservableObject {
     }
 
     private func configureChunkManager() {
+        chunkManager.appState = self
         reconfigureChunkManager()
 
         chunkManager.onItemsClassified = { [weak self] _ in
@@ -424,4 +426,64 @@ final class AppState: ObservableObject {
     }
 
     private var cancellables = Set<AnyCancellable>()
+
+    // MARK: - Hot-Word Processing
+
+    @MainActor
+    func processHotWordMatches(_ matches: [HotWordMatch]) async {
+        for match in matches {
+            Log.info(.system, "Hot-word: '\(match.config.keyword)' action=\(match.config.action.rawValue)")
+
+            var resolvedProject: Project? = nil
+            if let ref = match.explicitProjectRef {
+                let all = projectStore.all()
+                if let idx = Int(ref), idx >= 1, idx <= all.count {
+                    resolvedProject = all[idx - 1]
+                } else {
+                    resolvedProject = all.first { $0.name.lowercased().contains(ref.lowercased()) }
+                }
+            } else {
+                resolvedProject = await projectStore.inferProject(for: match.payload, using: ollama)
+            }
+
+            switch match.config.action {
+            case .executeImmediately:
+                guard let project = resolvedProject else {
+                    Log.warn(.system, "Hot-word executeImmediately: no project resolved, skipping")
+                    continue
+                }
+                Task {
+                    for try await line in claudeCodeRunner.run(
+                        match.payload,
+                        in: project,
+                        dangerouslySkipPermissions: match.config.skipPermissions
+                    ) {
+                        Log.info(.system, "[hot-exec] \(line)")
+                    }
+                }
+
+            case .addTodo:
+                let inserted = structuredTodoStore.insert(
+                    content: match.payload,
+                    priority: "HIGH"
+                )
+                if let project = resolvedProject {
+                    structuredTodoStore.setProject(id: inserted.id, projectID: project.id)
+                }
+                refreshStructuredTodos()
+                Log.info(.todo, "Hot-word added todo: \(match.payload)")
+
+            case .addWorldModelInfo:
+                if let project = resolvedProject, let pid = UUID(uuidString: project.id) {
+                    worldModelService.appendInfo(match.payload, for: pid)
+                } else {
+                    worldModelService.write(worldModelService.read() + "\n- \(match.payload)")
+                }
+                Log.info(.world, "Hot-word added to world model")
+
+            case .logOnly:
+                Log.info(.system, "Hot-word log-only: \(match.payload)")
+            }
+        }
+    }
 }

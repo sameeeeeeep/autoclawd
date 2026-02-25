@@ -27,6 +27,8 @@ final class ChunkManager: ObservableObject {
     var onTranscriptReady: ((String, URL) -> Void)?
     var onItemsClassified: (([ExtractionItem]) -> Void)?
 
+    weak var appState: AppState?
+
     private let audioRecorder = AudioRecorder()
     private let storage = FileStorageManager.shared
     private let settings = SettingsManager.shared
@@ -378,6 +380,14 @@ final class ChunkManager: ObservableObject {
         await MainActor.run {
             self.onTranscriptReady?(transcript, audioURL)
             self.transcriptBuffer.append(transcript)
+            // Hot-word detection
+            let hotWordMatches = HotWordDetector.detect(
+                in: transcript,
+                configs: self.settings.hotWordConfigs
+            )
+            if !hotWordMatches.isEmpty, let appState = self.appState {
+                Task { await appState.processHotWordMatches(hotWordMatches) }
+            }
         }
 
         switch pillMode {

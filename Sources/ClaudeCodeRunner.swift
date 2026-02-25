@@ -104,4 +104,61 @@ final class ClaudeCodeRunner: Sendable {
             }
         }
     }
+
+    /// Streams stdout+stderr lines from `claude --print <prompt>` run in `project.localPath`.
+    /// Used by hot-word processing to execute arbitrary prompts directly.
+    func run(
+        _ prompt: String,
+        in project: Project,
+        dangerouslySkipPermissions: Bool = false
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task.detached {
+                guard let claudeURL = ClaudeCodeRunner.findCLI() else {
+                    continuation.finish(throwing: ClaudeCodeError.notFound)
+                    return
+                }
+
+                let process = Process()
+                process.executableURL = claudeURL
+                var args = ["--print", prompt]
+                if dangerouslySkipPermissions {
+                    args.append("--dangerously-skip-permissions")
+                }
+                process.arguments = args
+                process.currentDirectoryURL = URL(fileURLWithPath: project.localPath)
+
+                var env = ProcessInfo.processInfo.environment
+                let apiKeyVal = SettingsManager.shared.groqAPIKey
+                if !apiKeyVal.isEmpty {
+                    env["ANTHROPIC_API_KEY"] = apiKeyVal
+                }
+                process.environment = env
+
+                let outPipe = Pipe()
+                process.standardOutput = outPipe
+                process.standardError = outPipe  // merge stderr into same pipe
+
+                do {
+                    try process.run()
+                } catch {
+                    continuation.finish(throwing: error)
+                    return
+                }
+
+                // Read lines as they arrive
+                for try await line in outPipe.fileHandleForReading.bytes.lines {
+                    continuation.yield(line)
+                }
+
+                process.waitUntilExit()
+                let status = process.terminationStatus
+                if status != 0 {
+                    continuation.finish(throwing: ClaudeCodeError.exitCode(status))
+                } else {
+                    continuation.finish()
+                }
+            }
+        }
+    }
 }
