@@ -22,7 +22,7 @@ final class PillWindow: NSPanel {
     private func configure() {
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = false
+        hasShadow = true
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         isMovableByWindowBackground = false

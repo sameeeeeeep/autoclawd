@@ -175,7 +175,16 @@ struct PillView: View {
     // MARK: - Background & Border
 
     private var pillBackground: some View {
-        Rectangle().fill(Color.black)
+        ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+            // Specular sheen
+            LinearGradient(
+                colors: [Color.white.opacity(0.10), Color.clear],
+                startPoint: .top,
+                endPoint: .center
+            )
+        }
     }
 
     private var pillBorder: some View {
