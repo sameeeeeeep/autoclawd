@@ -340,6 +340,15 @@ final class AppState: ObservableObject {
         refreshStructuredTodos()
     }
 
+    func setTranscriptProject(transcriptID: Int64, projectID: UUID?) {
+        transcriptStore.setProject(projectID, for: transcriptID)
+    }
+
+    func addStructuredTodo(content: String, priority: String?) {
+        _ = structuredTodoStore.insert(content: content, priority: priority)
+        refreshStructuredTodos()
+    }
+
     func deleteTodo(id: String) {
         structuredTodoStore.delete(id: id)
         refreshStructuredTodos()

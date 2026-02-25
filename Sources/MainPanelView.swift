@@ -619,7 +619,7 @@ struct TranscriptTabView: View {
             }
             Divider()
             List(transcripts) { record in
-                TranscriptRowView(record: record)
+                TranscriptRowView(record: record, appState: appState)
             }
             .listStyle(.plain)
         }
@@ -637,7 +637,13 @@ struct TranscriptTabView: View {
 
 struct TranscriptRowView: View {
     let record: TranscriptRecord
+    @ObservedObject var appState: AppState
     @State private var expanded = false
+
+    private var assignedProjectName: String {
+        guard let pid = record.projectID else { return "No Project" }
+        return appState.projects.first(where: { $0.id == pid.uuidString })?.name ?? "No Project"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -654,6 +660,28 @@ struct TranscriptRowView: View {
                 .font(.custom("JetBrains Mono", size: 11))
                 .lineLimit(expanded ? nil : 3)
                 .onTapGesture { expanded.toggle() }
+            HStack(spacing: 8) {
+                Menu {
+                    Button("None") {
+                        appState.setTranscriptProject(transcriptID: record.id, projectID: nil)
+                    }
+                    ForEach(appState.projects) { project in
+                        Button(project.name) {
+                            appState.setTranscriptProject(transcriptID: record.id, projectID: UUID(uuidString: project.id))
+                        }
+                    }
+                } label: {
+                    Label(assignedProjectName, systemImage: "folder")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button("→ Todo") {
+                    appState.addStructuredTodo(content: record.text, priority: "MEDIUM")
+                }
+                .font(.system(.caption, design: .monospaced))
+                .buttonStyle(.bordered)
+            }
         }
         .padding(.vertical, 4)
     }
