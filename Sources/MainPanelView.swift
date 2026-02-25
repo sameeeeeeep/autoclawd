@@ -195,6 +195,8 @@ struct TodoTabView: View {
     @State private var rawContent: String = ""
     @State private var showRaw = false
     @State private var runningTodo: StructuredTodo? = nil
+    @State private var selectedTodoIDs: Set<String> = []
+    @State private var executionMode: ExecutionMode = .parallel
 
     var sortedTodos: [StructuredTodo] {
         appState.structuredTodos.sorted {
@@ -228,10 +230,46 @@ struct TodoTabView: View {
             } else {
                 List {
                     ForEach(sortedTodos) { todo in
-                        StructuredTodoRow(todo: todo, appState: appState, onRun: { runningTodo = todo })
+                        HStack(spacing: 6) {
+                            Image(systemName: selectedTodoIDs.contains(todo.id) ? "checkmark.square.fill" : "square")
+                                .foregroundColor(selectedTodoIDs.contains(todo.id) ? .green : .secondary)
+                                .font(.system(size: 14))
+                                .onTapGesture {
+                                    if selectedTodoIDs.contains(todo.id) {
+                                        selectedTodoIDs.remove(todo.id)
+                                    } else {
+                                        selectedTodoIDs.insert(todo.id)
+                                    }
+                                }
+                            StructuredTodoRow(todo: todo, appState: appState, onRun: { runningTodo = todo })
+                        }
                     }
                 }
                 .listStyle(.plain)
+
+                if !selectedTodoIDs.isEmpty {
+                    Divider()
+                    HStack(spacing: 12) {
+                        Text("\(selectedTodoIDs.count) selected")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
+                        Picker("", selection: $executionMode) {
+                            ForEach(ExecutionMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 160)
+                        Spacer()
+                        Button("Execute All") {
+                            Task { await appState.executeSelectedTodos(ids: selectedTodoIDs, mode: executionMode) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .font(.system(.caption, design: .monospaced))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                }
             }
 
             Divider()

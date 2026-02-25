@@ -3,6 +3,20 @@ import Combine
 import Foundation
 import SwiftUI
 
+// MARK: - ExecutionMode
+
+enum ExecutionMode: String, CaseIterable {
+    case parallel = "parallel"
+    case series = "series"
+
+    var displayName: String {
+        switch self {
+        case .parallel: return "Parallel"
+        case .series: return "Series"
+        }
+    }
+}
+
 // MARK: - AppState
 
 @MainActor
@@ -357,6 +371,54 @@ final class AppState: ObservableObject {
     func markTodoExecuted(id: String, output: String) {
         structuredTodoStore.markExecuted(id: id, output: output)
         refreshStructuredTodos()
+    }
+
+    func executeSelectedTodos(ids: Set<String>, mode: ExecutionMode) async {
+        let todos = structuredTodos.filter { ids.contains($0.id) }
+        let apiKey = SettingsManager.shared.anthropicAPIKey
+
+        switch mode {
+        case .parallel:
+            await withTaskGroup(of: Void.self) { group in
+                for todo in todos {
+                    guard let project = projects.first(where: { $0.id == todo.projectID }) else {
+                        Log.warn(.system, "Todo '\(todo.content.prefix(30))' has no project assigned, skipping")
+                        continue
+                    }
+                    group.addTask {
+                        do {
+                            for try await line in ClaudeCodeRunner().run(
+                                todo: todo,
+                                project: project,
+                                apiKey: apiKey.isEmpty ? nil : apiKey
+                            ) {
+                                Log.info(.system, "[parallel exec] \(line)")
+                            }
+                        } catch {
+                            Log.warn(.system, "[parallel exec error] \(error)")
+                        }
+                    }
+                }
+            }
+        case .series:
+            for todo in todos {
+                guard let project = projects.first(where: { $0.id == todo.projectID }) else {
+                    Log.warn(.system, "Todo '\(todo.content.prefix(30))' has no project assigned, skipping")
+                    continue
+                }
+                do {
+                    for try await line in ClaudeCodeRunner().run(
+                        todo: todo,
+                        project: project,
+                        apiKey: apiKey.isEmpty ? nil : apiKey
+                    ) {
+                        Log.info(.system, "[series exec] \(line)")
+                    }
+                } catch {
+                    Log.warn(.system, "[series exec error] \(error)")
+                }
+            }
+        }
     }
 
     // Callback set by AppDelegate so Settings tab can re-open the setup window
