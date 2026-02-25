@@ -113,7 +113,7 @@ struct MainPanelView: View {
     private var content: some View {
         switch selectedTab {
         case .todos:      TodoTabView(appState: appState)
-        case .worldModel: WorldModelTabView(appState: appState)
+        case .worldModel: WorldModelGraphView(appState: appState)
         case .transcript: TranscriptTabView(appState: appState, search: $transcriptSearch)
         case .settings:   SettingsTabView(appState: appState)
         case .logs:         LogsTabView(appState: appState)
