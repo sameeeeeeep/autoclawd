@@ -19,8 +19,8 @@ struct PillView: View {
     let onTogglePause: () -> Void
     let onOpenLogs: () -> Void
     let onToggleMinimal: () -> Void
-    let pillMode: PillMode = .ambientIntelligence
-    let onCycleMode: () -> Void = {}
+    let pillMode: PillMode
+    let onCycleMode: () -> Void
 
     @State private var scanOffset: CGFloat = -120
     @State private var scanTimer: Timer? = nil

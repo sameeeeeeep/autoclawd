@@ -121,7 +121,9 @@ struct PillContentView: View {
             onOpenPanel: onOpenPanel,
             onTogglePause: onTogglePause,
             onOpenLogs: onOpenLogs,
-            onToggleMinimal: onToggleMinimal
+            onToggleMinimal: onToggleMinimal,
+            pillMode: appState.pillMode,
+            onCycleMode: { appState.cyclePillMode() }
         )
         .onReceive(
             Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
