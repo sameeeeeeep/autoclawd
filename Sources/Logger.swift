@@ -55,7 +55,7 @@ struct LogEntry {
 final class AutoClawdLogger: @unchecked Sendable {
     static let shared = AutoClawdLogger()
 
-    /// Fires on every log entry, always on the main queue.
+    /// Fires on every log entry. Subscribers should use `.receive(on: DispatchQueue.main)` if they update UI.
     static let toastPublisher = PassthroughSubject<LogEntry, Never>()
 
     private let queue = DispatchQueue(label: "com.autoclawd.logger", qos: .utility)
@@ -81,9 +81,7 @@ final class AutoClawdLogger: @unchecked Sendable {
         queue.async { [weak self] in
             self?.write(entry)
         }
-        DispatchQueue.main.async {
-            AutoClawdLogger.toastPublisher.send(entry)
-        }
+        AutoClawdLogger.toastPublisher.send(entry)
     }
 
     // Convenience shorthand
