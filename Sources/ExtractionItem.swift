@@ -33,7 +33,7 @@ struct ExtractionItem: Identifiable, Equatable {
     let priority: String?
     let modelDecision: String
     var userOverride: String?
-    var applied: Bool
+    var applied: Bool = false
 
     var effectiveState: String  { userOverride ?? modelDecision }
     var isAccepted: Bool        { effectiveState == "relevant" || effectiveState == "accepted" }
