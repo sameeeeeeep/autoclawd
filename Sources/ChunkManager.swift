@@ -95,6 +95,14 @@ final class ChunkManager: ObservableObject {
         if let sid = currentSessionID {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
             currentSessionID = nil
+            // Tag people mentioned in this session
+            let taggingService = PeopleTaggingService()
+            taggingService.apiKey = SettingsManager.shared.groqAPIKey
+            let fullTranscript = transcriptBuffer.joined(separator: " ")
+            let capturedSID = sid
+            Task.detached {
+                await taggingService.tagPeople(sessionID: capturedSID, transcript: fullTranscript)
+            }
         }
         transcriptBuffer.removeAll()
         state = .stopped

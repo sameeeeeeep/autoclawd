@@ -153,6 +153,21 @@ final class SessionStore: @unchecked Sendable {
                 updated_at   TEXT
             );
         """)
+        execSQL("""
+            CREATE TABLE IF NOT EXISTS people (
+                id      TEXT PRIMARY KEY,
+                name    TEXT NOT NULL,
+                aliases TEXT NOT NULL DEFAULT '[]'
+            );
+        """)
+        execSQL("""
+            CREATE TABLE IF NOT EXISTS session_people (
+                session_id TEXT NOT NULL,
+                person_id  TEXT NOT NULL,
+                source     TEXT NOT NULL DEFAULT 'inferred',
+                PRIMARY KEY (session_id, person_id)
+            );
+        """)
     }
 
     // MARK: - Helpers (internal for use by other services)
