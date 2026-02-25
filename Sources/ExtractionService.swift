@@ -283,11 +283,6 @@ Start immediately with <WORLD_MODEL>.
         let ids = pending.map { $0.id }
         store.markApplied(ids: ids)
 
-        // Persist todo items into structured store for project-based execution
-        for item in pending where item.type == .todo {
-            structuredTodoStore.insert(content: item.content, priority: item.priority)
-        }
-
         Log.info(.extract, "Pass 2 complete: \(pending.count) items applied")
         await cleanupService.cleanup()
     }

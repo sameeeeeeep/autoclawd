@@ -120,17 +120,16 @@ final class AppState: ObservableObject {
         let exStore = ExtractionStore(url: FileStorageManager.shared.intelligenceDatabaseURL)
         extractionStore = exStore
         let cleanupSvc = CleanupService(
-            ollama: OllamaService(),
-            worldModel: WorldModelService(),
-            todos: TodoService(),
-            store: exStore,
-            structuredTodoStore: structuredTodoStore
+            ollama: ollama,
+            worldModel: worldModelService,
+            todos: todoService,
+            store: exStore
         )
         cleanupService = cleanupSvc
         extractionService = ExtractionService(
-            ollama: OllamaService(),
-            worldModel: WorldModelService(),
-            todos: TodoService(),
+            ollama: ollama,
+            worldModel: worldModelService,
+            todos: todoService,
             store: exStore,
             cleanup: cleanupSvc
         )
