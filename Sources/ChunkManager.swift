@@ -40,6 +40,11 @@ final class ChunkManager: ObservableObject {
     private let silenceGapSeconds: TimeInterval = 0.8
     private var transcriptBuffer: [String] = []
 
+    // Session-relative chunk labeling (A=0, B=1, C=2…)
+    private var sessionChunkSeq: Int = 0
+    // Last ~150 words of the previous chunk for context carry-over
+    private var previousChunkTrail: String = ""
+
     private var chunkTimer: Task<Void, Never>?
     private var transcriptionService: (any Transcribable)?
     private var extractionService: ExtractionService?
@@ -81,6 +86,8 @@ final class ChunkManager: ObservableObject {
     func startListening() {
         guard case .stopped = state else { return }
         Log.info(.system, "ChunkManager: startListening() called")
+        sessionChunkSeq = 0
+        previousChunkTrail = ""
         beginChunkCycle()
         // Begin a new session row
         let ssid = locationService.currentSSID
@@ -125,6 +132,12 @@ final class ChunkManager: ObservableObject {
         state = .paused
         Log.info(.system, "ChunkManager: paused at chunk \(index), \(duration)s recorded")
 
+        // Capture context values before clearing them
+        let capturedSeq   = sessionChunkSeq
+        let capturedTrail = previousChunkTrail
+        sessionChunkSeq += 1
+        previousChunkTrail = ""   // clear on pause — next session starts fresh
+
         // Process partial chunk if it has meaningful audio
         guard let savedURL, silenceRatio <= 0.90, duration >= 2 else {
             if duration < 2 {
@@ -146,6 +159,8 @@ final class ChunkManager: ObservableObject {
         Task.detached { [weak self] in
             await self?.processChunk(
                 index: index,
+                sessionChunkSeq: capturedSeq,
+                previousChunkTrail: capturedTrail,
                 audioURL: savedURL,
                 duration: max(duration, 1),
                 transcriptionService: capturedTS,
@@ -162,6 +177,8 @@ final class ChunkManager: ObservableObject {
     func resume() {
         guard case .paused = state else { return }
         Log.info(.system, "ChunkManager: resuming")
+        sessionChunkSeq = 0
+        previousChunkTrail = ""
         // Start a fresh session on resume
         let ssid = locationService.currentSSID
         currentSessionID = sessionStore.beginSession(wifiSSID: ssid)
@@ -250,8 +267,12 @@ final class ChunkManager: ObservableObject {
             return
         }
 
-        // Dispatch background processing (unchanged from before)
+        // Capture session context before dispatching (values by copy, never read from detached task)
         let capturedIndex = index
+        let capturedSeq   = sessionChunkSeq
+        let capturedTrail = previousChunkTrail
+        sessionChunkSeq += 1   // increment for the next chunk in this session
+
         let capturedTranscriptionService = transcriptionService
         let capturedExtractionService = extractionService
         let capturedTranscriptStore = transcriptStore
@@ -263,6 +284,8 @@ final class ChunkManager: ObservableObject {
         Task.detached { [weak self] in
             await self?.processChunk(
                 index: capturedIndex,
+                sessionChunkSeq: capturedSeq,
+                previousChunkTrail: capturedTrail,
                 audioURL: savedURL,
                 duration: max(duration, 1),
                 transcriptionService: capturedTranscriptionService,
@@ -278,8 +301,14 @@ final class ChunkManager: ObservableObject {
 
     // MARK: - Background Processing
 
+    private nonisolated func sessionLabel(for seq: Int) -> String {
+        String(UnicodeScalar(UInt32(65 + min(seq, 25)))!)
+    }
+
     private func processChunk(
         index: Int,
+        sessionChunkSeq: Int,
+        previousChunkTrail: String,
         audioURL: URL,
         duration: Int,
         transcriptionService: (any Transcribable)?,
@@ -295,38 +324,40 @@ final class ChunkManager: ObservableObject {
             return
         }
 
-        Log.info(.transcribe, "Chunk \(index): starting transcription [\(transcriptionService.modelName)]")
+        let label = sessionLabel(for: sessionChunkSeq)
+        Log.info(.transcribe, "Chunk \(index) [sess:\(label)]: starting transcription [\(transcriptionService.modelName)]")
 
         let transcript: String
         do {
             let t0 = Date()
-            transcript = try await transcriptionService.transcribe(fileURL: audioURL)
+            // Pass trailing context from previous chunk as a hint to improve boundary transcription
+            let hint = previousChunkTrail.isEmpty ? nil : String(previousChunkTrail.suffix(200))
+            transcript = try await transcriptionService.transcribe(fileURL: audioURL, contextHint: hint)
             let elapsed = Date().timeIntervalSince(t0)
             let wordCount = transcript.split(separator: " ").count
             let preview = String(transcript.prefix(60))
-            Log.info(.transcribe, "Chunk \(index) [\(transcriptionService.modelName)]: \(String(format: "%.1f", elapsed))s, \(wordCount) words — '\(preview)'")
+            Log.info(.transcribe, "Chunk \(index) [sess:\(label)] [\(transcriptionService.modelName)]: \(String(format: "%.1f", elapsed))s, \(wordCount) words — '\(preview)'")
         } catch {
             let msg = error.localizedDescription
             // SFSpeechRecognizer returns "No speech detected" for silent audio — not a real error
             if msg.localizedCaseInsensitiveContains("no speech") {
-                Log.info(.transcribe, "Chunk \(index): no speech detected, skipping")
+                Log.info(.transcribe, "Chunk \(index) [sess:\(label)]: no speech detected, skipping")
             } else {
-                Log.error(.transcribe, "Chunk \(index) [\(transcriptionService.modelName)] failed: \(msg)")
+                Log.error(.transcribe, "Chunk \(index) [sess:\(label)] [\(transcriptionService.modelName)] failed: \(msg)")
             }
             return
         }
 
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            Log.info(.transcribe, "Chunk \(index): empty transcript, skipping extraction")
+            Log.info(.transcribe, "Chunk \(index) [sess:\(label)]: empty transcript, skipping extraction")
             return
         }
 
-        // Save transcript to SQLite
-        transcriptStore?.save(
-            text: transcript,
-            durationSeconds: duration,
-            audioFilePath: audioURL.path
-        )
+        // Update the trail for the next chunk (on main actor, serialised)
+        await MainActor.run {
+            let words = transcript.split(separator: " ")
+            self.previousChunkTrail = words.suffix(150).joined(separator: " ")
+        }
 
         // Resolve SSID on main actor, then do SQLite work off main actor
         let (currentSID, ssid) = await MainActor.run { (self.currentSessionID, self.locationService.currentSSID) }
@@ -334,6 +365,15 @@ final class ChunkManager: ObservableObject {
         if let sid = currentSID, let pid = placeID {
             SessionStore.shared.updateSessionPlace(id: sid, placeID: pid)
         }
+
+        // Save transcript with session linking
+        transcriptStore?.save(
+            text: transcript,
+            durationSeconds: duration,
+            audioFilePath: audioURL.path,
+            sessionID: currentSID,
+            sessionChunkSeq: sessionChunkSeq
+        )
 
         await MainActor.run {
             self.onTranscriptReady?(transcript, audioURL)
@@ -346,10 +386,12 @@ final class ChunkManager: ObservableObject {
                 Log.warn(.extract, "No extraction service configured")
                 break
             }
-            Log.info(.extract, "Chunk \(index): starting extraction (Pass 1)")
+            Log.info(.extract, "Chunk \(index) [sess:\(label)]: starting extraction (Pass 1)")
             let items = await extractionService.classifyChunk(
                 transcript: transcript,
-                chunkIndex: index
+                chunkIndex: index,
+                sessionChunkSeq: sessionChunkSeq,
+                previousChunkTrail: previousChunkTrail
             )
             await MainActor.run { self.onItemsClassified?(items) }
 

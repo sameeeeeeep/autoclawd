@@ -9,6 +9,8 @@ struct TranscriptRecord: Identifiable {
     let durationSeconds: Int
     let text: String
     let audioFilePath: String
+    let sessionID: String?     // nil for legacy rows
+    let sessionChunkSeq: Int   // 0=A, 1=B, 2=C… (0 for legacy rows)
 }
 
 // MARK: - TranscriptStore
@@ -31,9 +33,11 @@ final class TranscriptStore: @unchecked Sendable {
 
     // MARK: - Write
 
-    func save(text: String, durationSeconds: Int, audioFilePath: String) {
+    func save(text: String, durationSeconds: Int, audioFilePath: String,
+              sessionID: String? = nil, sessionChunkSeq: Int = 0) {
         queue.async { [weak self] in
-            self?.insertTranscript(text: text, duration: durationSeconds, path: audioFilePath)
+            self?.insertTranscript(text: text, duration: durationSeconds, path: audioFilePath,
+                                   sessionID: sessionID, sessionChunkSeq: sessionChunkSeq)
         }
     }
 
@@ -74,15 +78,20 @@ final class TranscriptStore: @unchecked Sendable {
         execSQL(transcripts)
         execSQL(fts)
         execSQL(trigger)
+        // Safe migrations — "duplicate column" errors are silently swallowed by execSQL
+        execSQL("ALTER TABLE transcripts ADD COLUMN session_id TEXT;")
+        execSQL("ALTER TABLE transcripts ADD COLUMN session_chunk_seq INTEGER NOT NULL DEFAULT 0;")
     }
 
     // MARK: - SQL Helpers
 
-    private func insertTranscript(text: String, duration: Int, path: String) {
+    private func insertTranscript(text: String, duration: Int, path: String,
+                                  sessionID: String?, sessionChunkSeq: Int) {
         let ts = ISO8601DateFormatter().string(from: Date())
         let sql = """
-            INSERT INTO transcripts (timestamp, duration_seconds, text, audio_file_path)
-            VALUES (?, ?, ?, ?);
+            INSERT INTO transcripts
+                (timestamp, duration_seconds, text, audio_file_path, session_id, session_chunk_seq)
+            VALUES (?, ?, ?, ?, ?, ?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -91,9 +100,16 @@ final class TranscriptStore: @unchecked Sendable {
         sqlite3_bind_int(stmt, 2, Int32(duration))
         sqlite3_bind_text(stmt, 3, text, -1, SQLITE_TRANSIENT)
         sqlite3_bind_text(stmt, 4, path, -1, SQLITE_TRANSIENT)
+        if let sid = sessionID {
+            sqlite3_bind_text(stmt, 5, sid, -1, SQLITE_TRANSIENT)
+        } else {
+            sqlite3_bind_null(stmt, 5)
+        }
+        sqlite3_bind_int(stmt, 6, Int32(sessionChunkSeq))
         let result = sqlite3_step(stmt)
         if result == SQLITE_DONE {
-            Log.info(.system, "Transcript saved (\(text.split(separator: " ").count) words)")
+            let label = String(UnicodeScalar(UInt32(65 + min(sessionChunkSeq, 25)))!)
+            Log.info(.system, "Transcript saved [sess:\(label)] (\(text.split(separator: " ").count) words)")
         } else {
             Log.error(.system, "Transcript save failed: \(result)")
         }
@@ -101,7 +117,8 @@ final class TranscriptStore: @unchecked Sendable {
 
     private func ftsSearch(query: String, limit: Int) -> [TranscriptRecord] {
         let sql = """
-            SELECT t.id, t.timestamp, t.duration_seconds, t.text, t.audio_file_path
+            SELECT t.id, t.timestamp, t.duration_seconds, t.text, t.audio_file_path,
+                   t.session_id, t.session_chunk_seq
             FROM transcripts t
             JOIN transcripts_fts f ON t.id = f.rowid
             WHERE transcripts_fts MATCH ?
@@ -113,7 +130,8 @@ final class TranscriptStore: @unchecked Sendable {
 
     private func fetchRecent(limit: Int) -> [TranscriptRecord] {
         let sql = """
-            SELECT id, timestamp, duration_seconds, text, audio_file_path
+            SELECT id, timestamp, duration_seconds, text, audio_file_path,
+                   session_id, session_chunk_seq
             FROM transcripts
             ORDER BY id DESC
             LIMIT ?;
@@ -130,14 +148,19 @@ final class TranscriptStore: @unchecked Sendable {
         }
         var results: [TranscriptRecord] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
-            let id   = sqlite3_column_int64(stmt, 0)
+            let id    = sqlite3_column_int64(stmt, 0)
             let tsStr = String(cString: sqlite3_column_text(stmt, 1))
-            let dur  = Int(sqlite3_column_int(stmt, 2))
-            let text = String(cString: sqlite3_column_text(stmt, 3))
-            let path = String(cString: sqlite3_column_text(stmt, 4))
-            let ts   = ISO8601DateFormatter().date(from: tsStr) ?? Date()
+            let dur   = Int(sqlite3_column_int(stmt, 2))
+            let text  = String(cString: sqlite3_column_text(stmt, 3))
+            let path  = String(cString: sqlite3_column_text(stmt, 4))
+            let sid   = sqlite3_column_type(stmt, 5) != SQLITE_NULL
+                ? String(cString: sqlite3_column_text(stmt, 5))
+                : nil
+            let seq   = Int(sqlite3_column_int(stmt, 6))
+            let ts    = ISO8601DateFormatter().date(from: tsStr) ?? Date()
             results.append(TranscriptRecord(id: id, timestamp: ts, durationSeconds: dur,
-                                            text: text, audioFilePath: path))
+                                            text: text, audioFilePath: path,
+                                            sessionID: sid, sessionChunkSeq: seq))
         }
         return results
     }

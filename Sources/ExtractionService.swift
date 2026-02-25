@@ -20,13 +20,39 @@ final class ExtractionService: @unchecked Sendable {
 
     // MARK: - Pass 1: Classify Chunk
 
-    func classifyChunk(transcript: String, chunkIndex: Int) async -> [ExtractionItem] {
+    func classifyChunk(
+        transcript: String,
+        chunkIndex: Int,
+        sessionChunkSeq: Int = 0,
+        previousChunkTrail: String = ""
+    ) async -> [ExtractionItem] {
         let contextBlock = SessionStore.shared.buildContextBlock(
             currentSSID: await MainActor.run { LocationService.shared.currentSSID }
         )
         let contextPrefix = contextBlock.isEmpty ? "" : "\(contextBlock)\n\n---\n\n"
+
+        // Session label: 0=A, 1=B, 2=C…
+        let label = String(UnicodeScalar(UInt32(65 + min(sessionChunkSeq, 25)))!)
+
+        // Inject trailing context from previous chunk so the LLM sees cross-boundary continuity
+        let continuationPrefix: String
+        if !previousChunkTrail.isEmpty && sessionChunkSeq > 0 {
+            continuationPrefix = """
+[CONTINUATION CONTEXT — chunk \(label) of this session]
+The transcript below continues directly from the previous chunk, which ended with:
+"\(previousChunkTrail)"
+Treat any sentence that begins mid-thought as a continuation of the above.
+Do NOT re-extract items already captured from the previous chunk.
+
+---
+
+"""
+        } else {
+            continuationPrefix = ""
+        }
+
         let prompt = """
-\(contextPrefix)You classify spoken transcript ideas into structured knowledge items.
+\(contextPrefix)\(continuationPrefix)You classify spoken transcript ideas into structured knowledge items.
 
 TRANSCRIPT:
 \(transcript)
@@ -121,7 +147,7 @@ nonrelevant|-|-|-|Filler phrase
             }
         }
 
-        Log.info(.extract, "Pass 1 done: chunk \(chunkIndex) → \(items.count) items (\(relevantCount) relevant, \(nonrelevantCount) nonrelevant, \(uncertainCount) uncertain)")
+        Log.info(.extract, "Pass 1 done: chunk \(chunkIndex) [sess:\(label)] → \(items.count) items (\(relevantCount) relevant, \(nonrelevantCount) nonrelevant, \(uncertainCount) uncertain)")
 
         for item in items {
             let symbol = item.modelDecision == "nonrelevant" ? "✗" : "✓"

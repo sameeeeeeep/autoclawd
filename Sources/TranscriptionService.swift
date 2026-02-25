@@ -6,6 +6,15 @@ import Speech
 protocol Transcribable: Sendable {
     var modelName: String { get }
     func transcribe(fileURL: URL) async throws -> String
+    func transcribe(fileURL: URL, contextHint: String?) async throws -> String
+}
+
+extension Transcribable {
+    /// Default: ignore context hint. LocalTranscriptionService (SFSpeechRecognizer)
+    /// has no API for context, so it gets this no-op implementation for free.
+    func transcribe(fileURL: URL, contextHint: String?) async throws -> String {
+        try await transcribe(fileURL: fileURL)
+    }
 }
 
 // MARK: - TranscriptionService (Groq Whisper + Local SFSpeechRecognizer)
@@ -37,8 +46,12 @@ final class TranscriptionService: @unchecked Sendable, Transcribable {
     }
 
     func transcribe(fileURL: URL) async throws -> String {
+        try await transcribe(fileURL: fileURL, contextHint: nil)
+    }
+
+    func transcribe(fileURL: URL, contextHint: String?) async throws -> String {
         try await withThrowingTaskGroup(of: String.self) { group in
-            group.addTask { try await self.transcribeAudio(fileURL: fileURL) }
+            group.addTask { try await self.transcribeAudio(fileURL: fileURL, contextHint: contextHint) }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(self.timeoutSeconds * 1_000_000_000))
                 throw TranscriptionError.timedOut(self.timeoutSeconds)
@@ -51,7 +64,7 @@ final class TranscriptionService: @unchecked Sendable, Transcribable {
         }
     }
 
-    private func transcribeAudio(fileURL: URL) async throws -> String {
+    private func transcribeAudio(fileURL: URL, contextHint: String?) async throws -> String {
         guard let url = URL(string: "\(baseURL)/audio/transcriptions") else {
             throw TranscriptionError.failed("Invalid URL")
         }
@@ -66,7 +79,8 @@ final class TranscriptionService: @unchecked Sendable, Transcribable {
         let body = makeMultipartBody(
             audioData: audioData,
             fileName: fileURL.lastPathComponent,
-            boundary: boundary
+            boundary: boundary,
+            contextHint: contextHint
         )
 
         let (data, response) = try await URLSession.shared.upload(for: req, from: body)
@@ -80,13 +94,22 @@ final class TranscriptionService: @unchecked Sendable, Transcribable {
         return try parseText(from: data)
     }
 
-    private func makeMultipartBody(audioData: Data, fileName: String, boundary: String) -> Data {
+    private func makeMultipartBody(audioData: Data, fileName: String,
+                                   boundary: String, contextHint: String?) -> Data {
         var body = Data()
         func append(_ s: String) { body.append(Data(s.utf8)) }
 
         append("--\(boundary)\r\n")
         append("Content-Disposition: form-data; name=\"model\"\r\n\r\n")
         append("\(model)\r\n")
+
+        // Optional context hint — Whisper uses this as a decoder vocabulary bias
+        // to improve transcription accuracy at chunk boundaries
+        if let hint = contextHint, !hint.isEmpty {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"prompt\"\r\n\r\n")
+            append("\(hint)\r\n")
+        }
 
         append("--\(boundary)\r\n")
         append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n")
