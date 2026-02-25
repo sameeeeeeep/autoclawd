@@ -10,6 +10,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
     case settings   = "Settings"
     case logs         = "Logs"
     case intelligence = "Intelligence"
+    case qa = "AI Search"
 
     var id: String { rawValue }
 
@@ -21,6 +22,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .settings:   return "gearshape"
         case .logs:         return "doc.text"
         case .intelligence: return "brain.head.profile"
+        case .qa: return "magnifyingglass"
         }
     }
 }
@@ -116,6 +118,7 @@ struct MainPanelView: View {
         case .settings:   SettingsTabView(appState: appState)
         case .logs:         LogsTabView(appState: appState)
         case .intelligence: IntelligenceView(appState: appState)
+        case .qa: QAView(store: appState.qaStore)
         }
     }
 }
