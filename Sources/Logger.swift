@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 // MARK: - Log Level
@@ -54,6 +55,9 @@ struct LogEntry {
 final class AutoClawdLogger: @unchecked Sendable {
     static let shared = AutoClawdLogger()
 
+    /// Fires on every log entry, always on the main queue.
+    static let toastPublisher = PassthroughSubject<LogEntry, Never>()
+
     private let queue = DispatchQueue(label: "com.autoclawd.logger", qos: .utility)
     private var fileHandle: FileHandle?
     private var currentLogDate: String = ""
@@ -76,6 +80,9 @@ final class AutoClawdLogger: @unchecked Sendable {
         let entry = LogEntry(timestamp: Date(), level: level, component: component, message: message)
         queue.async { [weak self] in
             self?.write(entry)
+        }
+        DispatchQueue.main.async {
+            AutoClawdLogger.toastPublisher.send(entry)
         }
     }
 
