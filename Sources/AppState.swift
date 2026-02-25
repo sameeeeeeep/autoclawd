@@ -73,7 +73,7 @@ final class AppState: ObservableObject {
     private let ollama = OllamaService()
     private let worldModelService = WorldModelService()
     private let todoService = TodoService()
-    private var transcriptionService: TranscriptionService?
+    private var transcriptionService: (any Transcribable)?
     private let transcriptStore: TranscriptStore
     let extractionStore: ExtractionStore
     private let extractionService: ExtractionService
@@ -303,11 +303,12 @@ final class AppState: ObservableObject {
     }
 
     private func buildTranscriptionService() {
-        let key = groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !key.isEmpty {
-            transcriptionService = TranscriptionService(apiKey: key)
-        } else {
-            transcriptionService = nil
+        switch transcriptionMode {
+        case .local:
+            transcriptionService = LocalTranscriptionService()
+        case .groq:
+            let key = groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            transcriptionService = key.isEmpty ? nil : TranscriptionService(apiKey: key)
         }
         reconfigureChunkManager()
     }

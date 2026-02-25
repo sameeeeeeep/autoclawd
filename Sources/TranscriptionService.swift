@@ -1,12 +1,20 @@
 import Foundation
 import Speech
 
+// MARK: - Transcribable protocol
+
+protocol Transcribable: Sendable {
+    var modelName: String { get }
+    func transcribe(fileURL: URL) async throws -> String
+}
+
 // MARK: - TranscriptionService (Groq Whisper + Local SFSpeechRecognizer)
 
-final class TranscriptionService: @unchecked Sendable {
+final class TranscriptionService: @unchecked Sendable, Transcribable {
     private let apiKey: String
     private let baseURL: String
     private let model = "whisper-large-v3"
+    var modelName: String { "groq/\(model)" }
     private let timeoutSeconds: TimeInterval = 30
 
     init(apiKey: String, baseURL: String = "https://api.groq.com/openai/v1") {
@@ -110,7 +118,9 @@ final class TranscriptionService: @unchecked Sendable {
 
 // MARK: - Local Transcription (SFSpeechRecognizer, on-device)
 
-final class LocalTranscriptionService: @unchecked Sendable {
+final class LocalTranscriptionService: @unchecked Sendable, Transcribable {
+
+    var modelName: String { "local/SFSpeechRecognizer" }
 
     /// Request speech recognition permission. Returns true if granted.
     static func requestAuthorization() async -> Bool {

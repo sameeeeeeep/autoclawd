@@ -41,7 +41,7 @@ final class ChunkManager: ObservableObject {
     private var transcriptBuffer: [String] = []
 
     private var chunkTimer: Task<Void, Never>?
-    private var transcriptionService: TranscriptionService?
+    private var transcriptionService: (any Transcribable)?
     private var extractionService: ExtractionService?
     private var transcriptStore: TranscriptStore?
     private var chunkStartTime: Date?
@@ -59,7 +59,7 @@ final class ChunkManager: ObservableObject {
 
     // Dependencies injected after init to avoid circular refs
     func configure(
-        transcriptionService: TranscriptionService,
+        transcriptionService: any Transcribable,
         extractionService: ExtractionService,
         transcriptStore: TranscriptStore,
         pasteService: TranscriptionPasteService,
@@ -282,7 +282,7 @@ final class ChunkManager: ObservableObject {
         index: Int,
         audioURL: URL,
         duration: Int,
-        transcriptionService: TranscriptionService?,
+        transcriptionService: (any Transcribable)?,
         extractionService: ExtractionService?,
         transcriptStore: TranscriptStore?,
         pillMode: PillMode,
@@ -295,7 +295,7 @@ final class ChunkManager: ObservableObject {
             return
         }
 
-        Log.info(.transcribe, "Chunk \(index): starting transcription")
+        Log.info(.transcribe, "Chunk \(index): starting transcription [\(transcriptionService.modelName)]")
 
         let transcript: String
         do {
@@ -304,9 +304,9 @@ final class ChunkManager: ObservableObject {
             let elapsed = Date().timeIntervalSince(t0)
             let wordCount = transcript.split(separator: " ").count
             let preview = String(transcript.prefix(60))
-            Log.info(.transcribe, "Chunk \(index): \(String(format: "%.1f", elapsed))s, \(wordCount) words — '\(preview)'")
+            Log.info(.transcribe, "Chunk \(index) [\(transcriptionService.modelName)]: \(String(format: "%.1f", elapsed))s, \(wordCount) words — '\(preview)'")
         } catch {
-            Log.error(.transcribe, "Chunk \(index) transcription failed: \(error.localizedDescription)")
+            Log.error(.transcribe, "Chunk \(index) [\(transcriptionService.modelName)] failed: \(error.localizedDescription)")
             return
         }
 
