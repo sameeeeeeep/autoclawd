@@ -170,7 +170,7 @@ final class ClaudeCodeRunner: Sendable {
             Log.warn(.system, "Claude CLI not found — cannot open in Terminal")
             return
         }
-        let claudeExec = claudeURL.path
+        let claudeExec = claudeURL.path.replacingOccurrences(of: "'", with: "'\\''")
         // Shell-safe: escape single quotes in prompt using the POSIX technique
         let safePrompt = prompt.replacingOccurrences(of: "'", with: "'\\''")
         let safePath = project.localPath.replacingOccurrences(of: "'", with: "'\\''")

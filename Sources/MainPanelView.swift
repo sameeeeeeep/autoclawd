@@ -330,7 +330,7 @@ struct StructuredTodoRow: View {
 
             if canRun, let project = appState.projects.first(where: { $0.id == todo.projectID }) {
                 Button("Open in Terminal") {
-                    ClaudeCodeRunner().openInTerminal(
+                    appState.claudeCodeRunner.openInTerminal(
                         prompt: todo.content,
                         in: project
                     )
