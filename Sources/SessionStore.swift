@@ -125,45 +125,6 @@ final class SessionStore: @unchecked Sendable {
         execBind(sql, args: [blob, now])
     }
 
-    // MARK: - Context Block Builder
-
-    func buildContextBlock(currentSSID: String?) -> String {
-        var lines: [String] = []
-
-        // User profile
-        if let blob = userContextBlob(), !blob.isEmpty {
-            lines.append("[USER CONTEXT]\n\(blob)")
-        }
-
-        // Current session location
-        let place: String
-        if let ssid = currentSSID, let p = findPlace(wifiSSID: ssid) {
-            place = p.name
-        } else {
-            place = "Unknown"
-        }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE d MMM, h:mma"
-        let timeStr = formatter.string(from: Date())
-        lines.append("[CURRENT SESSION]\nLocation: \(place) | Time: \(timeStr)")
-
-        // Last 3 sessions
-        let recent = recentSessions(limit: 3)
-        if !recent.isEmpty {
-            let sessionSummaries = recent.map { s -> String in
-                let df = DateFormatter()
-                df.dateFormat = "EEE"
-                let day = df.string(from: s.startedAt)
-                let loc = s.placeName ?? "Unknown"
-                let snippet = s.transcriptSnippet.isEmpty ? "(no transcript)" : s.transcriptSnippet
-                return "\(day) at \(loc) — \(snippet)"
-            }.joined(separator: "\n")
-            lines.append("[RECENT SESSIONS]\n\(sessionSummaries)")
-        }
-
-        return lines.joined(separator: "\n\n")
-    }
-
     // MARK: - Schema
 
     private func createTables() {
