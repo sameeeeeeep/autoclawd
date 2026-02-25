@@ -17,7 +17,7 @@ enum EdgeKind: Equatable {
 // MARK: - GraphNode
 
 struct GraphNode: Identifiable, Equatable {
-    let id: String          // e.g. "section-0", "fact-0-2"
+    let id: String          // e.g. "section-0", "fact-3" (flat global counter per kind)
     let label: String       // full display text (heading or bullet content)
     let kind: NodeKind
     var position: CGPoint = .zero   // set by layout
