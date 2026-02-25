@@ -28,6 +28,7 @@ enum LogComponent: String {
     case ui        = "UI"
     case paste     = "PASTE"
     case qa        = "QA"
+    case cleanup   = "CLEANUP"
 }
 
 // MARK: - Log Entry

@@ -46,6 +46,18 @@ final class ExtractionStore: @unchecked Sendable {
         }
     }
 
+    func collapse(keepId: String, canonical: String, dropIds: [String]) {
+        queue.async { [self] in
+            self.execSQL("BEGIN;")
+            guard self.updateContent(id: keepId, content: canonical),
+                  self.deleteItems(ids: dropIds) else {
+                self.execSQL("ROLLBACK;")
+                return
+            }
+            self.execSQL("COMMIT;")
+        }
+    }
+
     // MARK: - Read
 
     func all(chunkIndex: Int? = nil) -> [ExtractionItem] {
@@ -175,6 +187,40 @@ final class ExtractionStore: @unchecked Sendable {
             }
             sqlite3_reset(stmt)
         }
+    }
+
+    @discardableResult
+    private func updateContent(id: String, content: String) -> Bool {
+        let sql = "UPDATE extraction_items SET content = ? WHERE id = ?;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, content, -1, SQLITE_TRANSIENT_ES)
+        sqlite3_bind_text(stmt, 2, id, -1, SQLITE_TRANSIENT_ES)
+        let result = sqlite3_step(stmt)
+        if result != SQLITE_DONE {
+            Log.error(.system, "ExtractionStore updateContent failed: \(result)")
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    private func deleteItems(ids: [String]) -> Bool {
+        let sql = "DELETE FROM extraction_items WHERE id = ?;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+        defer { sqlite3_finalize(stmt) }
+        for id in ids {
+            sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT_ES)
+            let result = sqlite3_step(stmt)
+            if result != SQLITE_DONE {
+                Log.error(.system, "ExtractionStore deleteItems failed for id \(id): \(result)")
+                return false
+            }
+            sqlite3_reset(stmt)
+        }
+        return true
     }
 
     private func fetchAll(chunkIndex: Int?) -> [ExtractionItem] {

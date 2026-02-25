@@ -64,6 +64,7 @@ final class AppState: ObservableObject {
     @Published var synthesizeThreshold: Int {
         didSet { SettingsManager.shared.synthesizeThreshold = synthesizeThreshold }
     }
+    @Published var isCleaningUp = false
 
     @Published var projects: [Project] = []
     @Published var structuredTodos: [StructuredTodo] = []
@@ -82,6 +83,7 @@ final class AppState: ObservableObject {
     private let transcriptStore: TranscriptStore
     let extractionStore: ExtractionStore
     private let extractionService: ExtractionService
+    private let cleanupService: CleanupService
     private let pasteService: TranscriptionPasteService
     private let qaService: QAService
     let qaStore: QAStore
@@ -117,12 +119,19 @@ final class AppState: ObservableObject {
 
         let exStore = ExtractionStore(url: FileStorageManager.shared.intelligenceDatabaseURL)
         extractionStore = exStore
+        let cleanupSvc = CleanupService(
+            ollama: ollama,
+            worldModel: worldModelService,
+            todos: todoService,
+            store: exStore
+        )
+        cleanupService = cleanupSvc
         extractionService = ExtractionService(
-            ollama: OllamaService(),
-            worldModel: WorldModelService(),
-            todos: TodoService(),
+            ollama: ollama,
+            worldModel: worldModelService,
+            todos: todoService,
             store: exStore,
-            structuredTodoStore: structuredTodoStore
+            cleanup: cleanupSvc
         )
         pasteService = TranscriptionPasteService()
         qaService    = QAService(ollama: OllamaService())
@@ -253,6 +262,13 @@ final class AppState: ObservableObject {
             refreshExtractionItems()
             refreshStructuredTodos()
         }
+    }
+
+    func cleanupNow() async {
+        isCleaningUp = true
+        await cleanupService.cleanup()
+        refreshExtractionItems()
+        isCleaningUp = false
     }
 
     func toggleExtraction(id: String) {

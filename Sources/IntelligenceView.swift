@@ -32,6 +32,11 @@ struct IntelligenceView: View {
                 }
                 .disabled(appState.pendingExtractionCount == 0)
                 .buttonStyle(.bordered)
+                Button("Clean Up") {
+                    Task { await appState.cleanupNow() }
+                }
+                .disabled(appState.isCleaningUp)
+                .buttonStyle(.bordered)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
