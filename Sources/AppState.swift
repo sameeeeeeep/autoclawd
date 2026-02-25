@@ -40,6 +40,12 @@ final class AppState: ObservableObject {
         }
     }
 
+    @Published var extractionItems: [ExtractionItem] = []
+    @Published var pendingExtractionCount: Int = 0
+    @Published var synthesizeThreshold: Int {
+        didSet { SettingsManager.shared.synthesizeThreshold = synthesizeThreshold }
+    }
+
     // MARK: - Services
 
     private let storage = FileStorageManager.shared
@@ -49,6 +55,7 @@ final class AppState: ObservableObject {
     private let todoService = TodoService()
     private var transcriptionService: TranscriptionService?
     private let transcriptStore: TranscriptStore
+    let extractionStore: ExtractionStore
     private let extractionService: ExtractionService
 
     // MARK: - Derived Content (refreshed on demand)
@@ -65,14 +72,16 @@ final class AppState: ObservableObject {
         micEnabled          = settings.micEnabled
         audioRetentionDays  = settings.audioRetentionDays
         groqAPIKey          = settings.groqAPIKey
+        synthesizeThreshold = settings.synthesizeThreshold
 
         transcriptStore = TranscriptStore(url: FileStorageManager.shared.transcriptsDatabaseURL)
-        let extractionStore = ExtractionStore(url: FileStorageManager.shared.intelligenceDatabaseURL)
+        let exStore = ExtractionStore(url: FileStorageManager.shared.intelligenceDatabaseURL)
+        extractionStore = exStore
         extractionService = ExtractionService(
             ollama: OllamaService(),
             worldModel: WorldModelService(),
             todos: TodoService(),
-            store: extractionStore
+            store: exStore
         )
         chunkManager = ChunkManager()
 
@@ -90,6 +99,8 @@ final class AppState: ObservableObject {
         if micEnabled {
             startListening()
         }
+
+        refreshExtractionItems()
     }
 
     // MARK: - Listening Control
@@ -138,6 +149,30 @@ final class AppState: ObservableObject {
 
     func searchTranscripts(query: String) -> [TranscriptRecord] {
         transcriptStore.search(query: query)
+    }
+
+    // MARK: - Extraction Access
+
+    func refreshExtractionItems() {
+        extractionItems = extractionStore.all()
+        pendingExtractionCount = extractionStore.pendingAccepted().count
+    }
+
+    func synthesizeNow() async {
+        await extractionService.synthesize()
+        await MainActor.run { refreshExtractionItems() }
+    }
+
+    func toggleExtraction(id: String) {
+        guard let item = extractionItems.first(where: { $0.id == id }) else { return }
+        let newOverride: String? = item.isAccepted ? "dismissed" : "accepted"
+        extractionStore.setUserOverride(id: id, override: newOverride)
+        refreshExtractionItems()
+    }
+
+    func setExtractionBucket(id: String, bucket: ExtractionBucket) {
+        extractionStore.setBucket(id: id, bucket: bucket)
+        refreshExtractionItems()
     }
 
     // MARK: - File Write-through
@@ -199,6 +234,16 @@ final class AppState: ObservableObject {
 
     private func configureChunkManager() {
         reconfigureChunkManager()
+
+        chunkManager.onItemsClassified = { [weak self] _ in
+            guard let self else { return }
+            self.refreshExtractionItems()
+            let pending = self.extractionStore.pendingAccepted().count
+            self.pendingExtractionCount = pending
+            if self.synthesizeThreshold > 0, pending >= self.synthesizeThreshold {
+                Task { await self.synthesizeNow() }
+            }
+        }
 
         // Observe audio level changes
         chunkManager.$chunkIndex
