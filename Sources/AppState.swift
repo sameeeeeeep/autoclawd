@@ -48,8 +48,8 @@ final class AppState: ObservableObject {
         }
     }
 
-    @Published var showFlowBar: Bool {
-        didSet { SettingsManager.shared.showFlowBar = showFlowBar }
+    @Published var showAmbientWidget: Bool {
+        didSet { SettingsManager.shared.showAmbientWidget = showAmbientWidget }
     }
 
     @Published var appearanceMode: AppearanceMode {
@@ -95,7 +95,7 @@ final class AppState: ObservableObject {
         audioRetentionDays  = settings.audioRetentionDays
         groqAPIKey          = settings.groqAPIKey
         synthesizeThreshold = settings.synthesizeThreshold
-        showFlowBar         = settings.showFlowBar
+        showAmbientWidget    = settings.showAmbientWidget
         appearanceMode      = settings.appearanceMode
 
         let savedMode = UserDefaults.standard.string(forKey: "pillMode")

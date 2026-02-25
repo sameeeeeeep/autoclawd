@@ -44,7 +44,7 @@ final class SettingsManager: @unchecked Sendable {
     private let kMicEnabled        = "mic_enabled"
     private let kLogLevel          = "log_level"
     private let kGroqAPIKey        = "groq_api_key_storage"
-    private let kShowFlowBar       = "show_flow_bar"
+    private let kShowAmbientWidget = "show_ambient_widget"
     private let kAppearanceMode = "appearance_mode"
 
     // MARK: - Properties
@@ -91,9 +91,9 @@ final class SettingsManager: @unchecked Sendable {
         set { AppSettingsStorage.save(newValue, account: kGroqAPIKey) }
     }
 
-    var showFlowBar: Bool {
-        get { defaults.object(forKey: kShowFlowBar) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: kShowFlowBar) }
+    var showAmbientWidget: Bool {
+        get { defaults.object(forKey: kShowAmbientWidget) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: kShowAmbientWidget) }
     }
 
     var appearanceMode: AppearanceMode {

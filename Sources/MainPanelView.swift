@@ -261,7 +261,7 @@ struct SettingsTabView: View {
                 TabHeader("SETTINGS") { EmptyView() }
 
                 GroupBox("Display") {
-                    Toggle("Show Flow bar at all times", isOn: $appState.showFlowBar)
+                    Toggle("Show Ambient Widget", isOn: $appState.showAmbientWidget)
                         .font(BrutalistTheme.monoMD)
                         .padding(8)
                 }

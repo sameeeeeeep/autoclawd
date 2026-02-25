@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         // Show/hide pill + toast when setting changes
-        appState.$showFlowBar
+        appState.$showAmbientWidget
             .receive(on: DispatchQueue.main)
             .dropFirst()  // skip initial value — pill is already shown by showPill()
             .sink { [weak self] show in
@@ -91,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Toast
 
     private func showToast(_ entry: LogEntry) {
-        guard appState.showFlowBar else { return }
+        guard appState.showAmbientWidget else { return }
         // Cancel any pending dismiss
         toastDismissWork?.cancel()
 
