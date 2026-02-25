@@ -336,7 +336,7 @@ struct LogsTabView: View {
                 HStack {
                     Picker("Component", selection: $filterComponent) {
                         Text("All").tag(LogComponent?.none)
-                        ForEach([LogComponent.audio, .transcribe, .extract, .world, .todo, .clipboard, .system, .ui], id: \.self) { c in
+                        ForEach([LogComponent.audio, .transcribe, .extract, .world, .todo, .clipboard, .paste, .qa, .system, .ui], id: \.self) { c in
                             Text(c.rawValue).tag(LogComponent?.some(c))
                         }
                     }
