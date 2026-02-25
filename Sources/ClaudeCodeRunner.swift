@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // MARK: - ClaudeCodeError
@@ -158,6 +159,45 @@ final class ClaudeCodeRunner: Sendable {
                 } else {
                     continuation.finish()
                 }
+            }
+        }
+    }
+
+    // MARK: - Open in Terminal
+
+    func openInTerminal(prompt: String, in project: Project, dangerouslySkipPermissions: Bool = false) {
+        guard let claudeURL = ClaudeCodeRunner.findCLI() else {
+            Log.warn(.system, "Claude CLI not found — cannot open in Terminal")
+            return
+        }
+        let claudeExec = claudeURL.path
+        // Shell-safe: escape single quotes in prompt using the POSIX technique
+        let safePrompt = prompt.replacingOccurrences(of: "'", with: "'\\''")
+        let safePath = project.localPath.replacingOccurrences(of: "'", with: "'\\''")
+        let permFlag = dangerouslySkipPermissions ? " --dangerously-skip-permissions" : ""
+        let fullCmd = "cd '\(safePath)' && '\(claudeExec)'\(permFlag) '\(safePrompt)'"
+
+        // Write to a uniquely-named temp script so concurrent calls don't collide
+        let scriptName = "autoclawd-\(UUID().uuidString.prefix(8)).sh"
+        let scriptURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(scriptName)
+        let script = "#!/bin/bash\n\(fullCmd)\n"
+        do {
+            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        } catch {
+            Log.warn(.system, "Failed to write Terminal script: \(error)")
+            return
+        }
+
+        let terminalURL = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+        NSWorkspace.shared.open(
+            [scriptURL],
+            withApplicationAt: terminalURL,
+            configuration: NSWorkspace.OpenConfiguration()
+        ) { _, error in
+            if let error = error {
+                Log.warn(.system, "Failed to open Terminal: \(error)")
             }
         }
     }

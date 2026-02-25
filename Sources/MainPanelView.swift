@@ -290,6 +290,18 @@ struct StructuredTodoRow: View {
             .buttonStyle(.plain)
             .disabled(!canRun)
 
+            if canRun, let project = appState.projects.first(where: { $0.id == todo.projectID }) {
+                Button("Open in Terminal") {
+                    ClaudeCodeRunner().openInTerminal(
+                        prompt: todo.content,
+                        in: project
+                    )
+                }
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(.secondary)
+                .buttonStyle(.plain)
+            }
+
             if todo.isExecuted {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundColor(BrutalistTheme.neonGreen)
