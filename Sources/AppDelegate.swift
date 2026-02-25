@@ -190,7 +190,8 @@ struct PillContentView: View {
             onOpenLogs: onOpenLogs,
             onToggleMinimal: onToggleMinimal,
             pillMode: appState.pillMode,
-            onCycleMode: { appState.cyclePillMode() }
+            onCycleMode: { appState.cyclePillMode() },
+            appearanceMode: appState.appearanceMode
         )
         .onReceive(
             Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()

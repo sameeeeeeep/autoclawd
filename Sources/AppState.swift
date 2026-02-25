@@ -52,6 +52,10 @@ final class AppState: ObservableObject {
         didSet { SettingsManager.shared.showFlowBar = showFlowBar }
     }
 
+    @Published var appearanceMode: AppearanceMode {
+        didSet { SettingsManager.shared.appearanceMode = appearanceMode }
+    }
+
     @Published var pendingUnknownSSID: String? = nil
 
     @Published var extractionItems: [ExtractionItem] = []
@@ -92,6 +96,7 @@ final class AppState: ObservableObject {
         groqAPIKey          = settings.groqAPIKey
         synthesizeThreshold = settings.synthesizeThreshold
         showFlowBar         = settings.showFlowBar
+        appearanceMode      = settings.appearanceMode
 
         let savedMode = UserDefaults.standard.string(forKey: "pillMode")
             .flatMap { PillMode(rawValue: $0) } ?? .ambientIntelligence

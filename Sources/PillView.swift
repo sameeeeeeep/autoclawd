@@ -21,9 +21,11 @@ struct PillView: View {
     let onToggleMinimal: () -> Void
     let pillMode: PillMode
     let onCycleMode: () -> Void
+    let appearanceMode: AppearanceMode
 
     @State private var scanOffset: CGFloat = -120
     @State private var scanTimer: Timer? = nil
+    @State private var pulseOpacity: Double = 1.0
 
     var body: some View {
         ZStack {
@@ -37,6 +39,31 @@ struct PillView: View {
         .contextMenu { contextMenu }
         .onTapGesture(count: 2) { onToggleMinimal() }
         .onTapGesture { onOpenPanel() }
+    }
+
+    // MARK: - Pulse
+
+    private var pillOpacity: Double {
+        switch state {
+        case .processing: return pulseOpacity
+        case .listening:  return pulseOpacity
+        default:          return 1.0
+        }
+    }
+
+    private func startPulse() {
+        switch state {
+        case .processing:
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                pulseOpacity = 0.4
+            }
+        case .listening:
+            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                pulseOpacity = 0.6
+            }
+        default:
+            withAnimation(.easeInOut(duration: 0.2)) { pulseOpacity = 1.0 }
+        }
     }
 
     // MARK: - Full Pill
@@ -61,6 +88,9 @@ struct PillView: View {
         .background(pillBackground)
         .overlay(pillBorder)
         .frame(height: 40)
+        .opacity(pillOpacity)
+        .onAppear { startPulse() }
+        .onChange(of: state) { _ in startPulse() }
     }
 
     // MARK: - Mode Button
@@ -176,9 +206,13 @@ struct PillView: View {
 
     private var pillBackground: some View {
         ZStack {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-            // Specular sheen
+            switch appearanceMode {
+            case .frosted:
+                Rectangle().fill(.ultraThinMaterial)
+            case .transparent:
+                Rectangle().fill(Color.black.opacity(0.35))
+            }
+            // Specular sheen (both modes)
             LinearGradient(
                 colors: [Color.white.opacity(0.10), Color.clear],
                 startPoint: .top,

@@ -19,6 +19,18 @@ enum AudioRetention: Int, CaseIterable {
 
     var displayName: String { "\(rawValue) days" }
 }
+enum AppearanceMode: String, CaseIterable {
+    case frosted     = "frosted"
+    case transparent = "transparent"
+
+    var displayName: String {
+        switch self {
+        case .frosted:     return "Frosted"
+        case .transparent: return "Transparent"
+        }
+    }
+}
+
 
 final class SettingsManager: @unchecked Sendable {
     static let shared = SettingsManager()
@@ -33,6 +45,7 @@ final class SettingsManager: @unchecked Sendable {
     private let kLogLevel          = "log_level"
     private let kGroqAPIKey        = "groq_api_key_storage"
     private let kShowFlowBar       = "show_flow_bar"
+    private let kAppearanceMode = "appearance_mode"
 
     // MARK: - Properties
 
@@ -81,6 +94,14 @@ final class SettingsManager: @unchecked Sendable {
     var showFlowBar: Bool {
         get { defaults.object(forKey: kShowFlowBar) as? Bool ?? true }
         set { defaults.set(newValue, forKey: kShowFlowBar) }
+    }
+
+    var appearanceMode: AppearanceMode {
+        get {
+            let raw = defaults.string(forKey: kAppearanceMode) ?? AppearanceMode.frosted.rawValue
+            return AppearanceMode(rawValue: raw) ?? .frosted
+        }
+        set { defaults.set(newValue.rawValue, forKey: kAppearanceMode) }
     }
 
     private init() {}
