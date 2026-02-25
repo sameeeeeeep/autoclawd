@@ -11,6 +11,9 @@ final class FileStorageManager: @unchecked Sendable {
     var intelligenceDatabaseURL: URL {
         rootDirectory.appendingPathComponent("intelligence.db")
     }
+    var sessionsDatabaseURL: URL {
+        rootDirectory.appendingPathComponent("sessions.db")
+    }
     let worldModelURL: URL
     let todosURL: URL
     let configURL: URL
