@@ -57,6 +57,7 @@ final class AppState: ObservableObject {
     }
 
     @Published var pendingUnknownSSID: String? = nil
+    @Published var wifiLabelInput: String = ""
 
     @Published var extractionItems: [ExtractionItem] = []
     @Published var pendingExtractionCount: Int = 0
@@ -187,6 +188,16 @@ final class AppState: ObservableObject {
 
     func cyclePillMode() {
         pillMode = pillMode.next()
+    }
+
+    // MARK: - Actions
+
+    func confirmWifiLabel() {
+        guard let ssid = pendingUnknownSSID,
+              !wifiLabelInput.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        locationService.labelCurrentSSID(wifiLabelInput)
+        pendingUnknownSSID = nil
+        wifiLabelInput = ""
     }
 
     // MARK: - Transcript Access

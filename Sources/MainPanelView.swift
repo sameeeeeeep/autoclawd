@@ -11,6 +11,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
     case logs         = "Logs"
     case intelligence = "Intelligence"
     case qa = "AI Search"
+    case timeline = "Timeline"
 
     var id: String { rawValue }
 
@@ -23,6 +24,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         case .logs:         return "doc.text"
         case .intelligence: return "brain.head.profile"
         case .qa: return "magnifyingglass"
+        case .timeline: return "clock"
         }
     }
 }
@@ -35,10 +37,15 @@ struct MainPanelView: View {
     @State private var transcriptSearch = ""
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            Divider()
-            content
+        VStack(spacing: 0) {
+            if let ssid = appState.pendingUnknownSSID {
+                wifiLabelBanner(ssid: ssid)
+            }
+            HStack(spacing: 0) {
+                sidebar
+                Divider()
+                content
+            }
         }
         .frame(minWidth: 700, minHeight: 500)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -124,7 +131,45 @@ struct MainPanelView: View {
         case .logs:         LogsTabView(appState: appState)
         case .intelligence: IntelligenceView(appState: appState)
         case .qa: QAView(store: appState.qaStore)
+        case .timeline: SessionTimelineView()
         }
+    }
+
+    // MARK: - WiFi Label Banner
+
+    @ViewBuilder
+    private func wifiLabelBanner(ssid: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wifi")
+                .foregroundColor(BrutalistTheme.neonGreen)
+                .font(.system(size: 11))
+            Text("You're on '\(ssid)' — what should I call this place?")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.white.opacity(0.85))
+            TextField("e.g. Home, Philz Coffee", text: $appState.wifiLabelInput)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11, design: .monospaced))
+                .frame(maxWidth: 160)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.white.opacity(0.08))
+                .cornerRadius(4)
+            Button("Save") { appState.confirmWifiLabel() }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(BrutalistTheme.neonGreen)
+            Button("Skip") {
+                appState.pendingUnknownSSID = nil
+                appState.wifiLabelInput = ""
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundColor(.white.opacity(0.4))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.black.opacity(0.6))
+        .overlay(Rectangle().fill(BrutalistTheme.neonGreen.opacity(0.15)).frame(height: 1), alignment: .bottom)
     }
 }
 
