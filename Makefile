@@ -21,7 +21,12 @@ SWIFT_FLAGS = \
 	-target $(TARGET) \
 	-lsqlite3
 
-.PHONY: all clean run
+VERSION ?= 0.1.0
+DMG_NAME = $(APP_NAME)-$(VERSION).dmg
+DMG_STAGING = $(BUILD_DIR)/dmg-staging
+DMG_PATH = $(BUILD_DIR)/$(DMG_NAME)
+
+.PHONY: all clean run dmg
 
 all: $(MACOS_DIR)/$(APP_NAME)
 
@@ -45,3 +50,27 @@ clean:
 
 run: all
 	open "$(APP_BUNDLE)"
+
+# ── DMG ──────────────────────────────────────────────────────────────────────
+# Produces build/AutoClawd-<VERSION>.dmg — standard drag-to-Applications UX.
+# No external tools required; uses only hdiutil + AppleScript (built into macOS).
+
+dmg: all
+	@echo "Building DMG $(DMG_NAME)..."
+	@rm -rf "$(DMG_STAGING)" "$(DMG_PATH)" "$(BUILD_DIR)/tmp-rw.dmg"
+	@mkdir -p "$(DMG_STAGING)"
+	@cp -r "$(APP_BUNDLE)" "$(DMG_STAGING)/"
+	@ln -s /Applications "$(DMG_STAGING)/Applications"
+	@hdiutil create -srcfolder "$(DMG_STAGING)" \
+		-volname "$(APP_NAME)" -fs HFS+ -format UDRW \
+		-o "$(BUILD_DIR)/tmp-rw.dmg" > /dev/null
+	@hdiutil attach -readwrite -noverify "$(BUILD_DIR)/tmp-rw.dmg" > /dev/null
+	@sleep 2
+	@bash scripts/set-dmg-appearance.sh "$(APP_NAME)" "$(APP_NAME)"
+	@hdiutil detach "/Volumes/$(APP_NAME)" > /dev/null
+	@hdiutil convert "$(BUILD_DIR)/tmp-rw.dmg" \
+		-format UDZO -imagekey zlib-level=9 \
+		-o "$(DMG_PATH)" > /dev/null
+	@rm -f "$(BUILD_DIR)/tmp-rw.dmg"
+	@rm -rf "$(DMG_STAGING)"
+	@echo "Done → $(DMG_PATH)"
