@@ -1,0 +1,233 @@
+import AVFoundation
+import Combine
+import Foundation
+import SwiftUI
+
+// MARK: - AppState
+
+@MainActor
+final class AppState: ObservableObject {
+
+    // MARK: - Published State
+
+    @Published var pillState: PillState = .listening
+    @Published var isListening = false
+    @Published var audioLevel: Float = 0.0
+
+    @Published var transcriptionMode: TranscriptionMode {
+        didSet {
+            SettingsManager.shared.transcriptionMode = transcriptionMode
+            rebuildTranscriptionService()
+            Log.info(.system, "Transcription mode changed to \(transcriptionMode.rawValue)")
+        }
+    }
+
+    @Published var micEnabled: Bool {
+        didSet {
+            SettingsManager.shared.micEnabled = micEnabled
+            if micEnabled { startListening() } else { stopListening() }
+        }
+    }
+
+    @Published var audioRetentionDays: Int {
+        didSet { SettingsManager.shared.audioRetentionDays = audioRetentionDays }
+    }
+
+    @Published var groqAPIKey: String {
+        didSet {
+            SettingsManager.shared.groqAPIKey = groqAPIKey
+            rebuildTranscriptionService()
+        }
+    }
+
+    // MARK: - Services
+
+    private let storage = FileStorageManager.shared
+    let chunkManager: ChunkManager
+    private let ollama = OllamaService()
+    private let worldModelService = WorldModelService()
+    private let todoService = TodoService()
+    private var transcriptionService: TranscriptionService?
+    private let transcriptStore: TranscriptStore
+    private let extractionService: ExtractionService
+
+    // MARK: - Derived Content (refreshed on demand)
+
+    var todosContent: String { todoService.read() }
+    var worldModelContent: String { worldModelService.read() }
+
+    // MARK: - Init
+
+    init() {
+        let settings = SettingsManager.shared
+
+        transcriptionMode   = settings.transcriptionMode
+        micEnabled          = settings.micEnabled
+        audioRetentionDays  = settings.audioRetentionDays
+        groqAPIKey          = settings.groqAPIKey
+
+        transcriptStore = TranscriptStore(url: FileStorageManager.shared.transcriptsDatabaseURL)
+        let extractionStore = ExtractionStore(url: FileStorageManager.shared.intelligenceDatabaseURL)
+        extractionService = ExtractionService(
+            ollama: OllamaService(),
+            worldModel: WorldModelService(),
+            todos: TodoService(),
+            store: extractionStore
+        )
+        chunkManager = ChunkManager()
+
+        setupLogger()
+        buildTranscriptionService()
+        configureChunkManager()
+    }
+
+    // MARK: - Lifecycle
+
+    func applicationDidFinishLaunching() {
+        Log.info(.system, "AutoClawd started. Mode: \(transcriptionMode.rawValue). RAM: (not measured)")
+        ClipboardMonitor.shared.start()
+
+        if micEnabled {
+            startListening()
+        }
+    }
+
+    // MARK: - Listening Control
+
+    func startListening() {
+        guard !isListening else { return }
+        chunkManager.startListening()
+        isListening = true
+        pillState = .listening
+        Log.info(.ui, "Mic started")
+    }
+
+    func stopListening() {
+        guard isListening else { return }
+        chunkManager.stopListening()
+        isListening = false
+        pillState = .paused
+        Log.info(.ui, "Mic stopped")
+    }
+
+    func toggleListening() {
+        if isListening {
+            // Pause: stop mic immediately and process the partial chunk
+            chunkManager.pause()
+            isListening = false
+            pillState = .paused
+            Log.info(.ui, "Mic paused")
+        } else {
+            // Resume: restart chunk cycle (resume from paused, or start fresh)
+            if case .paused = chunkManager.state {
+                chunkManager.resume()
+            } else {
+                chunkManager.startListening()
+            }
+            isListening = true
+            pillState = .listening
+            Log.info(.ui, "Mic resumed")
+        }
+    }
+
+    // MARK: - Transcript Access
+
+    func recentTranscripts() -> [TranscriptRecord] {
+        transcriptStore.recent(limit: 50)
+    }
+
+    func searchTranscripts(query: String) -> [TranscriptRecord] {
+        transcriptStore.search(query: query)
+    }
+
+    // MARK: - File Write-through
+
+    func saveTodos(_ content: String) {
+        todoService.write(content)
+    }
+
+    func saveWorldModel(_ content: String) {
+        worldModelService.write(content)
+    }
+
+    // MARK: - Data Management
+
+    func exportData() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "autoclawd-export.txt"
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            let world = self?.worldModelContent ?? ""
+            let todos = self?.todosContent ?? ""
+            let export = "# AutoClawd Export\n\n## World Model\n\(world)\n\n## Todos\n\(todos)"
+            try? export.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    func confirmDeleteAll() {
+        let alert = NSAlert()
+        alert.messageText = "Delete all AutoClawd data?"
+        alert.informativeText = "This will delete all transcripts, world model, and to-do entries."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .critical
+        if alert.runModal() == .alertFirstButtonReturn {
+            deleteAllData()
+        }
+    }
+
+    // MARK: - Private Setup
+
+    private func setupLogger() {
+        Log.minimumLevel = SettingsManager.shared.logLevel
+        Log.configure(storageManager: storage)
+    }
+
+    private func buildTranscriptionService() {
+        let key = groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !key.isEmpty {
+            transcriptionService = TranscriptionService(apiKey: key)
+        } else {
+            transcriptionService = nil
+        }
+        reconfigureChunkManager()
+    }
+
+    private func rebuildTranscriptionService() {
+        buildTranscriptionService()
+    }
+
+    private func configureChunkManager() {
+        reconfigureChunkManager()
+
+        // Observe audio level changes
+        chunkManager.$chunkIndex
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.audioLevel = self?.chunkManager.audioLevel ?? 0 }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func reconfigureChunkManager() {
+        guard let ts = transcriptionService else { return }
+        chunkManager.configure(
+            transcriptionService: ts,
+            extractionService: extractionService,
+            transcriptStore: transcriptStore
+        )
+    }
+
+    private func deleteAllData() {
+        let fm = FileManager.default
+        try? fm.removeItem(at: storage.transcriptsDatabaseURL)
+        try? fm.removeItem(at: storage.worldModelURL)
+        try? fm.removeItem(at: storage.todosURL)
+        for url in (try? fm.contentsOfDirectory(at: storage.audioDirectory,
+                                                  includingPropertiesForKeys: nil)) ?? [] {
+            try? fm.removeItem(at: url)
+        }
+        Log.info(.system, "All data deleted")
+    }
+
+    private var cancellables = Set<AnyCancellable>()
+}
