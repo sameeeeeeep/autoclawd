@@ -44,7 +44,7 @@ struct WorldModelGraphParser {
                 // Skip if they share the same parent section
                 let parentA = parentSectionID(for: nodeA.id, in: model)
                 let parentB = parentSectionID(for: nodeB.id, in: model)
-                guard parentA != parentB else { continue }
+                guard let parentA, let parentB, parentA != parentB else { continue }
                 // Find shared tokens ≥5 chars
                 let tokensA = tokens(in: nodeA.label)
                 let tokensB = tokens(in: nodeB.label)

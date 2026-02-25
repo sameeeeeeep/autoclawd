@@ -103,7 +103,7 @@ struct WorldModelGraphView: View {
     private func refresh() {
         let content = appState.worldModelContent
         var parsed = WorldModelGraphParser.parse(content)
-        let size = CGSize(width: 800, height: 600)
+        let size = CGSize(width: 2000, height: 2000)
         WorldModelGraphLayout.apply(to: &parsed, in: size)
         model = parsed
         selectedNodeID = nil
