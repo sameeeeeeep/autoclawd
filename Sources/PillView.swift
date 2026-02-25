@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Pill State
@@ -242,6 +243,8 @@ struct PillView: View {
             Button("Transcribe Mode  ⌃X") { onCycleMode() }
             Divider()
             Button("View Logs") { onOpenLogs() }
+            Divider()
+            Button("Quit AutoClawd") { NSApp.terminate(nil) }
         }
     }
 }
