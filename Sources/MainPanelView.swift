@@ -51,7 +51,7 @@ struct MainPanelView: View {
             // Logo
             HStack {
                 Text("AutoClawd")
-                    .font(.custom("JetBrains Mono", size: 13).weight(.bold))
+                    .font(BrutalistTheme.monoLG)
                 Spacer()
                 statusDot
             }
@@ -107,9 +107,9 @@ struct MainPanelView: View {
     }
 
     private var statusDot: some View {
-        Circle()
-            .fill(appState.isListening ? Color.green : Color.gray)
-            .frame(width: 8, height: 8)
+        Text(appState.isListening ? "[●]" : "[·]")
+            .font(BrutalistTheme.monoSM)
+            .foregroundColor(appState.isListening ? BrutalistTheme.neonGreen : .white.opacity(0.35))
     }
 
     // MARK: - Content
@@ -404,7 +404,6 @@ struct TabHeader<Trailing: View>: View {
             Text(title)
                 .font(BrutalistTheme.monoLG)
                 .foregroundColor(.white)
-                .textCase(.uppercase)
             Spacer()
             trailing()
         }
