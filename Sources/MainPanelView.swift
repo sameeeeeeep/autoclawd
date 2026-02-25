@@ -487,22 +487,49 @@ struct ProjectsTabView: View {
             } else {
                 List {
                     ForEach(appState.projects) { project in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(project.name)
-                                    .font(BrutalistTheme.monoMD)
-                                Text(project.localPath)
-                                    .font(BrutalistTheme.monoSM)
-                                    .foregroundColor(.white.opacity(0.4))
-                                    .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(project.name)
+                                        .font(BrutalistTheme.monoMD)
+                                    Text(project.localPath)
+                                        .font(BrutalistTheme.monoSM)
+                                        .foregroundColor(.white.opacity(0.4))
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Button(action: { appState.deleteProject(id: project.id) }) {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.white.opacity(0.3))
+                                }
+                                .buttonStyle(.plain)
                             }
-                            Spacer()
-                            Button(action: { appState.deleteProject(id: project.id) }) {
-                                Image(systemName: "trash")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.white.opacity(0.3))
+                            if !project.tags.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 4) {
+                                        ForEach(project.tags, id: \.self) { tag in
+                                            Text(tag)
+                                                .font(.system(size: 10, design: .monospaced))
+                                                .foregroundColor(.black)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(BrutalistTheme.neonGreen)
+                                                .cornerRadius(4)
+                                        }
+                                    }
+                                }
                             }
-                            .buttonStyle(.plain)
+                            if !project.linkedProjectIDs.isEmpty {
+                                let linkedNames = project.linkedProjectIDs.compactMap { linkedID in
+                                    appState.projects.first(where: { $0.id == linkedID.uuidString })?.name
+                                }
+                                if !linkedNames.isEmpty {
+                                    Text("Linked: \(linkedNames.joined(separator: ", "))")
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundColor(.white.opacity(0.4))
+                                }
+                            }
                         }
                         .padding(.vertical, 4)
                     }
@@ -694,6 +721,7 @@ struct SettingsTabView: View {
     @State private var anthropicKey = ""
     @State private var isValidating = false
     @State private var validationResult: Bool? = nil
+    @State private var showingAddHotWord = false
 
     var body: some View {
         ScrollView {
@@ -785,6 +813,45 @@ struct SettingsTabView: View {
                     }
                     .padding(8)
                 }
+
+                GroupBox("Hot Words") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("HOT WORDS")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .padding(.top, 8)
+
+                        ForEach(SettingsManager.shared.hotWordConfigs) { config in
+                            HStack(spacing: 8) {
+                                Text("hot \(config.keyword)")
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundColor(BrutalistTheme.neonGreen)
+                                Text("→ \(config.action.displayName)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                if config.action == .executeImmediately && config.skipPermissions {
+                                    Text("⚡")
+                                        .font(.system(.caption2, design: .monospaced))
+                                }
+                                Spacer()
+                                Button("✕") {
+                                    var configs = SettingsManager.shared.hotWordConfigs
+                                    configs.removeAll { $0.id == config.id }
+                                    SettingsManager.shared.hotWordConfigs = configs
+                                }
+                                .foregroundColor(.red)
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        Button("+ Add Hot Word") {
+                            showingAddHotWord = true
+                        }
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(BrutalistTheme.neonGreen)
+                    }
+                    .padding(8)
+                }
             }
             .padding()
         }
@@ -794,6 +861,12 @@ struct SettingsTabView: View {
         }
         .onChange(of: groqKey) { appState.groqAPIKey = $0; validationResult = nil }
         .onChange(of: anthropicKey) { SettingsManager.shared.anthropicAPIKey = $0 }
+        .sheet(isPresented: $showingAddHotWord) {
+            HotWordEditView(configs: Binding(
+                get: { SettingsManager.shared.hotWordConfigs },
+                set: { SettingsManager.shared.hotWordConfigs = $0 }
+            ))
+        }
     }
 
     private func validateKey() {
@@ -886,5 +959,54 @@ struct TabHeader<Trailing: View>: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+}
+
+// MARK: - HotWordEditView
+
+struct HotWordEditView: View {
+    @Binding var configs: [HotWordConfig]
+    @Environment(\.dismiss) var dismiss
+    @State private var keyword = ""
+    @State private var action: HotWordAction = .addTodo
+    @State private var label = ""
+    @State private var skipPermissions = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("New Hot Word")
+                .font(.system(.headline, design: .monospaced))
+            TextField("keyword (e.g. p0, info)", text: $keyword)
+                .textFieldStyle(.roundedBorder)
+            Picker("Action", selection: $action) {
+                ForEach(HotWordAction.allCases, id: \.self) { a in
+                    Text(a.displayName).tag(a)
+                }
+            }
+            if action == .executeImmediately {
+                Toggle("Skip permissions (--dangerously-skip-permissions)", isOn: $skipPermissions)
+            }
+            TextField("label (display name)", text: $label)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Button("Cancel") { dismiss() }
+                Spacer()
+                Button("Add") {
+                    guard !keyword.isEmpty else { return }
+                    configs.append(HotWordConfig(
+                        keyword: keyword.lowercased(),
+                        action: action,
+                        label: label.isEmpty ? keyword : label,
+                        skipPermissions: skipPermissions
+                    ))
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(keyword.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+        .font(.system(.body, design: .monospaced))
     }
 }
