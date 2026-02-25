@@ -30,6 +30,10 @@ final class ChunkManager: ObservableObject {
     private let storage = FileStorageManager.shared
     private let settings = SettingsManager.shared
 
+    private var currentSessionID: String?
+    private let sessionStore = SessionStore.shared
+    private var _transcriptBuffer: [String] = []
+
     private var chunkTimer: Task<Void, Never>?
     private var transcriptionService: TranscriptionService?
     private var extractionService: ExtractionService?
@@ -72,18 +76,33 @@ final class ChunkManager: ObservableObject {
         guard case .stopped = state else { return }
         Log.info(.system, "ChunkManager: startListening() called")
         beginChunkCycle()
+        // Begin a new session row
+        let ssid = LocationService.shared.currentSSID
+        currentSessionID = sessionStore.beginSession(wifiSSID: ssid)
     }
 
     func stopListening() {
         chunkTimer?.cancel()
         chunkTimer = nil
         _ = audioRecorder.stopRecording()
+        // End the session
+        if let sid = currentSessionID {
+            sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
+            currentSessionID = nil
+        }
+        _transcriptBuffer.removeAll()
         state = .stopped
         Log.info(.system, "ChunkManager: stopped")
     }
 
     func pause() {
         guard case .listening(let index) = state else { return }
+        // End the session on pause
+        if let sid = currentSessionID {
+            sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
+            currentSessionID = nil
+        }
+        _transcriptBuffer.removeAll()
         let silenceRatio = audioRecorder.silenceRatio
         let duration = Int(Date().timeIntervalSince(chunkStartTime ?? Date()))
         let savedURL = audioRecorder.stopRecording()
@@ -129,7 +148,17 @@ final class ChunkManager: ObservableObject {
     func resume() {
         guard case .paused = state else { return }
         Log.info(.system, "ChunkManager: resuming")
+        // Start a fresh session on resume
+        let ssid = LocationService.shared.currentSSID
+        currentSessionID = sessionStore.beginSession(wifiSSID: ssid)
         beginChunkCycle()
+    }
+
+    // MARK: - Session Helpers
+
+    private func latestTranscriptSnippet() -> String {
+        let combined = _transcriptBuffer.suffix(3).joined(separator: " ")
+        return String(combined.prefix(120))
     }
 
     // MARK: - Chunk Cycle
@@ -263,6 +292,14 @@ final class ChunkManager: ObservableObject {
 
         await MainActor.run {
             self.onTranscriptReady?(transcript, audioURL)
+            // Append to session transcript buffer
+            self._transcriptBuffer.append(transcript)
+            // Update session place if location is now known
+            if let sid = self.currentSessionID,
+               let ssid = LocationService.shared.currentSSID,
+               let place = SessionStore.shared.findPlace(wifiSSID: ssid) {
+                SessionStore.shared.updateSessionPlace(id: sid, placeID: place.id)
+            }
         }
 
         switch pillMode {
