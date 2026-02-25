@@ -21,6 +21,14 @@ enum PillMode: String, CaseIterable {
         }
     }
 
+    var shortLabel: String {
+        switch self {
+        case .ambientIntelligence: return "[AMB]"
+        case .transcription:       return "[TRS]"
+        case .aiSearch:            return "[SRC]"
+        }
+    }
+
     func next() -> PillMode {
         let all = PillMode.allCases
         let idx = all.firstIndex(of: self)!
