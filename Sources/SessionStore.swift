@@ -49,7 +49,7 @@ final class SessionStore: @unchecked Sendable {
             INSERT INTO sessions (id, started_at, wifi_ssid)
             VALUES (?, ?, ?);
         """
-        execBind(sql, args: [id, now, wifiSSID ?? ""])
+        execBindOptional(sql, args: [id, now, wifiSSID])
         Log.info(.system, "Session started: \(id)")
         return id
     }
@@ -205,14 +205,41 @@ final class SessionStore: @unchecked Sendable {
             for (i, arg) in args.enumerated() {
                 sqlite3_bind_text(stmt, Int32(i + 1), arg, -1, SQLITE_TRANSIENT)
             }
-            sqlite3_step(stmt)
+            let rc = sqlite3_step(stmt)
+            if rc != SQLITE_DONE {
+                Log.error(.system, "SessionStore execBind failed (rc=\(rc)) for: \(sql.prefix(80))")
+            }
+        }
+    }
+
+    /// Variant that accepts optional strings — nil values are bound as SQL NULL.
+    func execBindOptional(_ sql: String, args: [String?]) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            for (i, arg) in args.enumerated() {
+                if let value = arg {
+                    sqlite3_bind_text(stmt, Int32(i + 1), value, -1, SQLITE_TRANSIENT)
+                } else {
+                    sqlite3_bind_null(stmt, Int32(i + 1))
+                }
+            }
+            let rc = sqlite3_step(stmt)
+            if rc != SQLITE_DONE {
+                Log.error(.system, "SessionStore execBindOptional failed (rc=\(rc)) for: \(sql.prefix(80))")
+            }
         }
     }
 
     private func execSQL(_ sql: String) {
         var err: UnsafeMutablePointer<CChar>?
         sqlite3_exec(db, sql, nil, nil, &err)
-        if let e = err { Log.error(.system, "SessionStore SQL error: \(String(cString: e))") }
+        if let e = err {
+            Log.error(.system, "SessionStore SQL error: \(String(cString: e))")
+            sqlite3_free(err)
+        }
     }
 
     private func queryPlaces(_ sql: String, args: [String]) -> [PlaceRecord] {
