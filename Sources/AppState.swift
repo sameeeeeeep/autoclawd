@@ -193,7 +193,7 @@ final class AppState: ObservableObject {
     // MARK: - Actions
 
     func confirmWifiLabel() {
-        guard let ssid = pendingUnknownSSID,
+        guard let _ = pendingUnknownSSID,
               !wifiLabelInput.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         locationService.labelCurrentSSID(wifiLabelInput)
         pendingUnknownSSID = nil
