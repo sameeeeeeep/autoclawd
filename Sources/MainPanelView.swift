@@ -722,6 +722,7 @@ struct SettingsTabView: View {
     @State private var isValidating = false
     @State private var validationResult: Bool? = nil
     @State private var showingAddHotWord = false
+    @State private var localHotWordConfigs: [HotWordConfig] = SettingsManager.shared.hotWordConfigs
 
     var body: some View {
         ScrollView {
@@ -816,12 +817,7 @@ struct SettingsTabView: View {
 
                 GroupBox("Hot Words") {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("HOT WORDS")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .padding(.top, 8)
-
-                        ForEach(SettingsManager.shared.hotWordConfigs) { config in
+                        ForEach(localHotWordConfigs) { config in
                             HStack(spacing: 8) {
                                 Text("hot \(config.keyword)")
                                     .font(.system(.body, design: .monospaced))
@@ -835,9 +831,8 @@ struct SettingsTabView: View {
                                 }
                                 Spacer()
                                 Button("✕") {
-                                    var configs = SettingsManager.shared.hotWordConfigs
-                                    configs.removeAll { $0.id == config.id }
-                                    SettingsManager.shared.hotWordConfigs = configs
+                                    localHotWordConfigs.removeAll { $0.id == config.id }
+                                    SettingsManager.shared.hotWordConfigs = localHotWordConfigs
                                 }
                                 .foregroundColor(.red)
                                 .buttonStyle(.plain)
@@ -858,13 +853,17 @@ struct SettingsTabView: View {
         .onAppear {
             groqKey = appState.groqAPIKey
             anthropicKey = SettingsManager.shared.anthropicAPIKey
+            localHotWordConfigs = SettingsManager.shared.hotWordConfigs
         }
         .onChange(of: groqKey) { appState.groqAPIKey = $0; validationResult = nil }
         .onChange(of: anthropicKey) { SettingsManager.shared.anthropicAPIKey = $0 }
         .sheet(isPresented: $showingAddHotWord) {
             HotWordEditView(configs: Binding(
-                get: { SettingsManager.shared.hotWordConfigs },
-                set: { SettingsManager.shared.hotWordConfigs = $0 }
+                get: { localHotWordConfigs },
+                set: {
+                    localHotWordConfigs = $0
+                    SettingsManager.shared.hotWordConfigs = $0
+                }
             ))
         }
     }
