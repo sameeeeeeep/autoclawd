@@ -134,7 +134,7 @@ final class SettingsManager: @unchecked Sendable {
     }
 
     var shazamEnabled: Bool {
-        get { defaults.bool(forKey: kShazamEnabled) }   // returns false when key is absent — correct default
+        get { defaults.object(forKey: kShazamEnabled) as? Bool ?? false }
         set { defaults.set(newValue, forKey: kShazamEnabled) }
     }
 
