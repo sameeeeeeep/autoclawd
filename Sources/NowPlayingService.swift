@@ -61,8 +61,8 @@ final class NowPlayingService: ObservableObject {
 
     private func handleSpotify(_ note: Notification) {
         let info = note.userInfo
-        let playing = info?["Playing"] as? Bool ?? false
-        if playing {
+        let state = info?["Player State"] as? String ?? ""
+        if state == "Playing" {
             currentTitle  = info?["Name"]   as? String
             currentArtist = info?["Artist"] as? String
             isPlaying     = true
