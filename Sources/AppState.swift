@@ -107,6 +107,12 @@ final class AppState: ObservableObject {
     let locationService = LocationService.shared
     let nowPlaying = NowPlayingService()
     let shazam = ShazamKitService()
+    @Published var shazamEnabled: Bool = SettingsManager.shared.shazamEnabled {
+        didSet {
+            SettingsManager.shared.shazamEnabled = shazamEnabled
+            if shazamEnabled { shazam.start() } else { shazam.stop() }
+        }
+    }
     private let ollama = OllamaService()
     private lazy var todoFramingService = TodoFramingService(ollama: ollama)
     private let worldModelService = WorldModelService()
@@ -199,7 +205,7 @@ final class AppState: ObservableObject {
                 }
             }
             .store(in: &cancellables)
-        shazam.start()
+        if shazamEnabled { shazam.start() }
 
         // Auto-activate Music person when NowPlayingService detects a song
         nowPlaying.$isPlaying
