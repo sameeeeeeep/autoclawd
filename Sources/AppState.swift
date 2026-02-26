@@ -70,6 +70,19 @@ final class AppState: ObservableObject {
         didSet { SettingsManager.shared.appearanceMode = appearanceMode }
     }
 
+    // MARK: - People roster & speaker tagging
+
+    @Published var people: [Person] {
+        didSet { savePeople() }
+    }
+
+    /// Transient — which person is currently speaking (nil = unknown).
+    @Published var currentSpeakerID: UUID? = nil
+
+    @Published var locationName: String {
+        didSet { UserDefaults.standard.set(locationName, forKey: "autoclawd.locationName") }
+    }
+
     @Published var pendingUnknownSSID: String? = nil
     @Published var wifiLabelInput: String = ""
 
@@ -121,6 +134,8 @@ final class AppState: ObservableObject {
         synthesizeThreshold = settings.synthesizeThreshold
         showAmbientWidget    = settings.showAmbientWidget
         appearanceMode      = settings.appearanceMode
+        self.people       = AppState.init_loadPeople()
+        self.locationName = UserDefaults.standard.string(forKey: "autoclawd.locationName") ?? "My Room"
 
         let savedMode = UserDefaults.standard.string(forKey: "pillMode")
             .flatMap { PillMode(rawValue: $0) } ?? .ambientIntelligence
@@ -584,5 +599,48 @@ final class AppState: ObservableObject {
                 Log.info(.system, "Hot-word log-only: \(match.payload)")
             }
         }
+    }
+
+    // MARK: - People persistence
+
+    private static let peopleKey = "autoclawd.people"
+
+    private static func init_loadPeople() -> [Person] {
+        guard let data = UserDefaults.standard.data(forKey: peopleKey),
+              let decoded = try? JSONDecoder().decode([Person].self, from: data),
+              !decoded.isEmpty
+        else { return [Person.makeMe()] }
+        return decoded
+    }
+
+    private func savePeople() {
+        if let data = try? JSONEncoder().encode(people) {
+            UserDefaults.standard.set(data, forKey: Self.peopleKey)
+        }
+    }
+
+    /// Name of the person currently tagged as speaker, or nil.
+    var currentSpeakerName: String? {
+        guard let id = currentSpeakerID else { return nil }
+        return people.first(where: { $0.id == id })?.name
+    }
+
+    /// Toggle speaker: tap same person = clear, tap different = set.
+    func toggleSpeaker(_ id: UUID) {
+        currentSpeakerID = (currentSpeakerID == id) ? nil : id
+    }
+
+    /// Add a new person with the next unused color and auto-placed position.
+    func addPerson(name: String) {
+        let usedColors = Set(people.map { $0.colorIndex })
+        let nextColor = PersonColor.allCases.first(where: { !usedColors.contains($0.rawValue) })
+            ?? PersonColor.allCases[people.count % PersonColor.allCases.count]
+        let angle = Double(people.count) * 137.5 * (.pi / 180)
+        let r = 0.18 + Double(people.count) * 0.04
+        let x = max(0.1, min(0.9, 0.5 + r * cos(angle)))
+        let y = max(0.1, min(0.9, 0.5 + r * sin(angle)))
+        let p = Person(id: UUID(), name: name, colorIndex: nextColor.rawValue,
+                       mapPosition: CGPoint(x: x, y: y), isMe: false)
+        people.append(p)
     }
 }
