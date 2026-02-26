@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.onShowSetup = { [weak self] in Task { @MainActor in self?.showSetupWindowSync() } }
 
         showPill()
+        pillWindow?.setAmbientExpanded(appState.pillMode == .ambientIntelligence)
 
         // Show first-run setup if dependencies are missing
         showSetupIfNeeded()
@@ -33,6 +34,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AutoClawdLogger.toastPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] entry in self?.showToast(entry) }
+            .store(in: &cancellables)
+
+        // Resize pill window when ambient mode toggles
+        appState.$pillMode
+            .dropFirst()  // initial resize handled above
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mode in
+                self?.pillWindow?.setAmbientExpanded(mode == .ambientIntelligence)
+            }
             .store(in: &cancellables)
 
         // Show/hide pill + toast when setting changes
@@ -251,17 +261,25 @@ struct PillContentView: View {
     @State private var displayLevel: Float = 0
 
     var body: some View {
-        PillView(
-            state: appState.pillState,
-            audioLevel: displayLevel,
-            onOpenPanel: onOpenPanel,
-            onTogglePause: onTogglePause,
-            onOpenLogs: onOpenLogs,
-            onToggleMinimal: onToggleMinimal,
-            pillMode: appState.pillMode,
-            onCycleMode: { appState.cyclePillMode() },
-            appearanceMode: appState.appearanceMode
-        )
+        VStack(spacing: 8) {
+            PillView(
+                state: appState.pillState,
+                audioLevel: displayLevel,
+                onOpenPanel: onOpenPanel,
+                onTogglePause: onTogglePause,
+                onOpenLogs: onOpenLogs,
+                onToggleMinimal: onToggleMinimal,
+                pillMode: appState.pillMode,
+                onCycleMode: { appState.cyclePillMode() },
+                appearanceMode: appState.appearanceMode
+            )
+
+            if appState.pillMode == .ambientIntelligence {
+                AmbientMapView()
+                    .transition(.opacity.combined(with: .offset(y: -6)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.22), value: appState.pillMode)
         .onReceive(
             Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
         ) { _ in

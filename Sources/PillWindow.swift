@@ -74,6 +74,22 @@ final class PillWindow: NSPanel {
         NSMenu.popUpContextMenu(menu, with: event, for: view)
     }
 
+    // MARK: - Ambient map expansion
+
+    /// Resize the window to show or hide the ambient map below the pill.
+    /// Keeps the top edge of the window pinned so the pill stays in place.
+    func setAmbientExpanded(_ expanded: Bool) {
+        let collapsedH: CGFloat = 44
+        let expandedH:  CGFloat = 256   // 40 pill + 8 gap + 200 map + 8 padding
+        let targetH = expanded ? expandedH : collapsedH
+        guard abs(frame.height - targetH) > 1 else { return }
+        let delta = targetH - frame.height
+        var r = frame
+        r.origin.y -= delta   // lower origin to keep top edge pinned
+        r.size.height = targetH
+        setFrame(r, display: true, animate: true)
+    }
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
