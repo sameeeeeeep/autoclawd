@@ -737,6 +737,16 @@ struct TranscriptRowView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+            // Speaker chip
+            if let speaker = record.speakerName {
+                Text(speaker.uppercased())
+                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.black.opacity(0.75))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color(red: 0.0, green: 0.85, blue: 1.0).opacity(0.75))
+                    .clipShape(Capsule())
+            }
             Text(expanded ? record.text : String(record.text.prefix(120)) + "...")
                 .font(.custom("JetBrains Mono", size: 11))
                 .lineLimit(expanded ? nil : 3)
