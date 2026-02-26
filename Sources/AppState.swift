@@ -106,6 +106,7 @@ final class AppState: ObservableObject {
     private(set) var structuredTodoStore: StructuredTodoStore
     let locationService = LocationService.shared
     let nowPlaying = NowPlayingService()
+    let shazam = ShazamKitService()
     private let ollama = OllamaService()
     private lazy var todoFramingService = TodoFramingService(ollama: ollama)
     private let worldModelService = WorldModelService()
@@ -175,6 +176,28 @@ final class AppState: ObservableObject {
         setupLogger()
         buildTranscriptionService()
         configureChunkManager()
+
+        // Start ShazamKit ambient recognition
+        shazam.start()
+        chunkManager.setBufferHandler { [weak self] buf in
+            self?.shazam.process(buf)
+        }
+
+        // Surface Shazam matches when NowPlayingService isn't already playing
+        shazam.$currentTitle
+            .receive(on: RunLoop.main)
+            .sink { [weak self] title in
+                guard let self, !self.nowPlaying.isPlaying else { return }
+                guard let musicPerson = self.people.first(where: { $0.isMusic }) else { return }
+                if let title {
+                    self.currentSpeakerID    = musicPerson.id
+                    self.nowPlayingSongTitle = title
+                } else if self.currentSpeakerID == musicPerson.id {
+                    self.currentSpeakerID    = nil
+                    self.nowPlayingSongTitle = nil
+                }
+            }
+            .store(in: &cancellables)
 
         // Auto-activate Music person when NowPlayingService detects a song
         nowPlaying.$isPlaying
