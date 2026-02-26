@@ -27,6 +27,7 @@ struct Person: Identifiable, Codable, Equatable {
     var colorIndex: Int          // PersonColor.rawValue
     var mapPosition: CGPoint     // normalized 0..1
     var isMe: Bool
+    var isMusic: Bool
 
     var personColor: PersonColor {
         PersonColor(rawValue: colorIndex) ?? .cyan
@@ -39,13 +40,20 @@ struct Person: Identifiable, Codable, Equatable {
                mapPosition: CGPoint(x: 0.50, y: 0.58), isMe: true)
     }
 
+    static func makeMusic() -> Person {
+        Person(id: UUID(), name: "Music ♫",
+               colorIndex: PersonColor.pink.rawValue,
+               mapPosition: CGPoint(x: 0.82, y: 0.80),
+               isMe: false, isMusic: true)
+    }
+
     // CGPoint is not Codable by default
     enum CodingKeys: String, CodingKey {
-        case id, name, colorIndex, posX, posY, isMe
+        case id, name, colorIndex, posX, posY, isMe, isMusic
     }
-    init(id: UUID, name: String, colorIndex: Int, mapPosition: CGPoint, isMe: Bool) {
+    init(id: UUID, name: String, colorIndex: Int, mapPosition: CGPoint, isMe: Bool, isMusic: Bool = false) {
         self.id = id; self.name = name; self.colorIndex = colorIndex
-        self.mapPosition = mapPosition; self.isMe = isMe
+        self.mapPosition = mapPosition; self.isMe = isMe; self.isMusic = isMusic
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -53,6 +61,7 @@ struct Person: Identifiable, Codable, Equatable {
         name        = try c.decode(String.self,  forKey: .name)
         colorIndex  = try c.decode(Int.self,     forKey: .colorIndex)
         isMe        = try c.decode(Bool.self,    forKey: .isMe)
+        isMusic     = (try? c.decode(Bool.self, forKey: .isMusic)) ?? false
         let x       = try c.decode(CGFloat.self, forKey: .posX)
         let y       = try c.decode(CGFloat.self, forKey: .posY)
         mapPosition = CGPoint(x: x, y: y)
@@ -63,6 +72,7 @@ struct Person: Identifiable, Codable, Equatable {
         try c.encode(name,           forKey: .name)
         try c.encode(colorIndex,     forKey: .colorIndex)
         try c.encode(isMe,           forKey: .isMe)
+        try c.encode(isMusic,        forKey: .isMusic)
         try c.encode(mapPosition.x,  forKey: .posX)
         try c.encode(mapPosition.y,  forKey: .posY)
     }
