@@ -2,7 +2,8 @@ import AVFoundation
 import ShazamKit
 
 /// Identifies ambient music from mic audio using ShazamKit.
-/// Feed PCM buffers via process(_:). Publishes currentTitle/currentArtist on match.
+/// Call start() before feeding buffers via process(_:).
+/// Publishes currentTitle/currentArtist on match.
 /// NowPlayingService takes priority — AppState guards against overriding it.
 @MainActor
 final class ShazamKitService: NSObject, ObservableObject {
@@ -11,7 +12,7 @@ final class ShazamKitService: NSObject, ObservableObject {
     @Published private(set) var currentArtist: String? = nil
 
     private var session: SHSession?
-    private var holdTimer: Timer?
+    private var holdTask: Task<Void, Never>?
     /// Seconds to keep the song title displayed after the last Shazam match
     /// (prevents flicker when audio briefly dips below recognition threshold).
     private let holdDuration: TimeInterval = 30
@@ -24,8 +25,8 @@ final class ShazamKitService: NSObject, ObservableObject {
 
     func stop() {
         session = nil
-        holdTimer?.invalidate()
-        holdTimer = nil
+        holdTask?.cancel()
+        holdTask = nil
         currentTitle  = nil
         currentArtist = nil
     }
@@ -54,8 +55,8 @@ extension ShazamKitService: SHSessionDelegate {
         guard let item = match.mediaItems.first else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.holdTimer?.invalidate()
-            self.holdTimer = nil
+            self.holdTask?.cancel()
+            self.holdTask = nil
             self.currentTitle  = item.title
             self.currentArtist = item.artist
             // Recreate session so we're ready to detect the next song immediately
@@ -70,16 +71,14 @@ extension ShazamKitService: SHSessionDelegate {
     ) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            // Reset hold timer — clear title after holdDuration of no matches
-            self.holdTimer?.invalidate()
-            self.holdTimer = Timer.scheduledTimer(
-                withTimeInterval: self.holdDuration,
-                repeats: false
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.currentTitle  = nil
-                    self?.currentArtist = nil
-                }
+            // The hold timer resets on every no-match signature while ambient audio is present.
+            // This is intentional: the title lingers as long as any audio (even unrecognisable)
+            // is reaching the mic, and only clears ~holdDuration seconds after audio ceases.
+            self.holdTask?.cancel()
+            self.holdTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(self?.holdDuration ?? 30))
+                self?.currentTitle  = nil
+                self?.currentArtist = nil
             }
         }
     }
