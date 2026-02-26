@@ -49,6 +49,7 @@ final class SettingsManager: @unchecked Sendable {
     private let kShowAmbientWidget = "show_ambient_widget"
     private let kAppearanceMode = "appearance_mode"
     private let kHotWordConfigs = "hotWordConfigs"
+    private let kShazamEnabled  = "shazam_enabled"
 
     // MARK: - Properties
 
@@ -130,6 +131,11 @@ final class SettingsManager: @unchecked Sendable {
             }
             defaults.set(data, forKey: kHotWordConfigs)
         }
+    }
+
+    var shazamEnabled: Bool {
+        get { defaults.bool(forKey: kShazamEnabled) }   // returns false when key is absent — correct default
+        set { defaults.set(newValue, forKey: kShazamEnabled) }
     }
 
     private init() {}
