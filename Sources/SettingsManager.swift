@@ -48,6 +48,7 @@ final class SettingsManager: @unchecked Sendable {
     private let kGroqAPIKey        = "groq_api_key_storage"
     private let kShowAmbientWidget = "show_ambient_widget"
     private let kAppearanceMode = "appearance_mode"
+    private let kHotWordConfigs = "hotWordConfigs"
 
     // MARK: - Properties
 
@@ -111,6 +112,24 @@ final class SettingsManager: @unchecked Sendable {
             return AppearanceMode(rawValue: raw) ?? .frosted
         }
         set { defaults.set(newValue.rawValue, forKey: kAppearanceMode) }
+    }
+
+
+    var hotWordConfigs: [HotWordConfig] {
+        get {
+            guard let data = defaults.data(forKey: kHotWordConfigs),
+                  let configs = try? JSONDecoder().decode([HotWordConfig].self, from: data) else {
+                return HotWordConfig.defaults
+            }
+            return configs
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else {
+                assertionFailure("HotWordConfig encode failed — settings not saved")
+                return
+            }
+            defaults.set(data, forKey: kHotWordConfigs)
+        }
     }
 
     private init() {}

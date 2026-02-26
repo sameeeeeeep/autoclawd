@@ -27,6 +27,8 @@ final class ChunkManager: ObservableObject {
     var onTranscriptReady: ((String, URL) -> Void)?
     var onItemsClassified: (([ExtractionItem]) -> Void)?
 
+    weak var appState: AppState?
+
     private let audioRecorder = AudioRecorder()
     private let storage = FileStorageManager.shared
     private let settings = SettingsManager.shared
@@ -101,6 +103,11 @@ final class ChunkManager: ObservableObject {
         // End the session
         if let sid = currentSessionID {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
+            if let store = transcriptStore {
+                Task { [weak self] in
+                    self?.transcriptStore?.mergeSessionChunks(sessionID: sid)
+                }
+            }
             currentSessionID = nil
             // Tag people mentioned in this session
             let taggingService = PeopleTaggingService()
@@ -121,6 +128,11 @@ final class ChunkManager: ObservableObject {
         // End the session on pause
         if let sid = currentSessionID {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
+            if let store = transcriptStore {
+                Task { [weak self] in
+                    self?.transcriptStore?.mergeSessionChunks(sessionID: sid)
+                }
+            }
             currentSessionID = nil
         }
         transcriptBuffer.removeAll()
@@ -378,6 +390,14 @@ final class ChunkManager: ObservableObject {
         await MainActor.run {
             self.onTranscriptReady?(transcript, audioURL)
             self.transcriptBuffer.append(transcript)
+            // Hot-word detection
+            let hotWordMatches = HotWordDetector.detect(
+                in: transcript,
+                configs: self.settings.hotWordConfigs
+            )
+            if !hotWordMatches.isEmpty, let appState = self.appState {
+                Task { await appState.processHotWordMatches(hotWordMatches) }
+            }
         }
 
         switch pillMode {

@@ -3,6 +3,20 @@ import Combine
 import Foundation
 import SwiftUI
 
+// MARK: - ExecutionMode
+
+enum ExecutionMode: String, CaseIterable {
+    case parallel = "parallel"
+    case series = "series"
+
+    var displayName: String {
+        switch self {
+        case .parallel: return "Parallel"
+        case .series: return "Series"
+        }
+    }
+}
+
 // MARK: - AppState
 
 @MainActor
@@ -77,6 +91,7 @@ final class AppState: ObservableObject {
     private(set) var structuredTodoStore: StructuredTodoStore
     let locationService = LocationService.shared
     private let ollama = OllamaService()
+    private lazy var todoFramingService = TodoFramingService(ollama: ollama)
     private let worldModelService = WorldModelService()
     private let todoService = TodoService()
     private var transcriptionService: (any Transcribable)?
@@ -87,6 +102,7 @@ final class AppState: ObservableObject {
     private let pasteService: TranscriptionPasteService
     private let qaService: QAService
     let qaStore: QAStore
+    let claudeCodeRunner = ClaudeCodeRunner()
 
     // MARK: - Derived Content (refreshed on demand)
 
@@ -339,6 +355,29 @@ final class AppState: ObservableObject {
         refreshStructuredTodos()
     }
 
+    func setTranscriptProject(transcriptID: Int64, projectID: UUID?) {
+        transcriptStore.setProject(projectID, for: transcriptID)
+    }
+
+    func addStructuredTodo(content: String, priority: String?, project: Project? = nil) {
+        let inserted = structuredTodoStore.insert(content: content, priority: priority)
+        if let project {
+            structuredTodoStore.setProject(id: inserted.id, projectID: project.id)
+        }
+        refreshStructuredTodos()
+
+        // Frame in background if we have a project for context
+        guard let project else { return }
+        let todoID = inserted.id
+        Task { [weak self] in
+            guard let self else { return }
+            let framed = await todoFramingService.frame(rawPayload: content, for: project)
+            guard framed != content else { return }
+            structuredTodoStore.updateContent(id: todoID, content: framed)
+            await MainActor.run { self.refreshStructuredTodos() }
+        }
+    }
+
     func deleteTodo(id: String) {
         structuredTodoStore.delete(id: id)
         refreshStructuredTodos()
@@ -347,6 +386,53 @@ final class AppState: ObservableObject {
     func markTodoExecuted(id: String, output: String) {
         structuredTodoStore.markExecuted(id: id, output: output)
         refreshStructuredTodos()
+    }
+
+    func executeSelectedTodos(ids: Set<String>, mode: ExecutionMode) async {
+        let todos = structuredTodos.filter { ids.contains($0.id) }
+        guard !todos.isEmpty else { return }
+        let apiKey = SettingsManager.shared.anthropicAPIKey
+
+        let runnable = todos.filter { todo in projects.first(where: { $0.id == todo.projectID }) != nil }
+        let skipped  = todos.count - runnable.count
+        if skipped > 0 {
+            Log.warn(.system, "⚠️ \(skipped) todo(s) skipped — no project assigned")
+        }
+        Log.warn(.system, "⚡ Executing \(runnable.count) todo(s) [\(mode.displayName)]…")
+
+        // Helper: run one todo, collect output, mark executed
+        func runOne(_ todo: StructuredTodo, project: Project) async {
+            var lines: [String] = []
+            do {
+                for try await line in ClaudeCodeRunner().run(
+                    todo: todo, project: project,
+                    apiKey: apiKey.isEmpty ? nil : apiKey
+                ) {
+                    lines.append(line)
+                    Log.info(.system, "[\(todo.content.prefix(20))] \(line)")
+                }
+                let output = lines.joined(separator: "\n")
+                markTodoExecuted(id: todo.id, output: output)
+                Log.warn(.system, "✓ Done: \(todo.content.prefix(40))")
+            } catch {
+                Log.warn(.system, "❌ Failed '\(todo.content.prefix(30))': \(error.localizedDescription)")
+            }
+        }
+
+        switch mode {
+        case .parallel:
+            await withTaskGroup(of: Void.self) { group in
+                for todo in todos {
+                    guard let project = projects.first(where: { $0.id == todo.projectID }) else { continue }
+                    group.addTask { await runOne(todo, project: project) }
+                }
+            }
+        case .series:
+            for todo in todos {
+                guard let project = projects.first(where: { $0.id == todo.projectID }) else { continue }
+                await runOne(todo, project: project)
+            }
+        }
     }
 
     // Callback set by AppDelegate so Settings tab can re-open the setup window
@@ -379,6 +465,7 @@ final class AppState: ObservableObject {
     }
 
     private func configureChunkManager() {
+        chunkManager.appState = self
         reconfigureChunkManager()
 
         chunkManager.onItemsClassified = { [weak self] _ in
@@ -424,4 +511,78 @@ final class AppState: ObservableObject {
     }
 
     private var cancellables = Set<AnyCancellable>()
+
+    // MARK: - Hot-Word Processing
+
+    @MainActor
+    func processHotWordMatches(_ matches: [HotWordMatch]) async {
+        for match in matches {
+            Log.info(.system, "Hot-word: '\(match.config.keyword)' action=\(match.config.action.rawValue)")
+
+            var resolvedProject: Project? = nil
+            if let ref = match.explicitProjectRef {
+                let all = projectStore.all()
+                if let idx = Int(ref), idx >= 1, idx <= all.count {
+                    resolvedProject = all[idx - 1]
+                } else {
+                    resolvedProject = all.first { $0.name.lowercased().contains(ref.lowercased()) }
+                }
+            } else {
+                resolvedProject = await projectStore.inferProject(for: match.payload, using: ollama)
+            }
+
+            switch match.config.action {
+            case .executeImmediately:
+                guard let project = resolvedProject else {
+                    Log.warn(.system, "Hot-word executeImmediately: no project resolved, skipping")
+                    continue
+                }
+                Task {
+                    for try await line in claudeCodeRunner.run(
+                        match.payload,
+                        in: project,
+                        dangerouslySkipPermissions: match.config.skipPermissions
+                    ) {
+                        Log.info(.system, "[hot-exec] \(line)")
+                    }
+                }
+
+            case .addTodo:
+                let inserted = structuredTodoStore.insert(
+                    content: match.payload,
+                    priority: "HIGH"
+                )
+                if let project = resolvedProject {
+                    structuredTodoStore.setProject(id: inserted.id, projectID: project.id)
+                }
+                refreshStructuredTodos()
+                Log.info(.todo, "Hot-word added todo (raw): \(match.payload)")
+
+                // Frame the task in background — updates content silently when done
+                if let project = resolvedProject {
+                    let todoID = inserted.id
+                    let raw = match.payload
+                    Task { [weak self] in
+                        guard let self else { return }
+                        let framed = await todoFramingService.frame(rawPayload: raw, for: project)
+                        guard framed != raw else { return }
+                        structuredTodoStore.updateContent(id: todoID, content: framed)
+                        await MainActor.run { self.refreshStructuredTodos() }
+                        Log.info(.todo, "Hot-word todo framed: \(framed)")
+                    }
+                }
+
+            case .addWorldModelInfo:
+                if let project = resolvedProject, let pid = UUID(uuidString: project.id) {
+                    worldModelService.appendInfo(match.payload, for: pid)
+                } else {
+                    worldModelService.write(worldModelService.read() + "\n- \(match.payload)")
+                }
+                Log.info(.world, "Hot-word added to world model")
+
+            case .logOnly:
+                Log.info(.system, "Hot-word log-only: \(match.payload)")
+            }
+        }
+    }
 }

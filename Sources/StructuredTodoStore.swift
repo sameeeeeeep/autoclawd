@@ -70,6 +70,18 @@ final class StructuredTodoStore: @unchecked Sendable {
         }
     }
 
+    func updateContent(id: String, content: String) {
+        let sql = "UPDATE structured_todos SET content = ? WHERE id = ?;"
+        queue.sync {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            bind(stmt, 1, content)
+            bind(stmt, 2, id)
+            sqlite3_step(stmt)
+        }
+    }
+
     func markExecuted(id: String, output: String) {
         let ts = ISO8601DateFormatter().string(from: Date())
         let sql = """
@@ -121,6 +133,10 @@ final class StructuredTodoStore: @unchecked Sendable {
             );
         """
         execSQL(sql)
+        // Silent migrations for existing databases that predate new columns
+        execSQL("ALTER TABLE structured_todos ADD COLUMN project_id TEXT;")
+        execSQL("ALTER TABLE structured_todos ADD COLUMN execution_output TEXT;")
+        execSQL("ALTER TABLE structured_todos ADD COLUMN execution_date TEXT;")
     }
 
     // MARK: - SQL Helpers

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // MARK: - ClaudeCodeError
@@ -101,6 +102,102 @@ final class ClaudeCodeRunner: Sendable {
                 } else {
                     continuation.finish()
                 }
+            }
+        }
+    }
+
+    /// Streams stdout+stderr lines from `claude --print <prompt>` run in `project.localPath`.
+    /// Used by hot-word processing to execute arbitrary prompts directly.
+    func run(
+        _ prompt: String,
+        in project: Project,
+        dangerouslySkipPermissions: Bool = false
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task.detached {
+                guard let claudeURL = ClaudeCodeRunner.findCLI() else {
+                    continuation.finish(throwing: ClaudeCodeError.notFound)
+                    return
+                }
+
+                let process = Process()
+                process.executableURL = claudeURL
+                var args = ["--print", prompt]
+                if dangerouslySkipPermissions {
+                    args.append("--dangerously-skip-permissions")
+                }
+                process.arguments = args
+                process.currentDirectoryURL = URL(fileURLWithPath: project.localPath)
+
+                var env = ProcessInfo.processInfo.environment
+                let apiKeyVal = SettingsManager.shared.anthropicAPIKey
+                if !apiKeyVal.isEmpty {
+                    env["ANTHROPIC_API_KEY"] = apiKeyVal
+                }
+                process.environment = env
+
+                let outPipe = Pipe()
+                process.standardOutput = outPipe
+                process.standardError = outPipe  // merge stderr into same pipe
+
+                do {
+                    try process.run()
+                } catch {
+                    continuation.finish(throwing: error)
+                    return
+                }
+
+                // Read lines as they arrive
+                for try await line in outPipe.fileHandleForReading.bytes.lines {
+                    continuation.yield(line)
+                }
+
+                process.waitUntilExit()
+                let status = process.terminationStatus
+                if status != 0 {
+                    continuation.finish(throwing: ClaudeCodeError.exitCode(status))
+                } else {
+                    continuation.finish()
+                }
+            }
+        }
+    }
+
+    // MARK: - Open in Terminal
+
+    func openInTerminal(prompt: String, in project: Project, dangerouslySkipPermissions: Bool = false) {
+        guard let claudeURL = ClaudeCodeRunner.findCLI() else {
+            Log.warn(.system, "Claude CLI not found — cannot open in Terminal")
+            return
+        }
+        let claudeExec = claudeURL.path.replacingOccurrences(of: "'", with: "'\\''")
+        // Shell-safe: escape single quotes in prompt using the POSIX technique
+        let safePrompt = prompt.replacingOccurrences(of: "'", with: "'\\''")
+        let safePath = project.localPath.replacingOccurrences(of: "'", with: "'\\''")
+        let permFlag = dangerouslySkipPermissions ? " --dangerously-skip-permissions" : ""
+        let fullCmd = "cd '\(safePath)' && '\(claudeExec)'\(permFlag) '\(safePrompt)'"
+
+        // Write to a uniquely-named temp script so concurrent calls don't collide
+        let scriptName = "autoclawd-\(UUID().uuidString.prefix(8)).sh"
+        let scriptURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(scriptName)
+        let script = "#!/bin/bash\n\(fullCmd)\n"
+        do {
+            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        } catch {
+            Log.warn(.system, "Failed to write Terminal script: \(error)")
+            return
+        }
+
+        let terminalURL = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+        NSWorkspace.shared.open(
+            [scriptURL],
+            withApplicationAt: terminalURL,
+            configuration: NSWorkspace.OpenConfiguration()
+        ) { _, error in
+            if let error = error {
+                Log.warn(.system, "Failed to open Terminal: \(error)")
             }
         }
     }

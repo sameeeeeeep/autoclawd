@@ -18,4 +18,21 @@ final class WorldModelService: @unchecked Sendable {
             }
         }
     }
+
+    func read(for projectID: UUID) -> String {
+        let file = storage.rootDirectory.appendingPathComponent("world-model-\(projectID.uuidString).md")
+        return (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+    }
+
+    func write(_ content: String, for projectID: UUID) {
+        let file = storage.rootDirectory.appendingPathComponent("world-model-\(projectID.uuidString).md")
+        try? content.write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    func appendInfo(_ info: String, for projectID: UUID) {
+        var existing = read(for: projectID)
+        if existing.isEmpty { existing = "## Notes\n\n" }
+        existing += "\n- \(info)"
+        write(existing, for: projectID)
+    }
 }

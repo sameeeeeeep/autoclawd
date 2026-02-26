@@ -195,6 +195,8 @@ struct TodoTabView: View {
     @State private var rawContent: String = ""
     @State private var showRaw = false
     @State private var runningTodo: StructuredTodo? = nil
+    @State private var selectedTodoIDs: Set<String> = []
+    @State private var executionMode: ExecutionMode = .parallel
 
     var sortedTodos: [StructuredTodo] {
         appState.structuredTodos.sorted {
@@ -228,10 +230,46 @@ struct TodoTabView: View {
             } else {
                 List {
                     ForEach(sortedTodos) { todo in
-                        StructuredTodoRow(todo: todo, appState: appState, onRun: { runningTodo = todo })
+                        HStack(spacing: 6) {
+                            Image(systemName: selectedTodoIDs.contains(todo.id) ? "checkmark.square.fill" : "square")
+                                .foregroundColor(selectedTodoIDs.contains(todo.id) ? .green : .secondary)
+                                .font(.system(size: 14))
+                                .onTapGesture {
+                                    if selectedTodoIDs.contains(todo.id) {
+                                        selectedTodoIDs.remove(todo.id)
+                                    } else {
+                                        selectedTodoIDs.insert(todo.id)
+                                    }
+                                }
+                            StructuredTodoRow(todo: todo, appState: appState, onRun: { runningTodo = todo })
+                        }
                     }
                 }
                 .listStyle(.plain)
+
+                if !selectedTodoIDs.isEmpty {
+                    Divider()
+                    HStack(spacing: 12) {
+                        Text("\(selectedTodoIDs.count) selected")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
+                        Picker("", selection: $executionMode) {
+                            ForEach(ExecutionMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 160)
+                        Spacer()
+                        Button("Execute All") {
+                            Task { await appState.executeSelectedTodos(ids: selectedTodoIDs, mode: executionMode) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .font(.system(.caption, design: .monospaced))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                }
             }
 
             Divider()
@@ -270,7 +308,7 @@ struct StructuredTodoRow: View {
     }
 
     private var canRun: Bool {
-        todo.projectID != nil && ClaudeCodeRunner.findCLI() != nil
+        ClaudeCodeRunner.cliURL != nil   // projectID gate removed — sheet shows "No project assigned" clearly
     }
 
     var body: some View {
@@ -289,6 +327,18 @@ struct StructuredTodoRow: View {
             }
             .buttonStyle(.plain)
             .disabled(!canRun)
+
+            if canRun, let project = appState.projects.first(where: { $0.id == todo.projectID }) {
+                Button("Open in Terminal") {
+                    appState.claudeCodeRunner.openInTerminal(
+                        prompt: todo.content,
+                        in: project
+                    )
+                }
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(.secondary)
+                .buttonStyle(.plain)
+            }
 
             if todo.isExecuted {
                 Image(systemName: "checkmark.circle.fill")
@@ -324,15 +374,14 @@ struct StructuredTodoRow: View {
 
     private var projectMenu: some View {
         Menu {
-            Button("No Project") { appState.setTodoProject(todoID: todo.id, projectID: nil) }
-            Divider()
+            Button("None") { appState.setTodoProject(todoID: todo.id, projectID: nil) }
             ForEach(appState.projects) { project in
                 Button(project.name) { appState.setTodoProject(todoID: todo.id, projectID: project.id) }
             }
         } label: {
-            Text(projectName)
-                .font(BrutalistTheme.monoSM)
-                .foregroundColor(.white.opacity(0.5))
+            Text(todo.projectID != nil ? projectName : "—")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(todo.projectID != nil ? BrutalistTheme.neonGreen : .secondary)
                 .lineLimit(1)
                 .frame(maxWidth: 90, alignment: .trailing)
         }
@@ -488,22 +537,49 @@ struct ProjectsTabView: View {
             } else {
                 List {
                     ForEach(appState.projects) { project in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(project.name)
-                                    .font(BrutalistTheme.monoMD)
-                                Text(project.localPath)
-                                    .font(BrutalistTheme.monoSM)
-                                    .foregroundColor(.white.opacity(0.4))
-                                    .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(project.name)
+                                        .font(BrutalistTheme.monoMD)
+                                    Text(project.localPath)
+                                        .font(BrutalistTheme.monoSM)
+                                        .foregroundColor(.white.opacity(0.4))
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Button(action: { appState.deleteProject(id: project.id) }) {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.white.opacity(0.3))
+                                }
+                                .buttonStyle(.plain)
                             }
-                            Spacer()
-                            Button(action: { appState.deleteProject(id: project.id) }) {
-                                Image(systemName: "trash")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.white.opacity(0.3))
+                            if !project.tags.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 4) {
+                                        ForEach(project.tags, id: \.self) { tag in
+                                            Text(tag)
+                                                .font(.system(size: 10, design: .monospaced))
+                                                .foregroundColor(.black)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(BrutalistTheme.neonGreen)
+                                                .cornerRadius(4)
+                                        }
+                                    }
+                                }
                             }
-                            .buttonStyle(.plain)
+                            if !project.linkedProjectIDs.isEmpty {
+                                let linkedNames = project.linkedProjectIDs.compactMap { linkedID in
+                                    appState.projects.first(where: { $0.id == linkedID.uuidString })?.name
+                                }
+                                if !linkedNames.isEmpty {
+                                    Text("Linked: \(linkedNames.joined(separator: ", "))")
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundColor(.white.opacity(0.4))
+                                }
+                            }
                         }
                         .padding(.vertical, 4)
                     }
@@ -619,7 +695,7 @@ struct TranscriptTabView: View {
             }
             Divider()
             List(transcripts) { record in
-                TranscriptRowView(record: record)
+                TranscriptRowView(record: record, appState: appState)
             }
             .listStyle(.plain)
         }
@@ -637,7 +713,13 @@ struct TranscriptTabView: View {
 
 struct TranscriptRowView: View {
     let record: TranscriptRecord
+    @ObservedObject var appState: AppState
     @State private var expanded = false
+
+    private var assignedProjectName: String {
+        guard let pid = record.projectID else { return "No Project" }
+        return appState.projects.first(where: { $0.id == pid.uuidString })?.name ?? "No Project"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -654,6 +736,31 @@ struct TranscriptRowView: View {
                 .font(.custom("JetBrains Mono", size: 11))
                 .lineLimit(expanded ? nil : 3)
                 .onTapGesture { expanded.toggle() }
+            HStack(spacing: 8) {
+                Menu {
+                    Button("None") {
+                        appState.setTranscriptProject(transcriptID: record.id, projectID: nil)
+                    }
+                    ForEach(appState.projects) { project in
+                        Button(project.name) {
+                            appState.setTranscriptProject(transcriptID: record.id, projectID: UUID(uuidString: project.id))
+                        }
+                    }
+                } label: {
+                    Label(assignedProjectName, systemImage: "folder")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button("→ Todo") {
+                    let proj = appState.projects.first(where: {
+                        $0.id == record.projectID?.uuidString
+                    })
+                    appState.addStructuredTodo(content: record.text, priority: "MEDIUM", project: proj)
+                }
+                .font(.system(.caption, design: .monospaced))
+                .buttonStyle(.bordered)
+            }
         }
         .padding(.vertical, 4)
     }
@@ -667,6 +774,8 @@ struct SettingsTabView: View {
     @State private var anthropicKey = ""
     @State private var isValidating = false
     @State private var validationResult: Bool? = nil
+    @State private var showingAddHotWord = false
+    @State private var localHotWordConfigs: [HotWordConfig] = SettingsManager.shared.hotWordConfigs
 
     var body: some View {
         ScrollView {
@@ -758,15 +867,58 @@ struct SettingsTabView: View {
                     }
                     .padding(8)
                 }
+
+                GroupBox("Hot Words") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(localHotWordConfigs) { config in
+                            HStack(spacing: 8) {
+                                Text("hot \(config.keyword)")
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundColor(BrutalistTheme.neonGreen)
+                                Text("→ \(config.action.displayName)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                if config.action == .executeImmediately && config.skipPermissions {
+                                    Text("⚡")
+                                        .font(.system(.caption2, design: .monospaced))
+                                }
+                                Spacer()
+                                Button("✕") {
+                                    localHotWordConfigs.removeAll { $0.id == config.id }
+                                    SettingsManager.shared.hotWordConfigs = localHotWordConfigs
+                                }
+                                .foregroundColor(.red)
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        Button("+ Add Hot Word") {
+                            showingAddHotWord = true
+                        }
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(BrutalistTheme.neonGreen)
+                    }
+                    .padding(8)
+                }
             }
             .padding()
         }
         .onAppear {
             groqKey = appState.groqAPIKey
             anthropicKey = SettingsManager.shared.anthropicAPIKey
+            localHotWordConfigs = SettingsManager.shared.hotWordConfigs
         }
         .onChange(of: groqKey) { appState.groqAPIKey = $0; validationResult = nil }
         .onChange(of: anthropicKey) { SettingsManager.shared.anthropicAPIKey = $0 }
+        .sheet(isPresented: $showingAddHotWord) {
+            HotWordEditView(configs: Binding(
+                get: { localHotWordConfigs },
+                set: {
+                    localHotWordConfigs = $0
+                    SettingsManager.shared.hotWordConfigs = $0
+                }
+            ))
+        }
     }
 
     private func validateKey() {
@@ -859,5 +1011,54 @@ struct TabHeader<Trailing: View>: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+}
+
+// MARK: - HotWordEditView
+
+struct HotWordEditView: View {
+    @Binding var configs: [HotWordConfig]
+    @Environment(\.dismiss) var dismiss
+    @State private var keyword = ""
+    @State private var action: HotWordAction = .addTodo
+    @State private var label = ""
+    @State private var skipPermissions = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("New Hot Word")
+                .font(.system(.headline, design: .monospaced))
+            TextField("keyword (e.g. p0, info)", text: $keyword)
+                .textFieldStyle(.roundedBorder)
+            Picker("Action", selection: $action) {
+                ForEach(HotWordAction.allCases, id: \.self) { a in
+                    Text(a.displayName).tag(a)
+                }
+            }
+            if action == .executeImmediately {
+                Toggle("Skip permissions (--dangerously-skip-permissions)", isOn: $skipPermissions)
+            }
+            TextField("label (display name)", text: $label)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Button("Cancel") { dismiss() }
+                Spacer()
+                Button("Add") {
+                    guard !keyword.isEmpty else { return }
+                    configs.append(HotWordConfig(
+                        keyword: keyword.lowercased(),
+                        action: action,
+                        label: label.isEmpty ? keyword : label,
+                        skipPermissions: skipPermissions
+                    ))
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(keyword.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+        .font(.system(.body, design: .monospaced))
     }
 }
