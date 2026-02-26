@@ -41,8 +41,8 @@ struct VoiceDot: Identifiable {
 // MARK: - AmbientMapView
 
 struct AmbientMapView: View {
-    var roomName: String = "Conference Room"
-    var dots: [VoiceDot] = VoiceDot.mock
+    @ObservedObject var appState: AppState
+    @State private var showEditor = false
 
     private let mapSize: CGFloat = 200
 
@@ -71,20 +71,49 @@ struct AmbientMapView: View {
             }
 
             // Room name
-            Text(roomName.uppercased())
+            Text(appState.locationName.uppercased())
                 .font(BrutalistTheme.monoSM)
                 .foregroundColor(.white.opacity(0.35))
                 .padding(.top, 8)
                 .padding(.leading, 10)
 
-            // Dots
+            // Edit button (pencil, top-right)
+            Button { showEditor.toggle() } label: {
+                Image(systemName: "pencil")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white.opacity(0.35))
+                    .frame(width: 22, height: 22)
+                    .background(Color.white.opacity(0.07))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+            .buttonStyle(.plain)
+            .padding(6)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .popover(isPresented: $showEditor, arrowEdge: .trailing) {
+                MapEditorView(appState: appState)
+            }
+
+            // People dots
             GeometryReader { geo in
-                ForEach(dots) { dot in
-                    VoiceDotView(dot: dot)
-                        .position(
-                            x: dot.position.x * geo.size.width,
-                            y: dot.position.y * geo.size.height
-                        )
+                ForEach(appState.people) { person in
+                    let isSpeaking = appState.currentSpeakerID == person.id
+                    VoiceDotView(dot: VoiceDot(
+                        id: person.id.uuidString,
+                        name: person.name,
+                        color: person.color,
+                        position: person.mapPosition,
+                        isSpeaking: isSpeaking,
+                        isMe: person.isMe
+                    ))
+                    .position(
+                        x: person.mapPosition.x * geo.size.width,
+                        y: person.mapPosition.y * geo.size.height
+                    )
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            appState.toggleSpeaker(person.id)
+                        }
+                    }
                 }
             }
             .padding(16)

@@ -275,7 +275,7 @@ struct PillContentView: View {
             )
 
             if appState.pillMode == .ambientIntelligence {
-                AmbientMapView()
+                AmbientMapView(appState: appState)
                     .transition(.opacity.combined(with: .offset(y: -6)))
             }
         }
