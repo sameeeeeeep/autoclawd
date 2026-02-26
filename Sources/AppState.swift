@@ -359,9 +359,23 @@ final class AppState: ObservableObject {
         transcriptStore.setProject(projectID, for: transcriptID)
     }
 
-    func addStructuredTodo(content: String, priority: String?) {
-        _ = structuredTodoStore.insert(content: content, priority: priority)
+    func addStructuredTodo(content: String, priority: String?, project: Project? = nil) {
+        let inserted = structuredTodoStore.insert(content: content, priority: priority)
+        if let project {
+            structuredTodoStore.setProject(id: inserted.id, projectID: project.id)
+        }
         refreshStructuredTodos()
+
+        // Frame in background if we have a project for context
+        guard let project else { return }
+        let todoID = inserted.id
+        Task { [weak self] in
+            guard let self else { return }
+            let framed = await todoFramingService.frame(rawPayload: content, for: project)
+            guard framed != content else { return }
+            structuredTodoStore.updateContent(id: todoID, content: framed)
+            await MainActor.run { self.refreshStructuredTodos() }
+        }
     }
 
     func deleteTodo(id: String) {

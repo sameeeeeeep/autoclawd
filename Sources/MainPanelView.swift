@@ -308,7 +308,7 @@ struct StructuredTodoRow: View {
     }
 
     private var canRun: Bool {
-        todo.projectID != nil && ClaudeCodeRunner.findCLI() != nil
+        ClaudeCodeRunner.cliURL != nil   // projectID gate removed — sheet shows "No project assigned" clearly
     }
 
     var body: some View {
@@ -753,7 +753,10 @@ struct TranscriptRowView: View {
                 }
                 Spacer()
                 Button("→ Todo") {
-                    appState.addStructuredTodo(content: record.text, priority: "MEDIUM")
+                    let proj = appState.projects.first(where: {
+                        $0.id == record.projectID?.uuidString
+                    })
+                    appState.addStructuredTodo(content: record.text, priority: "MEDIUM", project: proj)
                 }
                 .font(.system(.caption, design: .monospaced))
                 .buttonStyle(.bordered)
