@@ -171,8 +171,15 @@ struct WorldView: View {
     }
 
     private func hasTodo(on date: Date) -> Bool {
-        appState.structuredTodos.contains { todo in
-            todo.isExecuted && calendar.isDate(date, inSameDayAs: Date())
+        let isToday = calendar.isDateInToday(date)
+        return appState.structuredTodos.contains { todo in
+            // Show dot on today for any active (unexecuted) todos
+            // Show dot on past days only if they have executed todos (future: will use scheduledDate)
+            if !todo.isExecuted {
+                return isToday
+            } else {
+                return false // executed todos don't yet have a completion date stored — skip for now
+            }
         }
     }
 
