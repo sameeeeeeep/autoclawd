@@ -81,6 +81,11 @@ final class ChunkManager: ObservableObject {
         self.qaStore              = qaStore
     }
 
+    /// Forwards raw PCM buffers from the mic to an external handler (e.g. ShazamKitService).
+    func setBufferHandler(_ handler: @escaping (AVAudioPCMBuffer) -> Void) {
+        audioRecorder.onBuffer = handler
+    }
+
     // MARK: - Public API
 
     var audioLevel: Float { audioRecorder.audioLevel }
