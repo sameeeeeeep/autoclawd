@@ -185,9 +185,11 @@ final class AppState: ObservableObject {
                 if isPlaying {
                     self.currentSpeakerID    = musicPerson.id
                     self.nowPlayingSongTitle = title
-                } else if self.currentSpeakerID == musicPerson.id {
-                    self.currentSpeakerID    = nil
+                } else {
                     self.nowPlayingSongTitle = nil
+                    if self.currentSpeakerID == musicPerson.id {
+                        self.currentSpeakerID = nil
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -633,7 +635,7 @@ final class AppState: ObservableObject {
         } else {
             people = [Person.makeMe()]
         }
-        // Ensure exactly one isMusic person exists (upgrade migration)
+        // Upgrade migration: ensure at least one Music person is present
         if !people.contains(where: { $0.isMusic }) {
             people.append(Person.makeMusic())
         }
