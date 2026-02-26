@@ -15,7 +15,7 @@ enum AppTheme {
     static let border        = Color(hex: "#E4E4E4")
     static let destructive   = Color(hex: "#EF4444")
 
-    // MARK: Typography (font TBD — using system for now)
+    // MARK: Typography
     static let caption  = Font.system(size: 11, weight: .regular)
     static let body     = Font.system(size: 13, weight: .regular)
     static let label    = Font.system(size: 13, weight: .medium)
@@ -101,5 +101,6 @@ struct DestructiveButtonStyle: ButtonStyle {
             .background(Color.white)
             .overlay(RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
                         .stroke(AppTheme.destructive, lineWidth: 1))
+            .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }
