@@ -78,6 +78,7 @@ final class AppState: ObservableObject {
 
     /// Transient — which person is currently speaking (nil = unknown).
     @Published var currentSpeakerID: UUID? = nil
+    @Published var nowPlayingSongTitle: String? = nil
 
     @Published var locationName: String {
         didSet { UserDefaults.standard.set(locationName, forKey: "autoclawd.locationName") }
@@ -173,6 +174,23 @@ final class AppState: ObservableObject {
         setupLogger()
         buildTranscriptionService()
         configureChunkManager()
+
+        // Auto-activate Music person when NowPlayingService detects a song
+        nowPlaying.$isPlaying
+            .combineLatest(nowPlaying.$currentTitle)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] isPlaying, title in
+                guard let self else { return }
+                guard let musicPerson = self.people.first(where: { $0.isMusic }) else { return }
+                if isPlaying {
+                    self.currentSpeakerID    = musicPerson.id
+                    self.nowPlayingSongTitle = title
+                } else if self.currentSpeakerID == musicPerson.id {
+                    self.currentSpeakerID    = nil
+                    self.nowPlayingSongTitle = nil
+                }
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Lifecycle
@@ -607,11 +625,19 @@ final class AppState: ObservableObject {
     private static let peopleKey = "autoclawd.people"
 
     private static func init_loadPeople() -> [Person] {
-        guard let data = UserDefaults.standard.data(forKey: peopleKey),
-              let decoded = try? JSONDecoder().decode([Person].self, from: data),
-              !decoded.isEmpty
-        else { return [Person.makeMe()] }
-        return decoded
+        var people: [Person]
+        if let data = UserDefaults.standard.data(forKey: peopleKey),
+           let decoded = try? JSONDecoder().decode([Person].self, from: data),
+           !decoded.isEmpty {
+            people = decoded
+        } else {
+            people = [Person.makeMe()]
+        }
+        // Ensure exactly one isMusic person exists (upgrade migration)
+        if !people.contains(where: { $0.isMusic }) {
+            people.append(Person.makeMusic())
+        }
+        return people
     }
 
     private func savePeople() {
