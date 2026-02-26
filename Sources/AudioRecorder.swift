@@ -121,6 +121,9 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
     /// True if the most recent audio buffer was below the silence threshold.
     private(set) var isSilentNow: Bool = false
 
+    /// Called with every PCM buffer — used by ShazamKitService to identify ambient music.
+    var onBuffer: ((AVAudioPCMBuffer) -> Void)?
+
     // MARK: - Start
 
     func startRecording(outputURL: URL, deviceUID: String? = nil) throws {
@@ -249,6 +252,9 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
                 try? file.write(from: buffer)
             }
         }
+
+        // Forward buffer to registered handlers (e.g. ShazamKitService)
+        onBuffer?(buffer)
 
         // Update level for UI
         let scaled = min(rms * 10.0, 1.0)
