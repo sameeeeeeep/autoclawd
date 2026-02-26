@@ -117,7 +117,7 @@ private struct PersonRowView: View {
 
             Spacer()
 
-            if !person.isMe {
+            if !person.isMe && !person.isMusic {
                 Button {
                     appState.people.removeAll { $0.id == person.id }
                     if appState.currentSpeakerID == person.id {
