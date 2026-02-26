@@ -78,6 +78,7 @@ final class AppState: ObservableObject {
 
     /// Transient — which person is currently speaking (nil = unknown).
     @Published var currentSpeakerID: UUID? = nil
+    /// Transient — current song title set by NowPlayingService via Combine; nil when nothing is playing.
     @Published var nowPlayingSongTitle: String? = nil
 
     @Published var locationName: String {
@@ -178,7 +179,7 @@ final class AppState: ObservableObject {
         // Auto-activate Music person when NowPlayingService detects a song
         nowPlaying.$isPlaying
             .combineLatest(nowPlaying.$currentTitle)
-            .receive(on: RunLoop.main)
+            .receive(on: RunLoop.main)  // defensive: both types are @MainActor, but explicit is clearer
             .sink { [weak self] isPlaying, title in
                 guard let self else { return }
                 guard let musicPerson = self.people.first(where: { $0.isMusic }) else { return }
