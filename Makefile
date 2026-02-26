@@ -19,7 +19,8 @@ SWIFT_FLAGS = \
 	-parse-as-library \
 	-sdk $(SDK) \
 	-target $(TARGET) \
-	-lsqlite3
+	-lsqlite3 \
+	-framework ShazamKit
 
 VERSION ?= 0.1.0
 DMG_NAME = $(APP_NAME)-$(VERSION).dmg
