@@ -122,10 +122,10 @@ struct AmbientMapView: View {
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 6)
                             .onChanged { drag in
-                                let start = dragStarts[person.id] ?? person.mapPosition
                                 if dragStarts[person.id] == nil {
                                     dragStarts[person.id] = person.mapPosition
                                 }
+                                let start = dragStarts[person.id]!
                                 let newX = start.x + drag.translation.width  / geo.size.width
                                 let newY = start.y + drag.translation.height / geo.size.height
                                 person.mapPosition = CGPoint(
@@ -202,7 +202,7 @@ struct VoiceDotView: View {
                     .foregroundColor(.white.opacity(0.45))
                     .lineLimit(1)
                     .frame(maxWidth: 60)
-                    .offset(y: dotSize / 2 + 20)
+                    .offset(y: dotSize / 2 + 22)
             }
         }
     }
