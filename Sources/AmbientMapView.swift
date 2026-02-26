@@ -42,9 +42,27 @@ struct VoiceDot: Identifiable {
 
 struct AmbientMapView: View {
     @ObservedObject var appState: AppState
+    @ObservedObject private var nowPlaying: NowPlayingService
     @State private var showEditor = false
 
     private let mapSize: CGFloat = 200
+
+    init(appState: AppState) {
+        self.appState = appState
+        self._nowPlaying = ObservedObject(wrappedValue: appState.nowPlaying)
+    }
+
+    private var musicDot: VoiceDot? {
+        guard nowPlaying.isPlaying else { return nil }
+        return VoiceDot(
+            id: "music",
+            name: nowPlaying.currentTitle ?? "Music",
+            color: Color(red: 1.0, green: 0.40, blue: 0.75),  // pink
+            position: CGPoint(x: 0.82, y: 0.80),
+            isSpeaking: true,
+            isMe: false
+        )
+    }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -93,7 +111,7 @@ struct AmbientMapView: View {
                 MapEditorView(appState: appState)
             }
 
-            // People dots
+            // People dots + music dot
             GeometryReader { geo in
                 ForEach(appState.people) { person in
                     let isSpeaking = appState.currentSpeakerID == person.id
@@ -114,6 +132,14 @@ struct AmbientMapView: View {
                             appState.toggleSpeaker(person.id)
                         }
                     }
+                }
+
+                if let mDot = musicDot {
+                    MusicDotView(dot: mDot, songTitle: nowPlaying.currentTitle, artist: nowPlaying.currentArtist)
+                        .position(
+                            x: mDot.position.x * geo.size.width,
+                            y: mDot.position.y * geo.size.height
+                        )
                 }
             }
             .padding(16)
@@ -209,5 +235,86 @@ struct SpeechBubbleView: View {
         let phase = Double(index) * 0.9
         let raw = sin(tick + phase) * 0.5 + 0.5
         return 3 + raw * 9
+    }
+}
+
+// MARK: - MusicDotView
+
+struct MusicDotView: View {
+    let dot: VoiceDot
+    let songTitle: String?
+    let artist: String?
+    @State private var pulseScale: CGFloat = 1.0
+
+    private let dotSize: CGFloat = 11
+
+    var body: some View {
+        ZStack {
+            // Pulse ring
+            Circle()
+                .fill(dot.color.opacity(0.18))
+                .frame(width: dotSize + 14, height: dotSize + 14)
+                .scaleEffect(pulseScale)
+                .onAppear {
+                    withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
+                        pulseScale = 1.5
+                    }
+                }
+
+            // Dot with music note icon
+            ZStack {
+                Circle()
+                    .fill(dot.color)
+                    .frame(width: dotSize, height: dotSize)
+                Image(systemName: "music.note")
+                    .font(.system(size: 6, weight: .bold))
+                    .foregroundColor(.black.opacity(0.8))
+            }
+            .overlay(Circle().stroke(Color.white.opacity(0.28), lineWidth: 1))
+
+            // Song info bubble above dot
+            if let title = songTitle {
+                SongBubbleView(title: title, artist: artist, color: dot.color)
+                    .offset(y: -(dotSize / 2 + 24))
+            }
+
+            // Label below
+            Text("♫")
+                .font(.system(size: 7))
+                .foregroundColor(.white.opacity(0.5))
+                .offset(y: dotSize / 2 + 9)
+        }
+    }
+}
+
+// MARK: - SongBubbleView
+
+struct SongBubbleView: View {
+    let title: String
+    let artist: String?
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.system(size: 7, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
+                .lineLimit(1)
+            if let artist {
+                Text(artist)
+                    .font(.system(size: 6, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.6))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.82))
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(color.opacity(0.55), lineWidth: 0.75)
+        )
+        .cornerRadius(5)
+        .fixedSize()
     }
 }

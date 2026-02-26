@@ -103,6 +103,7 @@ final class AppState: ObservableObject {
     private(set) var projectStore: ProjectStore
     private(set) var structuredTodoStore: StructuredTodoStore
     let locationService = LocationService.shared
+    let nowPlaying = NowPlayingService()
     private let ollama = OllamaService()
     private lazy var todoFramingService = TodoFramingService(ollama: ollama)
     private let worldModelService = WorldModelService()
