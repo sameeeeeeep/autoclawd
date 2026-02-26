@@ -308,7 +308,7 @@ struct StructuredTodoRow: View {
     }
 
     private var canRun: Bool {
-        ClaudeCodeRunner.cliURL != nil   // projectID gate removed — sheet shows "No project assigned" clearly
+        ClaudeCodeRunner.findCLI() != nil   // projectID gate removed — sheet shows "No project assigned" clearly
     }
 
     var body: some View {

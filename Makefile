@@ -41,7 +41,7 @@ $(MACOS_DIR)/$(APP_NAME): $(SOURCES) Info.plist $(ICON_ICNS)
 	@plutil -replace CFBundleExecutable -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
 	@plutil -replace CFBundleIdentifier -string "$(BUNDLE_ID)" "$(CONTENTS)/Info.plist"
 	@cp $(ICON_ICNS) "$(RESOURCES)/"
-	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" \
+	@codesign --force --sign "$(CODESIGN_IDENTITY)" \
 		--entitlements AutoClawd.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
 
@@ -49,7 +49,11 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 run: all
-	open "$(APP_BUNDLE)"
+	@-pkill -x "$(APP_NAME)" 2>/dev/null; true
+	@cp -r "$(APP_BUNDLE)" ~/Applications/ 2>/dev/null; true
+	@osascript -e "tell application \"Finder\" to open POSIX file \"$$HOME/Applications/$(APP_NAME).app\"" 2>/dev/null || \
+	 open ~/Applications/$(APP_NAME).app 2>/dev/null || \
+	 echo "Build complete → open build/$(APP_NAME).app from Finder (first launch needs mic + speech permissions)"
 
 # ── DMG ──────────────────────────────────────────────────────────────────────
 # Produces build/AutoClawd-<VERSION>.dmg — standard drag-to-Applications UX.
