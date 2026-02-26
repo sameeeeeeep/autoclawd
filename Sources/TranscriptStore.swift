@@ -12,6 +12,7 @@ struct TranscriptRecord: Identifiable {
     let sessionID: String?     // nil for legacy rows
     let sessionChunkSeq: Int   // 0=A, 1=B, 2=C… (0 for legacy rows)
     var projectID: UUID?
+    var speakerName: String?    // nil if speaker not tagged
 }
 
 // MARK: - TranscriptStore
@@ -36,11 +37,13 @@ final class TranscriptStore: @unchecked Sendable {
 
     func save(text: String, durationSeconds: Int, audioFilePath: String,
               sessionID: String? = nil, sessionChunkSeq: Int = 0,
-              projectID: UUID? = nil, timestamp: Date? = nil) {
+              projectID: UUID? = nil, timestamp: Date? = nil,
+              speakerName: String? = nil) {
         queue.async { [weak self] in
             self?.insertTranscript(text: text, duration: durationSeconds, path: audioFilePath,
                                    sessionID: sessionID, sessionChunkSeq: sessionChunkSeq,
-                                   projectID: projectID, timestamp: timestamp)
+                                   projectID: projectID, timestamp: timestamp,
+                                   speakerName: speakerName)
         }
     }
 
@@ -115,18 +118,20 @@ final class TranscriptStore: @unchecked Sendable {
         execSQL("ALTER TABLE transcripts ADD COLUMN session_id TEXT;")
         execSQL("ALTER TABLE transcripts ADD COLUMN session_chunk_seq INTEGER NOT NULL DEFAULT 0;")
         execSQL("ALTER TABLE transcripts ADD COLUMN project_id TEXT;")
+        execSQL("ALTER TABLE transcripts ADD COLUMN speaker_name TEXT;")
     }
 
     // MARK: - SQL Helpers
 
     private func insertTranscript(text: String, duration: Int, path: String,
                                   sessionID: String?, sessionChunkSeq: Int,
-                                  projectID: UUID?, timestamp: Date?) {
+                                  projectID: UUID?, timestamp: Date?,
+                                  speakerName: String? = nil) {
         let ts = ISO8601DateFormatter().string(from: timestamp ?? Date())
         let sql = """
             INSERT INTO transcripts
-                (timestamp, duration_seconds, text, audio_file_path, session_id, session_chunk_seq, project_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?);
+                (timestamp, duration_seconds, text, audio_file_path, session_id, session_chunk_seq, project_id, speaker_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -146,6 +151,11 @@ final class TranscriptStore: @unchecked Sendable {
         } else {
             sqlite3_bind_null(stmt, 7)
         }
+        if let sname = speakerName {
+            sqlite3_bind_text(stmt, 8, sname, -1, SQLITE_TRANSIENT)
+        } else {
+            sqlite3_bind_null(stmt, 8)
+        }
         let result = sqlite3_step(stmt)
         if result == SQLITE_DONE {
             let label = String(UnicodeScalar(UInt32(65 + min(sessionChunkSeq, 25)))!)
@@ -158,7 +168,7 @@ final class TranscriptStore: @unchecked Sendable {
     private func ftsSearch(query: String, limit: Int) -> [TranscriptRecord] {
         let sql = """
             SELECT t.id, t.timestamp, t.duration_seconds, t.text, t.audio_file_path,
-                   t.session_id, t.session_chunk_seq, t.project_id
+                   t.session_id, t.session_chunk_seq, t.project_id, t.speaker_name
             FROM transcripts t
             JOIN transcripts_fts f ON t.id = f.rowid
             WHERE transcripts_fts MATCH ?
@@ -171,7 +181,7 @@ final class TranscriptStore: @unchecked Sendable {
     private func fetchRecent(limit: Int) -> [TranscriptRecord] {
         let sql = """
             SELECT id, timestamp, duration_seconds, text, audio_file_path,
-                   session_id, session_chunk_seq, project_id
+                   session_id, session_chunk_seq, project_id, speaker_name
             FROM transcripts
             ORDER BY id DESC
             LIMIT ?;
@@ -182,7 +192,7 @@ final class TranscriptStore: @unchecked Sendable {
     private func fetchBySessionInternal(sessionID: String) -> [TranscriptRecord] {
         let sql = """
             SELECT id, timestamp, duration_seconds, text, audio_file_path,
-                   session_id, session_chunk_seq, project_id
+                   session_id, session_chunk_seq, project_id, speaker_name
             FROM transcripts
             WHERE session_id = ?
             ORDER BY session_chunk_seq ASC;
@@ -235,11 +245,14 @@ final class TranscriptStore: @unchecked Sendable {
                 ? String(cString: sqlite3_column_text(stmt, 7))
                 : nil
             let pid   = pidStr.flatMap { UUID(uuidString: $0) }
+            let speakerName = sqlite3_column_type(stmt, 8) != SQLITE_NULL
+                ? String(cString: sqlite3_column_text(stmt, 8))
+                : nil
             let ts    = ISO8601DateFormatter().date(from: tsStr) ?? Date()
             results.append(TranscriptRecord(id: id, timestamp: ts, durationSeconds: dur,
                                             text: text, audioFilePath: path,
                                             sessionID: sid, sessionChunkSeq: seq,
-                                            projectID: pid))
+                                            projectID: pid, speakerName: speakerName))
         }
         return results
     }
