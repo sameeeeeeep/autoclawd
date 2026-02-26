@@ -4,31 +4,17 @@ import SwiftUI
 // MARK: - Panel Tab
 
 enum PanelTab: String, CaseIterable, Identifiable {
-    case todos      = "To-Do"
-    case worldModel = "World Model"
-    case transcript = "Transcript"
-    case settings   = "Settings"
-    case logs         = "Logs"
+    case world        = "World"
     case intelligence = "Intelligence"
-    case qa = "AI Search"
-    case timeline = "Timeline"
-    case profile = "Profile"
-    case projects = "Projects"
+    case settings     = "Settings"
 
     var id: String { rawValue }
 
     var icon: String {
         switch self {
-        case .todos:      return "checkmark.square"
-        case .worldModel: return "brain"
-        case .transcript: return "text.bubble"
-        case .settings:   return "gearshape"
-        case .logs:         return "doc.text"
+        case .world:        return "globe"
         case .intelligence: return "brain.head.profile"
-        case .qa: return "magnifyingglass"
-        case .timeline: return "clock"
-        case .profile: return "person.crop.circle"
-        case .projects: return "folder"
+        case .settings:     return "gearshape"
         }
     }
 }
@@ -37,95 +23,59 @@ enum PanelTab: String, CaseIterable, Identifiable {
 
 struct MainPanelView: View {
     @ObservedObject var appState: AppState
-    @State private var selectedTab: PanelTab = .todos
-    @State private var transcriptSearch = ""
+    @State private var selectedTab: PanelTab = .world
 
     var body: some View {
-        VStack(spacing: 0) {
-            if let ssid = appState.pendingUnknownSSID {
-                wifiLabelBanner(ssid: ssid)
-            }
-            HStack(spacing: 0) {
-                sidebar
-                Divider()
-                content
-            }
+        HStack(spacing: 0) {
+            sidebar
+            Divider()
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AppTheme.background)
         }
         .frame(minWidth: 700, minHeight: 500)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(AppTheme.background)
     }
 
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            // Logo
-            HStack {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("AutoClawd")
-                        .font(BrutalistTheme.monoLG)
-                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
-                        .font(BrutalistTheme.monoSM)
-                        .foregroundColor(.white.opacity(0.35))
-                }
-                Spacer()
-                statusDot
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-
-            Divider()
+        VStack(spacing: 0) {
+            Spacer().frame(height: AppTheme.xl)
 
             ForEach(PanelTab.allCases) { tab in
                 Button { selectedTab = tab } label: {
-                    Label(tab.rawValue.uppercased(), systemImage: tab.icon)
-                        .font(BrutalistTheme.monoMD)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 7)
-                        .padding(.horizontal, 10)
-                        .background(
-                            ZStack(alignment: .leading) {
-                                Rectangle()
-                                    .fill(selectedTab == tab
-                                          ? BrutalistTheme.selectedBG
-                                          : Color.clear)
-                                if selectedTab == tab {
-                                    Rectangle()
-                                        .fill(BrutalistTheme.neonGreen)
-                                        .frame(width: BrutalistTheme.selectedAccentWidth)
-                                }
-                            }
-                        )
+                    ZStack(alignment: .leading) {
+                        if selectedTab == tab {
+                            Rectangle()
+                                .fill(AppTheme.green)
+                                .frame(width: AppTheme.selectedAccentWidth)
+                        }
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 18, weight: selectedTab == tab ? .semibold : .regular))
+                            .foregroundColor(selectedTab == tab ? AppTheme.textPrimary : AppTheme.textSecondary)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .frame(height: 44)
+                    .background(selectedTab == tab ? AppTheme.surfaceHover : Color.clear)
                 }
                 .buttonStyle(.plain)
+                .help(tab.rawValue)
             }
 
             Spacer()
 
-            // Status footer
-            VStack(alignment: .leading, spacing: 2) {
-                Divider()
-                HStack {
-                    Text(appState.micEnabled ? "[ON]" : "[OFF]")
-                        .font(BrutalistTheme.monoSM)
-                        .foregroundColor(appState.micEnabled ? BrutalistTheme.neonGreen : .white.opacity(0.4))
-                    Spacer()
-                    Text(appState.transcriptionMode == .groq ? "[GROQ]" : "[LOCAL]")
-                        .font(BrutalistTheme.monoSM)
-                        .foregroundColor(.white.opacity(0.35))
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            }
+            statusDot
+                .padding(.bottom, AppTheme.xl)
         }
-        .frame(width: 160)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .frame(width: AppTheme.sidebarWidth)
+        .background(AppTheme.surface)
     }
 
     private var statusDot: some View {
-        Text(appState.isListening ? "[●]" : "[·]")
-            .font(BrutalistTheme.monoSM)
-            .foregroundColor(appState.isListening ? BrutalistTheme.neonGreen : .white.opacity(0.35))
+        Circle()
+            .fill(appState.isListening ? AppTheme.green : AppTheme.textSecondary.opacity(0.4))
+            .frame(width: 8, height: 8)
     }
 
     // MARK: - Content
@@ -133,54 +83,10 @@ struct MainPanelView: View {
     @ViewBuilder
     private var content: some View {
         switch selectedTab {
-        case .todos:      TodoTabView(appState: appState)
-        case .worldModel: WorldModelGraphView(appState: appState)
-        case .transcript: TranscriptTabView(appState: appState, search: $transcriptSearch)
-        case .settings:   SettingsTabView(appState: appState)
-        case .logs:         LogsTabView(appState: appState)
-        case .intelligence: IntelligenceView(appState: appState)
-        case .qa: QAView(store: appState.qaStore)
-        case .timeline: SessionTimelineView()
-        case .profile: UserProfileChatView().environmentObject(appState)
-        case .projects: ProjectsTabView(appState: appState)
+        case .world:        WorldView(appState: appState)
+        case .intelligence: IntelligenceConsolidatedView(appState: appState)
+        case .settings:     SettingsConsolidatedView(appState: appState)
         }
-    }
-
-    // MARK: - WiFi Label Banner
-
-    @ViewBuilder
-    private func wifiLabelBanner(ssid: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "wifi")
-                .foregroundColor(BrutalistTheme.neonGreen)
-                .font(.system(size: 11))
-            Text("You're on '\(ssid)' — what should I call this place?")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.white.opacity(0.85))
-            TextField("e.g. Home, Philz Coffee", text: $appState.wifiLabelInput)
-                .textFieldStyle(.plain)
-                .font(.system(size: 11, design: .monospaced))
-                .frame(maxWidth: 160)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(Color.white.opacity(0.08))
-                .cornerRadius(4)
-            Button("Save") { appState.confirmWifiLabel() }
-                .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundColor(BrutalistTheme.neonGreen)
-            Button("Skip") {
-                appState.pendingUnknownSSID = nil
-                appState.wifiLabelInput = ""
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundColor(.white.opacity(0.4))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color.black.opacity(0.6))
-        .overlay(Rectangle().fill(BrutalistTheme.neonGreen.opacity(0.15)).frame(height: 1), alignment: .bottom)
     }
 }
 
