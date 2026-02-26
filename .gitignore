@@ -1,0 +1,12 @@
+# Build output
+build/
+
+# Git worktrees
+.claude/worktrees/
+
+# macOS
+.DS_Store
+
+# Editor
+.swp
+*.orig
