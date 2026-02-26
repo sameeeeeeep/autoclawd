@@ -178,9 +178,10 @@ final class AppState: ObservableObject {
         configureChunkManager()
 
         // Start ShazamKit ambient recognition
-        shazam.start()
         chunkManager.setBufferHandler { [weak self] buf in
-            self?.shazam.process(buf)
+            Task { @MainActor [weak self] in
+                self?.shazam.process(buf)
+            }
         }
 
         // Surface Shazam matches when NowPlayingService isn't already playing
@@ -198,6 +199,7 @@ final class AppState: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+        shazam.start()
 
         // Auto-activate Music person when NowPlayingService detects a song
         nowPlaying.$isPlaying
