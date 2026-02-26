@@ -61,8 +61,13 @@ struct MainPanelView: View {
         VStack(alignment: .leading, spacing: 2) {
             // Logo
             HStack {
-                Text("AutoClawd")
-                    .font(BrutalistTheme.monoLG)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("AutoClawd")
+                        .font(BrutalistTheme.monoLG)
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                        .font(BrutalistTheme.monoSM)
+                        .foregroundColor(.white.opacity(0.35))
+                }
                 Spacer()
                 statusDot
             }
