@@ -76,8 +76,12 @@ sudo xattr -cr "$INSTALL_DEST"
 success "Quarantine attributes removed"
 
 info "Ad-hoc re-signing installed bundle..."
+# Use AutoClawd-adhoc.entitlements (NOT AutoClawd.entitlements):
+# The main entitlements file includes com.apple.developer.networking.wifi-info,
+# which is a RESTRICTED entitlement requiring an Apple Developer ID cert.
+# Embedding it in an ad-hoc signed binary causes launchd Code=163 spawn failure.
 sudo codesign --force --sign - \
-    --entitlements AutoClawd.entitlements \
+    --entitlements AutoClawd-adhoc.entitlements \
     "$INSTALL_DEST" 2>/dev/null || \
 sudo codesign --force --deep --sign - "$INSTALL_DEST"
 success "Bundle signed"
