@@ -38,19 +38,19 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("AUTOCLAWD SETUP")
-                    .font(BrutalistTheme.monoLG)
+                    .font(AppTheme.heading)
                     .foregroundColor(.white)
                 Spacer()
                 if installer.isComplete {
                     Button("Skip →") { onComplete?() }
                         .buttonStyle(.plain)
-                        .font(BrutalistTheme.monoSM)
-                        .foregroundColor(.white.opacity(0.4))
+                        .font(AppTheme.caption)
+                        .foregroundColor(AppTheme.textSecondary)
                 }
             }
             Text("AutoClawd needs a few things installed to work. We'll handle it for you.")
-                .font(BrutalistTheme.monoSM)
-                .foregroundColor(.white.opacity(0.45))
+                .font(AppTheme.caption)
+                .foregroundColor(AppTheme.textSecondary)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
@@ -89,11 +89,11 @@ struct SetupView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         ProgressView(value: installer.modelProgress)
                             .progressViewStyle(.linear)
-                            .tint(BrutalistTheme.neonGreen)
+                            .tint(AppTheme.green)
                             .frame(width: 160)
                         Text(installer.modelProgressText)
-                            .font(BrutalistTheme.monoSM)
-                            .foregroundColor(.white.opacity(0.4))
+                            .font(AppTheme.caption)
+                            .foregroundColor(AppTheme.textSecondary)
                     }
                 } else {
                     actionButton(
@@ -142,13 +142,13 @@ struct SetupView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .font(BrutalistTheme.monoSM)
-                        .foregroundColor(BrutalistTheme.neonGreen)
+                        .font(AppTheme.caption)
+                        .foregroundColor(AppTheme.green)
                         .disabled(groqInput.isEmpty || groqValidating)
                     }
                     if let err = groqError {
                         Text(err)
-                            .font(BrutalistTheme.monoSM)
+                            .font(AppTheme.caption)
                             .foregroundColor(.red.opacity(0.8))
                     }
                 }
@@ -182,18 +182,18 @@ struct SetupView: View {
             Divider()
             HStack(spacing: 10) {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(BrutalistTheme.neonGreen)
+                    .foregroundColor(AppTheme.green)
                 Text("All set — AutoClawd is ready to use.")
-                    .font(BrutalistTheme.monoMD)
-                    .foregroundColor(BrutalistTheme.neonGreen)
+                    .font(AppTheme.body)
+                    .foregroundColor(AppTheme.green)
                 Spacer()
                 Button("Launch AutoClawd") { onComplete?() }
                     .buttonStyle(.plain)
-                    .font(BrutalistTheme.monoMD)
+                    .font(AppTheme.body)
                     .foregroundColor(.black)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
-                    .background(BrutalistTheme.neonGreen)
+                    .background(AppTheme.green)
                     .cornerRadius(4)
             }
             .padding(.horizontal, 20)
@@ -224,17 +224,17 @@ struct SetupView: View {
                         .scaleEffect(0.6)
                         .frame(width: 14, height: 14)
                     Text(runningLabel)
-                        .font(BrutalistTheme.monoSM)
-                        .foregroundColor(.white.opacity(0.5))
+                        .font(AppTheme.caption)
+                        .foregroundColor(AppTheme.textSecondary)
                 }
             case .failed(let msg):
                 VStack(alignment: .trailing, spacing: 4) {
                     Button("Retry") { action() }
                         .buttonStyle(.plain)
-                        .font(BrutalistTheme.monoSM)
+                        .font(AppTheme.caption)
                         .foregroundColor(.orange)
                     Text(msg)
-                        .font(BrutalistTheme.monoSM)
+                        .font(AppTheme.caption)
                         .foregroundColor(.red.opacity(0.7))
                         .lineLimit(2)
                         .frame(maxWidth: 180, alignment: .trailing)
@@ -243,13 +243,13 @@ struct SetupView: View {
             case .pending:
                 Button(label) { action() }
                     .buttonStyle(.plain)
-                    .font(BrutalistTheme.monoSM)
-                    .foregroundColor(BrutalistTheme.neonGreen)
+                    .font(AppTheme.caption)
+                    .foregroundColor(AppTheme.green)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)
-                            .stroke(BrutalistTheme.neonGreen.opacity(0.6), lineWidth: 1)
+                            .stroke(AppTheme.green.opacity(0.6), lineWidth: 1)
                     )
             }
         }
@@ -262,9 +262,9 @@ struct SetupView: View {
                     Image(systemName: "checkmark")
                         .font(.system(size: 10, weight: .bold))
                     Text("DONE")
-                        .font(BrutalistTheme.monoSM)
+                        .font(AppTheme.caption)
                 }
-                .foregroundColor(BrutalistTheme.neonGreen)
+                .foregroundColor(AppTheme.green)
             }
         }
     }
@@ -295,11 +295,11 @@ private struct SetupRow<Trailing: View>: View {
             // Title + subtitle
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(BrutalistTheme.monoMD)
+                    .font(AppTheme.body)
                     .foregroundColor(.white)
                 Text(subtitle)
-                    .font(BrutalistTheme.monoSM)
-                    .foregroundColor(.white.opacity(0.4))
+                    .font(AppTheme.caption)
+                    .foregroundColor(AppTheme.textSecondary)
             }
 
             Spacer()
@@ -313,7 +313,7 @@ private struct SetupRow<Trailing: View>: View {
 
     private var circleColor: Color {
         switch status {
-        case .done:    return BrutalistTheme.neonGreen
+        case .done:    return AppTheme.green
         case .running: return .yellow
         case .failed:  return .red
         case .pending: return .white.opacity(0.3)

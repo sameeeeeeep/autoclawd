@@ -12,7 +12,7 @@ struct WorldModelGraphView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider().background(BrutalistTheme.divider)
+            Divider().background(AppTheme.border)
             if showRawEditor {
                 rawEditor
             } else {
@@ -27,7 +27,7 @@ struct WorldModelGraphView: View {
     private var header: some View {
         HStack {
             Text("WORLD MODEL")
-                .font(BrutalistTheme.monoLG)
+                .font(AppTheme.heading)
                 .foregroundColor(.white)
             Spacer()
             Button(showRawEditor ? "SHOW GRAPH" : "EDIT RAW") {
@@ -40,11 +40,11 @@ struct WorldModelGraphView: View {
                 }
                 showRawEditor.toggle()
             }
-            .buttonStyle(BrutalistButtonStyle())
+            .buttonStyle(SecondaryButtonStyle())
 
             if !showRawEditor {
                 Button("REFRESH") { refresh() }
-                    .buttonStyle(BrutalistButtonStyle())
+                    .buttonStyle(SecondaryButtonStyle())
             }
         }
         .padding(.horizontal, 16)
@@ -55,7 +55,7 @@ struct WorldModelGraphView: View {
 
     private var rawEditor: some View {
         TextEditor(text: $rawContent)
-            .font(BrutalistTheme.monoMD)
+            .font(AppTheme.body)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(8)
             .onChange(of: rawContent) { newVal in
@@ -81,7 +81,7 @@ struct WorldModelGraphView: View {
 
             if let nodeID = selectedNodeID,
                let node = model.nodes.first(where: { $0.id == nodeID }) {
-                Divider().background(BrutalistTheme.divider)
+                Divider().background(AppTheme.border)
                 WorldModelDetailPanel(node: node)
                     .frame(height: 60)
             }
@@ -133,7 +133,7 @@ struct WorldModelCanvasView: View {
                 path.addLine(to: toNode.position)
 
                 let color: Color = edge.kind == .crossReference
-                    ? BrutalistTheme.neonGreen
+                    ? AppTheme.green
                     : Color.white.opacity(0.20)
                 ctx.stroke(path, with: .color(color), lineWidth: 1)
             }
@@ -141,7 +141,7 @@ struct WorldModelCanvasView: View {
             // Draw nodes
             for node in model.nodes {
                 let isSelected = node.id == selectedNodeID
-                let nodeColor: Color = isSelected ? BrutalistTheme.neonGreen : Color.white.opacity(0.70)
+                let nodeColor: Color = isSelected ? AppTheme.green : Color.white.opacity(0.70)
                 let borderWidth: CGFloat = isSelected ? 2 : 1
 
                 // Rectangle fill (black) + border
@@ -183,15 +183,15 @@ struct WorldModelDetailPanel: View {
         HStack(alignment: .top, spacing: 12) {
             // Kind badge
             Text(node.kind == .section ? "[SECTION]" : "[FACT]")
-                .font(BrutalistTheme.monoMD)
-                .foregroundColor(BrutalistTheme.neonGreen)
+                .font(AppTheme.body)
+                .foregroundColor(AppTheme.green)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
-                .overlay(Rectangle().stroke(BrutalistTheme.neonGreen, lineWidth: 1))
+                .overlay(Rectangle().stroke(AppTheme.green, lineWidth: 1))
 
             // Full label
             Text(node.label)
-                .font(BrutalistTheme.monoMD)
+                .font(AppTheme.body)
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
 

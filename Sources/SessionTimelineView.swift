@@ -48,11 +48,11 @@ struct SessionCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.placeName ?? "Unknown location")
                         .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .foregroundColor(BrutalistTheme.neonGreen)
+                        .foregroundColor(AppTheme.green)
 
                     Text(timeLabel)
                         .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.5))
+                        .foregroundColor(AppTheme.textSecondary)
                 }
                 Spacer()
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -73,7 +73,7 @@ struct SessionCard: View {
                 .fill(Color.white.opacity(0.04))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(BrutalistTheme.neonGreen.opacity(0.15), lineWidth: 1)
+                        .strokeBorder(AppTheme.green.opacity(0.15), lineWidth: 1)
                 )
         )
         .onTapGesture { onTap() }

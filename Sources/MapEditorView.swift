@@ -13,8 +13,8 @@ struct MapEditorView: View {
             // ── Header ────────────────────────────────────────────────
             HStack {
                 Text("EDIT ROOM")
-                    .font(BrutalistTheme.monoSM)
-                    .foregroundColor(.white.opacity(0.5))
+                    .font(AppTheme.caption)
+                    .foregroundColor(AppTheme.textSecondary)
                 Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
@@ -34,7 +34,7 @@ struct MapEditorView: View {
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.35))
                 TextField("Room name", text: $appState.locationName)
-                    .font(BrutalistTheme.monoSM)
+                    .font(AppTheme.caption)
                     .textFieldStyle(.plain)
                     .padding(6)
                     .background(Color.white.opacity(0.06))
@@ -69,7 +69,7 @@ struct MapEditorView: View {
             // ── Add person ────────────────────────────────────────────
             HStack(spacing: 6) {
                 TextField("Add person…", text: $newName)
-                    .font(BrutalistTheme.monoSM)
+                    .font(AppTheme.caption)
                     .textFieldStyle(.plain)
                     .padding(6)
                     .background(Color.white.opacity(0.06))
@@ -78,7 +78,7 @@ struct MapEditorView: View {
                 Button(action: addPerson) {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(BrutalistTheme.neonGreen)
+                        .foregroundColor(AppTheme.green)
                 }
                 .buttonStyle(.plain)
                 .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)

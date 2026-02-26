@@ -101,7 +101,7 @@ struct PillView: View {
         Button(action: onCycleMode) {
             Image(systemName: pillMode.icon)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(state == .paused ? .white.opacity(0.35) : BrutalistTheme.neonGreen)
+                .foregroundColor(state == .paused ? .white.opacity(0.35) : AppTheme.green)
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
@@ -153,7 +153,7 @@ struct PillView: View {
     }
 
     private func barColor(index: Int) -> Color {
-        state == .listening ? BrutalistTheme.neonGreen : Color.white.opacity(0.20)
+        state == .listening ? AppTheme.green : Color.white.opacity(0.20)
     }
 
     // MARK: - Scan Line (processing)
@@ -193,7 +193,7 @@ struct PillView: View {
 
     private var stateDotColor: Color {
         switch state {
-        case .listening:  return BrutalistTheme.neonGreen
+        case .listening:  return AppTheme.green
         case .processing: return Color(red: 1.0, green: 0.65, blue: 0.0)
         case .paused:     return Color.white.opacity(0.30)
         case .silence:    return Color.white.opacity(0.15)

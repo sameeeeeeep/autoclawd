@@ -130,11 +130,11 @@ struct TodoTabView: View {
                 VStack(spacing: 8) {
                     Spacer()
                     Text("No structured todos yet.")
-                        .font(BrutalistTheme.monoSM)
-                        .foregroundColor(.white.opacity(0.4))
+                        .font(AppTheme.caption)
+                        .foregroundColor(AppTheme.textSecondary)
                     Text("Voice-captured todos appear here after synthesis.")
-                        .font(BrutalistTheme.monoSM)
-                        .foregroundColor(.white.opacity(0.25))
+                        .font(AppTheme.caption)
+                        .foregroundColor(AppTheme.textSecondary.opacity(0.6))
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
@@ -191,8 +191,8 @@ struct TodoTabView: View {
                     .frame(minHeight: 120)
                     .padding(4)
             }
-            .font(BrutalistTheme.monoSM)
-            .foregroundColor(.white.opacity(0.5))
+            .font(AppTheme.caption)
+            .foregroundColor(AppTheme.textSecondary)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
@@ -233,7 +233,7 @@ struct StructuredTodoRow: View {
             Button(action: onRun) {
                 Image(systemName: "play.fill")
                     .font(.system(size: 10))
-                    .foregroundColor(canRun ? BrutalistTheme.neonGreen : .white.opacity(0.2))
+                    .foregroundColor(canRun ? AppTheme.green : AppTheme.textSecondary)
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
@@ -253,7 +253,7 @@ struct StructuredTodoRow: View {
 
             if todo.isExecuted {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(BrutalistTheme.neonGreen)
+                    .foregroundColor(AppTheme.green)
                     .font(.system(size: 12))
             }
 
@@ -292,7 +292,7 @@ struct StructuredTodoRow: View {
         } label: {
             Text(todo.projectID != nil ? projectName : "—")
                 .font(.system(.caption, design: .monospaced))
-                .foregroundColor(todo.projectID != nil ? BrutalistTheme.neonGreen : .secondary)
+                .foregroundColor(todo.projectID != nil ? AppTheme.green : AppTheme.textSecondary)
                 .lineLimit(1)
                 .frame(maxWidth: 90, alignment: .trailing)
         }
@@ -321,12 +321,12 @@ struct ExecutionOutputView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(todo.content)
-                        .font(BrutalistTheme.monoMD)
+                        .font(AppTheme.body)
                         .lineLimit(2)
                     if let p = project {
                         Text(p.name + " · " + p.localPath)
-                            .font(BrutalistTheme.monoSM)
-                            .foregroundColor(.white.opacity(0.4))
+                            .font(AppTheme.caption)
+                            .foregroundColor(AppTheme.textSecondary)
                     }
                 }
                 Spacer()
@@ -359,7 +359,7 @@ struct ExecutionOutputView: View {
 
             if let err = errorMessage {
                 Text("Error: \(err)")
-                    .font(BrutalistTheme.monoSM)
+                    .font(AppTheme.caption)
                     .foregroundColor(.red)
                     .padding(.horizontal)
             }
@@ -437,11 +437,11 @@ struct ProjectsTabView: View {
                 VStack(spacing: 8) {
                     Spacer()
                     Text("No projects yet.")
-                        .font(BrutalistTheme.monoSM)
-                        .foregroundColor(.white.opacity(0.4))
+                        .font(AppTheme.caption)
+                        .foregroundColor(AppTheme.textSecondary)
                     Text("Add a project folder to enable todo execution.")
-                        .font(BrutalistTheme.monoSM)
-                        .foregroundColor(.white.opacity(0.25))
+                        .font(AppTheme.caption)
+                        .foregroundColor(AppTheme.textSecondary.opacity(0.6))
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
@@ -452,10 +452,10 @@ struct ProjectsTabView: View {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(project.name)
-                                        .font(BrutalistTheme.monoMD)
+                                        .font(AppTheme.body)
                                     Text(project.localPath)
-                                        .font(BrutalistTheme.monoSM)
-                                        .foregroundColor(.white.opacity(0.4))
+                                        .font(AppTheme.caption)
+                                        .foregroundColor(AppTheme.textSecondary)
                                         .lineLimit(1)
                                 }
                                 Spacer()
@@ -475,7 +475,7 @@ struct ProjectsTabView: View {
                                                 .foregroundColor(.black)
                                                 .padding(.horizontal, 6)
                                                 .padding(.vertical, 2)
-                                                .background(BrutalistTheme.neonGreen)
+                                                .background(AppTheme.green)
                                                 .cornerRadius(4)
                                         }
                                     }
@@ -514,7 +514,7 @@ struct AddProjectSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("ADD PROJECT").font(BrutalistTheme.monoLG)
+            Text("ADD PROJECT").font(AppTheme.heading)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Name").font(.caption).foregroundStyle(.secondary)
@@ -706,7 +706,7 @@ struct SettingsTabView: View {
                 GroupBox("Display") {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle("Show Ambient Widget", isOn: $appState.showAmbientWidget)
-                            .font(BrutalistTheme.monoMD)
+                            .font(AppTheme.body)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Pill Appearance").font(.caption).foregroundStyle(.secondary)
                             Picker("", selection: $appState.appearanceMode) {
@@ -795,7 +795,7 @@ struct SettingsTabView: View {
                             HStack(spacing: 8) {
                                 Text("hot \(config.keyword)")
                                     .font(.system(.body, design: .monospaced))
-                                    .foregroundColor(BrutalistTheme.neonGreen)
+                                    .foregroundColor(AppTheme.green)
                                 Text("→ \(config.action.displayName)")
                                     .font(.system(.caption, design: .monospaced))
                                     .foregroundColor(.secondary)
@@ -817,7 +817,7 @@ struct SettingsTabView: View {
                             showingAddHotWord = true
                         }
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(BrutalistTheme.neonGreen)
+                        .foregroundColor(AppTheme.green)
                     }
                     .padding(8)
                 }
@@ -925,7 +925,7 @@ struct TabHeader<Trailing: View>: View {
     var body: some View {
         HStack {
             Text(title)
-                .font(BrutalistTheme.monoLG)
+                .font(AppTheme.heading)
                 .foregroundColor(.white)
             Spacer()
             trailing()

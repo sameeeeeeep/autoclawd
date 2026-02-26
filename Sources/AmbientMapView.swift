@@ -13,7 +13,7 @@ struct VoiceDot: Identifiable {
     static let mock: [VoiceDot] = [
         VoiceDot(id: "me",
                  name: "You",
-                 color: BrutalistTheme.neonGreen,
+                 color: AppTheme.green,
                  position: CGPoint(x: 0.50, y: 0.58),
                  isSpeaking: false,
                  isMe: true),
@@ -73,7 +73,7 @@ struct AmbientMapView: View {
 
             // Room name
             Text(appState.locationName.uppercased())
-                .font(BrutalistTheme.monoSM)
+                .font(AppTheme.caption)
                 .foregroundColor(.white.opacity(0.35))
                 .padding(.top, 8)
                 .padding(.leading, 10)
