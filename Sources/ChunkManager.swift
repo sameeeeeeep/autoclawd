@@ -372,7 +372,11 @@ final class ChunkManager: ObservableObject {
         }
 
         // Resolve SSID on main actor, then do SQLite work off main actor
-        let (currentSID, ssid) = await MainActor.run { (self.currentSessionID, self.locationService.currentSSID) }
+        let (currentSID, ssid, speakerName) = await MainActor.run {
+            (self.currentSessionID,
+             self.locationService.currentSSID,
+             self.appState?.currentSpeakerName)
+        }
         let placeID = ssid.flatMap { SessionStore.shared.findPlace(wifiSSID: $0)?.id }
         if let sid = currentSID, let pid = placeID {
             SessionStore.shared.updateSessionPlace(id: sid, placeID: pid)
@@ -384,7 +388,8 @@ final class ChunkManager: ObservableObject {
             durationSeconds: duration,
             audioFilePath: audioURL.path,
             sessionID: currentSID,
-            sessionChunkSeq: sessionChunkSeq
+            sessionChunkSeq: sessionChunkSeq,
+            speakerName: speakerName
         )
 
         await MainActor.run {
