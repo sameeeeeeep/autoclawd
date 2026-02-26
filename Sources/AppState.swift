@@ -91,6 +91,7 @@ final class AppState: ObservableObject {
     private(set) var structuredTodoStore: StructuredTodoStore
     let locationService = LocationService.shared
     private let ollama = OllamaService()
+    private lazy var todoFramingService = TodoFramingService(ollama: ollama)
     private let worldModelService = WorldModelService()
     private let todoService = TodoService()
     private var transcriptionService: (any Transcribable)?
@@ -542,7 +543,21 @@ final class AppState: ObservableObject {
                     structuredTodoStore.setProject(id: inserted.id, projectID: project.id)
                 }
                 refreshStructuredTodos()
-                Log.info(.todo, "Hot-word added todo: \(match.payload)")
+                Log.info(.todo, "Hot-word added todo (raw): \(match.payload)")
+
+                // Frame the task in background — updates content silently when done
+                if let project = resolvedProject {
+                    let todoID = inserted.id
+                    let raw = match.payload
+                    Task { [weak self] in
+                        guard let self else { return }
+                        let framed = await todoFramingService.frame(rawPayload: raw, for: project)
+                        guard framed != raw else { return }
+                        structuredTodoStore.updateContent(id: todoID, content: framed)
+                        await MainActor.run { self.refreshStructuredTodos() }
+                        Log.info(.todo, "Hot-word todo framed: \(framed)")
+                    }
+                }
 
             case .addWorldModelInfo:
                 if let project = resolvedProject, let pid = UUID(uuidString: project.id) {
