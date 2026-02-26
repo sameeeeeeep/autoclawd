@@ -13,7 +13,7 @@ final class NowPlayingService: ObservableObject {
     private var observers: [NSObjectProtocol] = []
 
     init() { start() }
-    deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
+    deinit { observers.forEach { DistributedNotificationCenter.default().removeObserver($0) } }
 
     private func start() {
         let dnc = DistributedNotificationCenter.default()
