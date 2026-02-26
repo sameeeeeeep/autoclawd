@@ -41,7 +41,7 @@ struct UserProfileChatView: View {
 
                 Button(isDone ? "Done" : "Send") { sendMessage() }
                     .buttonStyle(.plain)
-                    .foregroundColor(BrutalistTheme.neonGreen)
+                    .foregroundColor(AppTheme.green)
                     .disabled(inputText.isEmpty || isLoading)
             }
             .padding(10)
@@ -90,7 +90,7 @@ struct ChatBubble: View {
                 .font(.system(size: 11, design: .monospaced))
                 .padding(8)
                 .background(role == "user"
-                    ? BrutalistTheme.neonGreen.opacity(0.15)
+                    ? AppTheme.green.opacity(0.15)
                     : Color.white.opacity(0.05))
                 .cornerRadius(6)
                 .foregroundColor(.white.opacity(0.9))

@@ -7,7 +7,7 @@ enum PersonColor: Int, CaseIterable, Codable {
 
     var color: Color {
         switch self {
-        case .neonGreen: return BrutalistTheme.neonGreen
+        case .neonGreen: return AppTheme.green
         case .cyan:      return Color(red: 0.0, green: 0.85, blue: 1.0)
         case .orange:    return Color(red: 1.0, green: 0.65, blue: 0.0)
         case .purple:    return Color(red: 0.72, green: 0.38, blue: 1.0)

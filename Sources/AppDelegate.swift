@@ -85,7 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appState: appState,
             onOpenPanel: { [weak self] in self?.showMainPanel() },
             onTogglePause: { [weak self] in self?.appState.toggleListening() },
-            onOpenLogs: { [weak self] in self?.showMainPanel(tab: .logs) },
+            onOpenLogs: { [weak self] in self?.showMainPanel() },
             onToggleMinimal: { [weak self] in self?.toggleMinimal() }
         )
         pill.setContent(content)
@@ -131,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func menuOpenPanel()    { showMainPanel() }
     @objc private func menuTogglePause()  { appState.toggleListening() }
-    @objc private func menuViewLogs()     { showMainPanel(tab: .logs) }
+    @objc private func menuViewLogs()     { showMainPanel() }
     @objc private func menuAmbient()      { appState.pillMode = .ambientIntelligence; if !appState.isListening { appState.startListening() } }
     @objc private func menuSearch()       { appState.pillMode = .aiSearch;            if !appState.isListening { appState.startListening() } }
     @objc private func menuTranscribe()   { appState.pillMode = .transcription;       if !appState.isListening { appState.startListening() } }
@@ -170,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Main Panel
 
-    func showMainPanel(tab: PanelTab = .todos) {
+    func showMainPanel(tab: PanelTab = .world) {
         if let panel = mainPanel, panel.isVisible {
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)

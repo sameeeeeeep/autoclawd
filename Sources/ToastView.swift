@@ -7,13 +7,13 @@ struct ToastView: View {
         HStack(spacing: 6) {
             // Level badge
             Text(badge)
-                .font(BrutalistTheme.monoSM)
+                .font(AppTheme.caption)
                 .foregroundColor(badgeColor)
 
             // Message — one line, truncated
             Text(entry.message)
-                .font(BrutalistTheme.monoSM)
-                .foregroundColor(.white.opacity(0.85))
+                .font(AppTheme.caption)
+                .foregroundColor(AppTheme.textPrimary)
                 .lineLimit(1)
                 .truncationMode(.tail)
 
@@ -21,8 +21,8 @@ struct ToastView: View {
 
             // Component tag
             Text("[\(entry.component.rawValue)]")
-                .font(BrutalistTheme.monoSM)
-                .foregroundColor(.white.opacity(0.35))
+                .font(AppTheme.caption)
+                .foregroundColor(AppTheme.textSecondary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 0)
@@ -46,7 +46,7 @@ struct ToastView: View {
     private var badgeColor: Color {
         switch entry.level {
         case .warn, .error: return .red
-        default:            return BrutalistTheme.neonGreen
+        default:            return AppTheme.green
         }
     }
 

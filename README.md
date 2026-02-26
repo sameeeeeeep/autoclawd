@@ -33,7 +33,8 @@ All intelligence runs locally on your Mac. No subscriptions. No prompting. No fr
 ## How It Works
 
 ```
-Mic → Transcription → LLM Extraction → World Model + Todos → Execution
+Mic → Transcription → LLM Extraction → World Model + Todos → AI Framing → Execution
+Hot Word Trigger → Project Detection → Todo Creation → AI Framing → Auto-execution
 ```
 
 **1. Listen** — Always-on mic captures audio in 30-second chunks. Nothing leaves your machine by default.
@@ -43,6 +44,16 @@ Mic → Transcription → LLM Extraction → World Model + Todos → Execution
 **3. Extract** — Local Llama 3.2 3B classifies ideas into facts, todos, preferences, and world model updates across two passes.
 
 **4. Execute** — Todos are tagged with priority, assigned to projects, and run via `claude --print` in the right folder — streamed output, no switching context.
+
+---
+
+## Features
+
+- **Hot-word detection** — Say `hot <keyword> for project <N> <task>` to create and optionally auto-execute a todo by voice
+- **AI todo framing** — Raw speech is cleaned into clear task titles using the project's README and CLAUDE.md as context (Ollama, non-blocking)
+- **Execute All** — Multi-select todos and run in parallel or series with live toast feedback
+- **Transcript → Todo** — Any transcript row converts to a structured todo with one click and project assignment
+- **Per-project world model** — Each project has scoped read/write to the world model
 
 ---
 
@@ -71,6 +82,7 @@ On first launch, the setup assistant checks for Ollama and walks through mic + a
 | `⌃Z` | Toggle microphone |
 | `⌃1 / 2 / 3` | Switch mode (Ambient / Search / Transcription) |
 | Right-click pill | Full context menu |
+| `hot <kw> for project <N> <task>` | Create todo via voice |
 
 ---
 <br />
@@ -126,6 +138,12 @@ This is the transition from *AI as a tool you pick up* to *AI as infrastructure 
 │       ├──▶ StructuredTodoStore (SQLite)              │
 │       └──▶ ExtractionStore    (SQLite)               │
 │                                                      │
+│  HotWordDetector                                     │
+│    "hot <kw> for project <N> …" triggers todo        │
+│                                                      │
+│  TodoFramingService (Ollama)                         │
+│    reads README.md + CLAUDE.md → clean titles        │
+│                                                      │
 │  ClaudeCodeRunner                                    │
 │    claude --print <todo> in project folder           │
 │    ANTHROPIC_API_KEY injected, streamed output       │
@@ -151,9 +169,13 @@ This is the transition from *AI as a tool you pick up* to *AI as infrastructure 
 - [ ] Phone integration — call transcription via Bluetooth mic
 - [ ] Screen context — optional periodic screenshot for richer extraction
 - [ ] MCP server — expose AutoClawd memory to any MCP-compatible AI tool
-- [ ] Auto-project matching — link extracted todos to projects by keyword/path inference
+- [x] Auto-project matching — link todos to projects by keyword/path
 - [ ] Multi-language transcription
 - [ ] Execution history and re-run support
+- [ ] Scheduled todos — assign times, show on World calendar
+- [ ] Location/people tagging UI in World view
+- [ ] Dark mode
+- [ ] Custom font picker
 
 ---
 
