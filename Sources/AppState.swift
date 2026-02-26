@@ -390,48 +390,47 @@ final class AppState: ObservableObject {
 
     func executeSelectedTodos(ids: Set<String>, mode: ExecutionMode) async {
         let todos = structuredTodos.filter { ids.contains($0.id) }
+        guard !todos.isEmpty else { return }
         let apiKey = SettingsManager.shared.anthropicAPIKey
+
+        let runnable = todos.filter { todo in projects.first(where: { $0.id == todo.projectID }) != nil }
+        let skipped  = todos.count - runnable.count
+        if skipped > 0 {
+            Log.warn(.system, "⚠️ \(skipped) todo(s) skipped — no project assigned")
+        }
+        Log.warn(.system, "⚡ Executing \(runnable.count) todo(s) [\(mode.displayName)]…")
+
+        // Helper: run one todo, collect output, mark executed
+        func runOne(_ todo: StructuredTodo, project: Project) async {
+            var lines: [String] = []
+            do {
+                for try await line in ClaudeCodeRunner().run(
+                    todo: todo, project: project,
+                    apiKey: apiKey.isEmpty ? nil : apiKey
+                ) {
+                    lines.append(line)
+                    Log.info(.system, "[\(todo.content.prefix(20))] \(line)")
+                }
+                let output = lines.joined(separator: "\n")
+                markTodoExecuted(id: todo.id, output: output)
+                Log.warn(.system, "✓ Done: \(todo.content.prefix(40))")
+            } catch {
+                Log.warn(.system, "❌ Failed '\(todo.content.prefix(30))': \(error.localizedDescription)")
+            }
+        }
 
         switch mode {
         case .parallel:
             await withTaskGroup(of: Void.self) { group in
                 for todo in todos {
-                    guard let project = projects.first(where: { $0.id == todo.projectID }) else {
-                        Log.warn(.system, "Todo '\(todo.content.prefix(30))' has no project assigned, skipping")
-                        continue
-                    }
-                    group.addTask {
-                        do {
-                            for try await line in ClaudeCodeRunner().run(
-                                todo: todo,
-                                project: project,
-                                apiKey: apiKey.isEmpty ? nil : apiKey
-                            ) {
-                                Log.info(.system, "[parallel exec] \(line)")
-                            }
-                        } catch {
-                            Log.warn(.system, "[parallel exec error] \(error)")
-                        }
-                    }
+                    guard let project = projects.first(where: { $0.id == todo.projectID }) else { continue }
+                    group.addTask { await runOne(todo, project: project) }
                 }
             }
         case .series:
             for todo in todos {
-                guard let project = projects.first(where: { $0.id == todo.projectID }) else {
-                    Log.warn(.system, "Todo '\(todo.content.prefix(30))' has no project assigned, skipping")
-                    continue
-                }
-                do {
-                    for try await line in ClaudeCodeRunner().run(
-                        todo: todo,
-                        project: project,
-                        apiKey: apiKey.isEmpty ? nil : apiKey
-                    ) {
-                        Log.info(.system, "[series exec] \(line)")
-                    }
-                } catch {
-                    Log.warn(.system, "[series exec error] \(error)")
-                }
+                guard let project = projects.first(where: { $0.id == todo.projectID }) else { continue }
+                await runOne(todo, project: project)
             }
         }
     }
