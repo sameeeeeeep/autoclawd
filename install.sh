@@ -10,6 +10,11 @@
 
 set -euo pipefail
 
+# Always run from the directory containing this script,
+# so it works regardless of where the user calls it from.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 APP_NAME="AutoClawd"
 APP_BUNDLE="${APP_NAME}.app"
 BUILD_DIR="build"
@@ -27,9 +32,6 @@ warn()    { echo -e "${YELLOW}⚠${RESET} $*"; }
 die()     { echo -e "${RED}✗${RESET} $*" >&2; exit 1; }
 
 # ── pre-flight ────────────────────────────────────────────────────────────────
-
-# Must be run from the project root (where Makefile lives)
-[[ -f "Makefile" ]] || die "Run this script from the AutoClawd project root."
 
 NO_BUILD=false
 for arg in "$@"; do [[ "$arg" == "--no-build" ]] && NO_BUILD=true; done
