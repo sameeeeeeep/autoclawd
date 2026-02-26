@@ -137,6 +137,19 @@ struct AmbientMapView: View {
                                 dragStarts.removeValue(forKey: person.id)
                             }
                     )
+                    .contextMenu {
+                        if person.isMusic {
+                            if appState.shazamEnabled {
+                                Button("✓  Detect external music") {
+                                    appState.shazamEnabled = false
+                                }
+                            } else {
+                                Button("    Detect external music") {
+                                    appState.shazamEnabled = true
+                                }
+                            }
+                        }
+                    }
                 }
             }
             .padding(16)
