@@ -1,6 +1,28 @@
 import AppKit
 import SwiftUI
 
+// MARK: - Appearance Wrapper
+// Reads @AppStorage so the color scheme re-applies whenever the setting changes.
+private struct AppearanceWrapper: View {
+    @AppStorage("color_scheme_setting") private var schemeSetting: String = "system"
+    let appState: AppState
+
+    private var preferredScheme: ColorScheme? {
+        switch ColorSchemeSetting(rawValue: schemeSetting) ?? .system {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+
+    var body: some View {
+        MainPanelView(appState: appState)
+            .preferredColorScheme(preferredScheme)
+    }
+}
+
+// MARK: - MainPanelWindow
+
 final class MainPanelWindow: NSWindow {
 
     init(appState: AppState) {
@@ -16,7 +38,6 @@ final class MainPanelWindow: NSWindow {
         minSize = NSSize(width: 700, height: 480)
         center()
 
-        let panel = MainPanelView(appState: appState)
-        contentView = NSHostingView(rootView: panel)
+        contentView = NSHostingView(rootView: AppearanceWrapper(appState: appState))
     }
 }
