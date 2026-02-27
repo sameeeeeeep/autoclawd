@@ -15,7 +15,7 @@ struct IntelligenceConsolidatedView: View {
     @State private var subTab: IntelligenceSubTab = .extractions
     @State private var expandedChunk: Int? = nil
     @State private var worldModelText: String = ""
-    @State private var logContent: String = ""
+    @State private var logEntries: [LogEntry] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,6 +41,16 @@ struct IntelligenceConsolidatedView: View {
                 if subTab == .extractions {
                     extractionActions
                         .padding(.trailing, AppTheme.lg)
+                } else if subTab == .logs {
+                    Button {
+                        loadLogs()
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                            .font(AppTheme.caption)
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .controlSize(.small)
+                    .padding(.trailing, AppTheme.lg)
                 }
             }
             .padding(.top, AppTheme.md)
@@ -138,31 +148,89 @@ struct IntelligenceConsolidatedView: View {
     // MARK: - Logs Content
 
     private var logsContent: some View {
-        ScrollView {
-            Text(logContent.isEmpty ? "No logs yet." : logContent)
-                .font(AppTheme.mono)
-                .foregroundColor(logContent.isEmpty ? AppTheme.textSecondary : AppTheme.textPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(AppTheme.lg)
-                .textSelection(.enabled)
+        Group {
+            if logEntries.isEmpty {
+                emptyState(icon: "doc.text", message: "No logs yet.")
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(logEntries.indices, id: \.self) { i in
+                            logRow(logEntries[i])
+                            if i < logEntries.count - 1 {
+                                Divider().opacity(0.4)
+                            }
+                        }
+                    }
+                    .padding(AppTheme.md)
+                }
+            }
         }
         .background(AppTheme.surface)
     }
 
-    private func loadLogs() {
-        // Try common AutoClawd log paths
-        let candidates: [URL] = [
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".autoclawd/autoclawd.log"),
-            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-                .first?.appendingPathComponent("AutoClawd/autoclawd.log") ?? URL(fileURLWithPath: "/dev/null")
-        ]
-        for url in candidates {
-            if let content = try? String(contentsOf: url, encoding: .utf8), !content.isEmpty {
-                logContent = content
-                return
-            }
+    private func logRow(_ entry: LogEntry) -> some View {
+        HStack(alignment: .top, spacing: AppTheme.sm) {
+            Text(shortTime(entry.timestamp))
+                .font(AppTheme.mono)
+                .foregroundColor(AppTheme.textDisabled)
+                .frame(width: 60, alignment: .leading)
+
+            Text(entry.level.rawValue)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(levelColor(entry.level))
+                .frame(width: 36, alignment: .leading)
+
+            Text("[\(entry.component.rawValue)]")
+                .font(AppTheme.mono)
+                .foregroundColor(AppTheme.textSecondary)
+                .frame(width: 80, alignment: .leading)
+
+            Text(entry.message)
+                .font(AppTheme.mono)
+                .foregroundColor(AppTheme.textPrimary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.vertical, AppTheme.xs)
+        .padding(.horizontal, AppTheme.sm)
+    }
+
+    private func levelColor(_ level: LogLevel) -> Color {
+        switch level {
+        case .error: return AppTheme.destructive
+        case .warn:  return .orange
+        case .info:  return AppTheme.textSecondary
+        case .debug: return AppTheme.textDisabled
+        }
+    }
+
+    private func shortTime(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: date)
+    }
+
+    private func loadLogs() {
+        // 1. In-memory snapshot (always available while app is running)
+        let entries = AutoClawdLogger.shared.snapshot(limit: 500)
+        if !entries.isEmpty {
+            logEntries = entries.reversed()
+            return
+        }
+        // 2. Fallback: parse today's log file
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        let dateStr = f.string(from: Date())
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".autoclawd/logs/autoclawd-\(dateStr).log")
+        guard let raw = try? String(contentsOf: url, encoding: .utf8), !raw.isEmpty else { return }
+        logEntries = raw.components(separatedBy: "\n")
+            .filter { !$0.isEmpty }
+            .reversed()
+            .map { line in
+                LogEntry(timestamp: Date(), level: .info, component: .system, message: line)
+            }
     }
 
     // MARK: - Empty State
