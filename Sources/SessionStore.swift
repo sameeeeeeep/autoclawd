@@ -83,6 +83,65 @@ final class SessionStore: @unchecked Sendable {
         return id
     }
 
+    /// All labelled places (excludes empty-name dismissed sentinels).
+    func allPlaces() -> [PlaceRecord] {
+        let sql = "SELECT id, wifi_ssid, name FROM places WHERE name != '' ORDER BY name ASC;"
+        return queue.sync { queryPlaces(sql, args: []) }
+    }
+
+    /// Sessions for a specific place, most recent first.
+    func sessions(forPlaceID placeID: String, limit: Int = 100) -> [SessionRecord] {
+        let sql = """
+            SELECT s.id, s.started_at, s.ended_at, s.wifi_ssid,
+                   s.place_id, p.name, s.transcript_snippet
+            FROM sessions s
+            LEFT JOIN places p ON s.place_id = p.id
+            WHERE s.place_id = ?
+            ORDER BY s.started_at DESC
+            LIMIT ?;
+        """
+        return queue.sync { querySessions(sql, args: [placeID, String(limit)]) }
+    }
+
+    /// People IDs linked to a specific session.
+    func peopleIDs(forSessionID sessionID: String) -> [String] {
+        let sql = "SELECT person_id FROM session_people WHERE session_id = ?;"
+        return queue.sync {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, sessionID, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            var ids: [String] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                ids.append(String(cString: sqlite3_column_text(stmt, 0)))
+            }
+            return ids
+        }
+    }
+
+    /// People names linked to any session at a given place.
+    func peopleNames(forPlaceID placeID: String) -> [String] {
+        let sql = """
+            SELECT DISTINCT pe.name
+            FROM session_people sp
+            JOIN sessions s ON sp.session_id = s.id
+            JOIN people pe ON sp.person_id = pe.id
+            WHERE s.place_id = ?
+            ORDER BY pe.name ASC;
+        """
+        return queue.sync {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, placeID, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            var names: [String] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                names.append(String(cString: sqlite3_column_text(stmt, 0)))
+            }
+            return names
+        }
+    }
+
     // MARK: - Recent Sessions
 
     func recentSessions(limit: Int = 50) -> [SessionRecord] {

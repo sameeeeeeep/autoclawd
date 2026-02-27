@@ -1,72 +1,216 @@
 import SwiftUI
 
+// MARK: - View Mode
+
+private enum PipelineViewMode: String, CaseIterable {
+    case pipeline = "Pipeline"
+    case rawLogs  = "Raw Logs"
+}
+
 // MARK: - Status Color Helper
 
 private func statusColor(_ status: String, theme: ThemePalette) -> Color {
     switch status {
-    case "completed":        return theme.accent
-    case "ongoing",
-         "pending_approval": return theme.warning
-    case "needs_input":      return theme.secondary
-    default:                 return theme.textTertiary
+    case "completed", "accepted", "relevant":
+        return theme.accent
+    case "ongoing", "pending":
+        return theme.warning
+    case "pending_approval":
+        return theme.warning
+    case "needs_input":
+        return theme.secondary
+    case "dismissed", "nonrelevant":
+        return theme.error
+    default:
+        return theme.textTertiary
     }
 }
-
-// MARK: - Lookup Tables
-
-private let peopleNames: [String: String] = [
-    "you": "You", "mukul": "Mukul", "priya": "Priya",
-    "arjun": "Arjun", "neha": "Neha",
-]
-
-private let projectNames: [String: String] = [
-    "autoclawd": "AutoClawd", "trippy": "Trippy AI", "personal": "Personal",
-]
-
-private let placeNames: [String: String] = [
-    "office": "\u{1F3E2} Office", "home": "\u{1F3E0} Home",
-    "cafe": "\u{2615} Caf\u{00E9}", "gym": "\u{1F4AA} Gym",
-]
 
 // MARK: - LogsPipelineView
 
 struct LogsPipelineView: View {
     @ObservedObject var appState: AppState
 
+    @State private var viewMode: PipelineViewMode = .pipeline
     @State private var filterProject: String? = nil
-    @State private var filterPlace: String? = nil
-    @State private var filterStatus: String? = nil
+    @State private var filterBucket: ExtractionBucket? = nil
+    @State private var filterState: String? = nil
     @State private var selectedRowID: String? = nil
     @State private var expandedStage: String? = nil
+    @State private var logEntries: [LogEntry] = []
+    @State private var transcripts: [TranscriptRecord] = []
 
-    private let projects = [
-        ("autoclawd", "AutoClawd"),
-        ("trippy", "Trippy AI"),
-        ("personal", "Personal"),
-    ]
-    private let places = [
-        ("office", "\u{1F3E2} Office"),
-        ("home", "\u{1F3E0} Home"),
-        ("cafe", "\u{2615} Caf\u{00E9}"),
-    ]
-    private let statuses = [
-        "completed", "ongoing", "pending_approval", "needs_input", "upcoming",
-    ]
+    // MARK: - Derived Data
 
-    private var allGroups: [PipelineGroup] { PipelineGroup.mockData() }
+    /// Build pipeline groups from real extraction items, paired with transcripts.
+    private var pipelineGroups: [PipelineGroup] {
+        let items = appState.extractionItems
+        guard !items.isEmpty else { return [] }
+
+        // Group extraction items by chunkIndex
+        let grouped = Dictionary(grouping: items, by: \.chunkIndex)
+        let sortedChunks = grouped.keys.sorted(by: >)
+
+        return sortedChunks.compactMap { chunkIdx -> PipelineGroup? in
+            guard let chunkItems = grouped[chunkIdx], !chunkItems.isEmpty else { return nil }
+
+            // Use the first item's timestamp as representative
+            let representative = chunkItems.first!
+            let timeStr = Self.timeFormatter.string(from: representative.timestamp)
+            let timeSeconds = Calendar.current.component(.hour, from: representative.timestamp) * 3600
+                + Calendar.current.component(.minute, from: representative.timestamp) * 60
+
+            // Find matching transcript by timestamp proximity (within 60 seconds)
+            let matchingTranscripts = transcripts.filter { tr in
+                abs(tr.timestamp.timeIntervalSince(representative.timestamp)) < 60
+            }
+
+            // Build raw chunks from matching transcripts
+            let rawChunks: [RawChunk]
+            if matchingTranscripts.isEmpty {
+                // Use the source phrase from the extraction item as a fallback
+                rawChunks = [
+                    RawChunk(
+                        id: "chunk-\(chunkIdx)",
+                        duration: "",
+                        text: representative.sourcePhrase
+                    )
+                ]
+            } else {
+                rawChunks = matchingTranscripts.map { tr in
+                    let label = tr.sessionID.map { "\($0.prefix(6))" } ?? "t\(tr.id)"
+                    let dur = tr.durationSeconds > 0 ? "\(tr.durationSeconds)s" : ""
+                    return RawChunk(id: label, duration: dur, text: tr.text)
+                }
+            }
+
+            // Derive cleaning info from extraction items
+            let cleaningTags: [String] = {
+                var tags: [String] = []
+                if rawChunks.count > 1 {
+                    tags.append("\(rawChunks.count) chunks merged")
+                }
+                let dismissed = chunkItems.filter { $0.isDismissed }
+                if !dismissed.isEmpty {
+                    tags.append("\(dismissed.count) filtered")
+                }
+                let accepted = chunkItems.filter { $0.isAccepted }
+                if !accepted.isEmpty {
+                    tags.append("\(accepted.count) accepted")
+                }
+                return tags
+            }()
+
+            // Cleaned text: combine accepted item contents
+            let acceptedItems = chunkItems.filter { $0.isAccepted }
+            let cleanedText = acceptedItems.isEmpty
+                ? nil
+                : acceptedItems.map(\.content).joined(separator: " ")
+
+            // Analysis info from extraction items
+            let analysisTags: [String] = {
+                var tags: [String] = []
+                let types = Set(chunkItems.map(\.type))
+                for t in types { tags.append(t.rawValue) }
+                let buckets = Set(chunkItems.map(\.bucket))
+                for b in buckets { tags.append(b.displayName) }
+                return tags
+            }()
+
+            // Try to find a project for this group
+            let analysisProject: String? = {
+                // Check if any matching transcript has a projectID
+                if let pid = matchingTranscripts.first(where: { $0.projectID != nil })?.projectID {
+                    return appState.projects.first(where: { $0.id == pid.uuidString })?.name
+                }
+                return nil
+            }()
+
+            let analysisText = acceptedItems.isEmpty
+                ? nil
+                : "\(acceptedItems.count) extraction(s): " + acceptedItems.map(\.content).prefix(2).joined(separator: "; ")
+
+            // Build pipeline tasks from extraction items
+            let tasks: [PipelineTask] = chunkItems.map { item in
+                let taskStatus: TaskStatus = {
+                    switch item.effectiveState {
+                    case "relevant", "accepted":
+                        return item.applied ? .completed : .pending_approval
+                    case "nonrelevant", "dismissed":
+                        return .filtered
+                    default:
+                        return .ongoing
+                    }
+                }()
+
+                let resultSteps: [String] = {
+                    var steps: [String] = []
+                    steps.append("Source: \"\(String(item.sourcePhrase.prefix(60)))\"")
+                    steps.append("Type: \(item.type.rawValue), Bucket: \(item.bucket.displayName)")
+                    if let priority = item.priority {
+                        steps.append("Priority: \(priority)")
+                    }
+                    steps.append("Model decision: \(item.modelDecision)")
+                    if let override = item.userOverride {
+                        steps.append("User override: \(override)")
+                    }
+                    if item.applied {
+                        steps.append("Applied to world model/todos")
+                    }
+                    return steps
+                }()
+
+                return PipelineTask(
+                    id: String(item.id.prefix(10)),
+                    title: item.content,
+                    prompt: item.sourcePhrase,
+                    project: analysisProject ?? item.bucket.displayName,
+                    mode: item.userOverride != nil ? .user : .auto,
+                    status: taskStatus,
+                    skill: nil,
+                    workflow: nil,
+                    workflowSteps: [],
+                    missingConnection: nil,
+                    pendingQuestion: nil,
+                    result: TaskResult(
+                        steps: resultSteps,
+                        finalStatus: item.effectiveState,
+                        duration: item.priorityLabel
+                    )
+                )
+            }
+
+            return PipelineGroup(
+                id: "chunk-\(chunkIdx)",
+                rawChunks: rawChunks,
+                cleaningTags: cleaningTags,
+                cleanedText: cleanedText,
+                analysisTags: analysisTags,
+                analysisProject: analysisProject,
+                analysisText: analysisText,
+                tasks: tasks,
+                placeTag: nil,
+                personTag: matchingTranscripts.first?.speakerName,
+                time: timeStr,
+                timeSeconds: timeSeconds
+            )
+        }
+    }
 
     private var filteredGroups: [PipelineGroup] {
-        allGroups.filter { group in
+        pipelineGroups.filter { group in
             if let fp = filterProject {
-                let groupProject = group.analysisProject ?? group.tasks.first?.project
-                if groupProject != fp { return false }
+                if group.analysisProject != fp { return false }
             }
-            if let fpl = filterPlace {
-                if group.placeTag != fpl { return false }
+            if let fb = filterBucket {
+                // Check if any task in the group references this bucket
+                let bucketName = fb.displayName
+                let hasBucket = group.analysisTags.contains(bucketName)
+                if !hasBucket { return false }
             }
-            if let fs = filterStatus {
-                let hasStatus = group.tasks.contains { $0.status.rawValue == fs }
-                if !hasStatus && !group.tasks.isEmpty { return false }
+            if let fs = filterState {
+                let hasState = group.tasks.contains { $0.status.rawValue == fs }
+                if !hasState && !group.tasks.isEmpty { return false }
                 if group.tasks.isEmpty && fs != "filtered" { return false }
             }
             return true
@@ -74,17 +218,33 @@ struct LogsPipelineView: View {
     }
 
     private var anyFilterActive: Bool {
-        filterProject != nil || filterPlace != nil || filterStatus != nil
+        filterProject != nil || filterBucket != nil || filterState != nil
     }
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f
+    }()
+
+    // MARK: - Body
 
     var body: some View {
         let theme = ThemeManager.shared.current
         VStack(spacing: 0) {
             filterBar
             HStack(spacing: 0) {
-                pipelineTable
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if selectedRowID != nil {
+                Group {
+                    switch viewMode {
+                    case .pipeline:
+                        pipelineContent
+                    case .rawLogs:
+                        rawLogsContent
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if selectedRowID != nil, viewMode == .pipeline {
                     detailSidebar
                         .frame(width: 300)
                         .transition(.move(edge: .trailing))
@@ -92,6 +252,20 @@ struct LogsPipelineView: View {
             }
         }
         .background(theme.isDark ? Color.black.opacity(0.05) : Color.black.opacity(0.01))
+        .onAppear { loadData() }
+        .task {
+            // Auto-refresh every 2 seconds
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                loadData()
+            }
+        }
+    }
+
+    private func loadData() {
+        appState.refreshExtractionItems()
+        transcripts = appState.recentTranscripts()
+        logEntries = AutoClawdLogger.shared.snapshot(limit: 500).reversed()
     }
 
     // MARK: - Filter Bar
@@ -104,75 +278,99 @@ struct LogsPipelineView: View {
                 Text("Pipeline Logs")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundColor(theme.textPrimary)
-                TagView(type: .status, label: "\(filteredGroups.count) groups", small: true)
+
+                // View mode picker
+                Picker("", selection: $viewMode) {
+                    ForEach(PipelineViewMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 160)
+
+                if viewMode == .pipeline {
+                    TagView(type: .status, label: "\(filteredGroups.count) groups", small: true)
+                } else {
+                    TagView(type: .status, label: "\(logEntries.count) entries", small: true)
+                }
+
                 Spacer()
+
+                // Extraction actions
+                if viewMode == .pipeline {
+                    extractionActions
+                }
             }
 
-            // Filter row
-            HStack(spacing: 6) {
-                Text("Filter:")
-                    .font(.system(size: 8, weight: .regular))
-                    .foregroundColor(theme.textTertiary)
-                    .padding(.trailing, 2)
+            // Filter row (only for pipeline mode)
+            if viewMode == .pipeline {
+                HStack(spacing: 6) {
+                    Text("Filter:")
+                        .font(.system(size: 8, weight: .regular))
+                        .foregroundColor(theme.textTertiary)
+                        .padding(.trailing, 2)
 
-                // Project filters
-                ForEach(projects, id: \.0) { key, label in
-                    filterChip(
-                        label: label,
-                        isActive: filterProject == key,
-                        activeColor: theme.tagProject
-                    ) {
-                        filterProject = filterProject == key ? nil : key
+                    // Project filters (from real projects)
+                    ForEach(appState.projects, id: \.id) { project in
+                        filterChip(
+                            label: project.name,
+                            isActive: filterProject == project.name,
+                            activeColor: theme.tagProject
+                        ) {
+                            filterProject = filterProject == project.name ? nil : project.name
+                        }
                     }
-                }
 
-                filterSeparator
-
-                // Place filters
-                ForEach(places, id: \.0) { key, label in
-                    filterChip(
-                        label: label,
-                        isActive: filterPlace == key,
-                        activeColor: theme.tagPlace
-                    ) {
-                        filterPlace = filterPlace == key ? nil : key
+                    if !appState.projects.isEmpty {
+                        filterSeparator
                     }
-                }
 
-                filterSeparator
-
-                // Status filters
-                ForEach(statuses, id: \.self) { status in
-                    filterChip(
-                        label: status.replacingOccurrences(of: "_", with: " "),
-                        isActive: filterStatus == status,
-                        activeColor: statusColor(status, theme: theme)
-                    ) {
-                        filterStatus = filterStatus == status ? nil : status
+                    // Bucket filters
+                    ForEach(ExtractionBucket.allCases, id: \.self) { bucket in
+                        filterChip(
+                            label: bucket.displayName,
+                            isActive: filterBucket == bucket,
+                            activeColor: theme.tagAction
+                        ) {
+                            filterBucket = filterBucket == bucket ? nil : bucket
+                        }
                     }
-                }
 
-                // Clear button
-                if anyFilterActive {
-                    Button {
-                        filterProject = nil
-                        filterPlace = nil
-                        filterStatus = nil
-                    } label: {
-                        Text("Clear")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(theme.error)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .fill(theme.error.opacity(0.12))
-                            )
+                    filterSeparator
+
+                    // State filters
+                    ForEach(["pending_approval", "completed", "filtered"], id: \.self) { state in
+                        filterChip(
+                            label: state.replacingOccurrences(of: "_", with: " "),
+                            isActive: filterState == state,
+                            activeColor: statusColor(state, theme: theme)
+                        ) {
+                            filterState = filterState == state ? nil : state
+                        }
                     }
-                    .buttonStyle(.plain)
-                }
 
-                Spacer()
+                    // Clear button
+                    if anyFilterActive {
+                        Button {
+                            filterProject = nil
+                            filterBucket = nil
+                            filterState = nil
+                        } label: {
+                            Text("Clear")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(theme.error)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .fill(theme.error.opacity(0.12))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Spacer()
+                }
             }
         }
         .padding(.horizontal, 12)
@@ -184,6 +382,60 @@ struct LogsPipelineView: View {
                 .frame(height: 0.5),
             alignment: .bottom
         )
+    }
+
+    // MARK: - Extraction Actions
+
+    private var extractionActions: some View {
+        let theme = ThemeManager.shared.current
+        return HStack(spacing: 6) {
+            Text(appState.pendingExtractionCount == 0
+                 ? "No pending"
+                 : "\(appState.pendingExtractionCount) pending")
+                .font(.system(size: 9))
+                .foregroundColor(theme.textSecondary)
+
+            Picker("", selection: $appState.synthesizeThreshold) {
+                Text("Manual").tag(0)
+                Text("Auto: 5").tag(5)
+                Text("Auto: 10").tag(10)
+                Text("Auto: 20").tag(20)
+            }
+            .pickerStyle(.menu)
+            .frame(width: 80)
+
+            Button {
+                Task { await appState.synthesizeNow() }
+            } label: {
+                Text("Synthesize")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(theme.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(theme.accent.opacity(0.18))
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(appState.pendingExtractionCount == 0)
+
+            Button {
+                Task { await appState.cleanupNow() }
+            } label: {
+                Text(appState.isCleaningUp ? "Cleaning..." : "Clean Up")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(theme.tertiary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(theme.tertiary.opacity(0.12))
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(appState.isCleaningUp)
+        }
     }
 
     private var filterSeparator: some View {
@@ -220,22 +472,134 @@ struct LogsPipelineView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Pipeline Table
+    // MARK: - Pipeline Content
 
-    private var pipelineTable: some View {
+    private var pipelineContent: some View {
         let theme = ThemeManager.shared.current
         return VStack(spacing: 0) {
-            columnHeaderRow
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(filteredGroups) { group in
-                        pipelineRow(group: group)
+            if filteredGroups.isEmpty {
+                emptyPipelineState
+            } else {
+                columnHeaderRow
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(filteredGroups) { group in
+                            pipelineRow(group: group)
+                        }
                     }
                 }
             }
         }
         .background(theme.isDark ? Color.clear : Color.clear)
     }
+
+    private var emptyPipelineState: some View {
+        let theme = ThemeManager.shared.current
+        return VStack(spacing: 12) {
+            Spacer()
+            Image(systemName: "waveform.path")
+                .font(.system(size: 32))
+                .foregroundColor(theme.glassBorder)
+            Text("No pipeline data yet")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(theme.textSecondary)
+            Text("Start listening to see transcripts flow through the pipeline.")
+                .font(.system(size: 10))
+                .foregroundColor(theme.textTertiary)
+                .multilineTextAlignment(.center)
+            if appState.isListening {
+                LiveBadge()
+                    .padding(.top, 4)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Raw Logs Content
+
+    private var rawLogsContent: some View {
+        let theme = ThemeManager.shared.current
+        return Group {
+            if logEntries.isEmpty {
+                VStack(spacing: 12) {
+                    Spacer()
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 32))
+                        .foregroundColor(theme.glassBorder)
+                    Text("No logs yet.")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(theme.textSecondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(logEntries.indices, id: \.self) { i in
+                            logRow(logEntries[i])
+                            if i < logEntries.count - 1 {
+                                Divider().opacity(0.4)
+                            }
+                        }
+                    }
+                    .padding(8)
+                }
+            }
+        }
+    }
+
+    private func logRow(_ entry: LogEntry) -> some View {
+        let theme = ThemeManager.shared.current
+        return HStack(alignment: .top, spacing: 6) {
+            Text(Self.logTimeFormatter.string(from: entry.timestamp))
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(theme.textTertiary)
+                .frame(width: 60, alignment: .leading)
+
+            Text(entry.level.rawValue)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(logLevelColor(entry.level))
+                .frame(width: 36, alignment: .leading)
+
+            Text("[\(entry.component.rawValue)]")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(theme.textSecondary)
+                .frame(width: 80, alignment: .leading)
+
+            Text(entry.message)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(theme.textPrimary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 6)
+        .background(
+            entry.level == .error
+                ? ThemeManager.shared.current.error.opacity(0.06)
+                : entry.level == .warn
+                    ? ThemeManager.shared.current.warning.opacity(0.04)
+                    : Color.clear
+        )
+    }
+
+    private func logLevelColor(_ level: LogLevel) -> Color {
+        let theme = ThemeManager.shared.current
+        switch level {
+        case .error: return theme.error
+        case .warn:  return .orange
+        case .info:  return theme.textSecondary
+        case .debug: return theme.textTertiary
+        }
+    }
+
+    private static let logTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
 
     // MARK: - Column Header Row
 
@@ -244,19 +608,19 @@ struct LogsPipelineView: View {
         return HStack(spacing: 0) {
             columnHeader("TIME", color: theme.textTertiary)
                 .frame(width: 55)
-            columnHeader("TRANSCRIPT \u{1F399}", color: theme.textSecondary)
+            columnHeader("TRANSCRIPT", color: theme.textSecondary)
                 .frame(maxWidth: .infinity)
                 .layoutPriority(1.2)
-            columnHeader("CLEANING \u{1F9F9}", color: theme.tertiary)
+            columnHeader("CLEANING", color: theme.tertiary)
                 .frame(maxWidth: .infinity)
                 .layoutPriority(1.2)
-            columnHeader("ANALYSIS \u{1F9E0}", color: theme.secondary)
+            columnHeader("ANALYSIS", color: theme.secondary)
                 .frame(maxWidth: .infinity)
                 .layoutPriority(1.0)
-            columnHeader("TASK \u{26A1}", color: theme.warning)
+            columnHeader("TASK", color: theme.warning)
                 .frame(maxWidth: .infinity)
                 .layoutPriority(1.2)
-            columnHeader("RESULT \u{2713}", color: theme.accent)
+            columnHeader("RESULT", color: theme.accent)
                 .frame(maxWidth: .infinity)
                 .layoutPriority(1.0)
         }
@@ -368,9 +732,11 @@ struct LogsPipelineView: View {
                         Text(chunk.id)
                             .font(.system(size: 7, design: .monospaced))
                             .foregroundColor(theme.textTertiary)
-                        Text(chunk.duration)
-                            .font(.system(size: 7, design: .monospaced))
-                            .foregroundColor(theme.textTertiary)
+                        if !chunk.duration.isEmpty {
+                            Text(chunk.duration)
+                                .font(.system(size: 7, design: .monospaced))
+                                .foregroundColor(theme.textTertiary)
+                        }
                     }
                     Text(String(chunk.text.prefix(55)))
                         .font(.system(size: 9))
@@ -422,7 +788,7 @@ struct LogsPipelineView: View {
                 }
             }
             if let proj = group.analysisProject {
-                TagView(type: .project, label: projectNames[proj] ?? proj, small: true)
+                TagView(type: .project, label: proj, small: true)
             }
             if let text = group.analysisText {
                 Text(String(text.prefix(55)))
@@ -444,13 +810,13 @@ struct LogsPipelineView: View {
                     .foregroundColor(theme.textTertiary)
             } else {
                 ForEach(group.tasks) { task in
-                    taskMiniCard(task: task)
+                    taskMiniCard(task: task, groupID: group.id)
                 }
             }
         }
     }
 
-    private func taskMiniCard(task: PipelineTask) -> some View {
+    private func taskMiniCard(task: PipelineTask, groupID: String) -> some View {
         let theme = ThemeManager.shared.current
         let modeBadgeMode: ModeBadge.Mode = {
             switch task.mode {
@@ -460,6 +826,13 @@ struct LogsPipelineView: View {
             }
         }()
 
+        // Extract the real extraction item ID from task ID
+        let extractionID: String? = {
+            // task.id is the first 10 chars of the extraction item ID
+            // find the real ID from appState
+            appState.extractionItems.first(where: { $0.id.hasPrefix(task.id) })?.id
+        }()
+
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
                 Text(task.id)
@@ -467,16 +840,18 @@ struct LogsPipelineView: View {
                     .foregroundColor(theme.textTertiary)
                 ModeBadge(mode: modeBadgeMode)
             }
-            Text(task.title)
+            Text(String(task.title.prefix(50)))
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundColor(theme.warning)
                 .lineLimit(2)
 
-            // Accept / Reject for pending tasks
-            if task.status == .pending_approval || task.status == .needs_input {
+            // Accept / Dismiss for pending tasks
+            if task.status == .pending_approval || task.status == .ongoing {
                 HStack(spacing: 4) {
                     Button {
-                        // Accept action
+                        if let eid = extractionID {
+                            appState.toggleExtraction(id: eid)
+                        }
                     } label: {
                         HStack(spacing: 2) {
                             Image(systemName: "checkmark")
@@ -495,12 +870,14 @@ struct LogsPipelineView: View {
                     .buttonStyle(.plain)
 
                     Button {
-                        // Reject action
+                        if let eid = extractionID {
+                            appState.toggleExtraction(id: eid)
+                        }
                     } label: {
                         HStack(spacing: 2) {
                             Image(systemName: "xmark")
                                 .font(.system(size: 7))
-                            Text("Reject")
+                            Text("Dismiss")
                                 .font(.system(size: 8))
                         }
                         .foregroundColor(theme.error)
@@ -518,11 +895,16 @@ struct LogsPipelineView: View {
         .padding(5)
         .background(
             RoundedRectangle(cornerRadius: 5)
-                .fill(theme.warning.opacity(0.06))
+                .fill(task.status == .filtered
+                      ? theme.textTertiary.opacity(0.04)
+                      : theme.warning.opacity(0.06))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 5)
-                .stroke(theme.warning.opacity(0.12), lineWidth: 0.5)
+                .stroke(task.status == .filtered
+                        ? theme.textTertiary.opacity(0.08)
+                        : theme.warning.opacity(0.12),
+                        lineWidth: 0.5)
         )
     }
 
@@ -544,9 +926,11 @@ struct LogsPipelineView: View {
                             .foregroundColor(statusColor(task.status.rawValue, theme: theme))
                             .lineLimit(2)
                     }
-                    Text(task.result.duration)
-                        .font(.system(size: 7))
-                        .foregroundColor(theme.textTertiary)
+                    if !task.result.duration.isEmpty {
+                        Text(task.result.duration)
+                            .font(.system(size: 7))
+                            .foregroundColor(theme.textTertiary)
+                    }
                 }
             }
         }
@@ -566,35 +950,35 @@ struct LogsPipelineView: View {
                         detailTagsRow(group: group)
                         detailStageSection(
                             stage: "transcript",
-                            emoji: "\u{1F399}",
+                            emoji: "",
                             name: "TRANSCRIPT",
                             color: theme.textSecondary,
                             group: group
                         )
                         detailStageSection(
                             stage: "cleaning",
-                            emoji: "\u{1F9F9}",
+                            emoji: "",
                             name: "CLEANING",
                             color: theme.tertiary,
                             group: group
                         )
                         detailStageSection(
                             stage: "analysis",
-                            emoji: "\u{1F9E0}",
+                            emoji: "",
                             name: "ANALYSIS",
                             color: theme.secondary,
                             group: group
                         )
                         detailStageSection(
                             stage: "task",
-                            emoji: "\u{26A1}",
-                            name: "TASK",
+                            emoji: "",
+                            name: "EXTRACTION",
                             color: theme.warning,
                             group: group
                         )
                         detailStageSection(
                             stage: "result",
-                            emoji: "\u{2713}",
+                            emoji: "",
                             name: "RESULT",
                             color: theme.accent,
                             group: group
@@ -625,9 +1009,14 @@ struct LogsPipelineView: View {
     private func detailHeader(group: PipelineGroup) -> some View {
         let theme = ThemeManager.shared.current
         return HStack {
-            Text(group.id)
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundColor(theme.textPrimary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.id)
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(theme.textPrimary)
+                Text(group.time)
+                    .font(.system(size: 9))
+                    .foregroundColor(theme.textTertiary)
+            }
             Spacer()
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -656,14 +1045,14 @@ struct LogsPipelineView: View {
 
     private func detailTagsRow(group: PipelineGroup) -> some View {
         HStack(spacing: 4) {
-            if let place = group.placeTag {
-                TagView(type: .place, label: placeNames[place] ?? place, small: true)
-            }
             if let person = group.personTag {
-                TagView(type: .person, label: peopleNames[person] ?? person, small: true)
+                TagView(type: .person, label: person, small: true)
             }
             if let proj = group.analysisProject {
-                TagView(type: .project, label: projectNames[proj] ?? proj, small: true)
+                TagView(type: .project, label: proj, small: true)
+            }
+            ForEach(group.analysisTags.prefix(3), id: \.self) { tag in
+                TagView(type: .action, label: tag, small: true)
             }
         }
     }
@@ -688,8 +1077,6 @@ struct LogsPipelineView: View {
                 }
             } label: {
                 HStack(spacing: 6) {
-                    Text(emoji)
-                        .font(.system(size: 10))
                     Text(name)
                         .font(.system(size: 8, weight: .semibold))
                         .tracking(1)
@@ -752,9 +1139,11 @@ struct LogsPipelineView: View {
                         Text(chunk.id)
                             .font(.system(size: 7, design: .monospaced))
                             .foregroundColor(theme.textTertiary)
-                        Text(chunk.duration)
-                            .font(.system(size: 7, design: .monospaced))
-                            .foregroundColor(theme.textTertiary)
+                        if !chunk.duration.isEmpty {
+                            Text(chunk.duration)
+                                .font(.system(size: 7, design: .monospaced))
+                                .foregroundColor(theme.textTertiary)
+                        }
                     }
                     Text(chunk.text)
                         .font(.system(size: 9))
@@ -783,7 +1172,7 @@ struct LogsPipelineView: View {
                     .foregroundColor(theme.textPrimary)
                     .textSelection(.enabled)
             } else {
-                Text("Filtered out at cleaning stage")
+                Text("No accepted extractions from this chunk")
                     .font(.system(size: 9))
                     .foregroundColor(theme.textTertiary)
                     .italic()
@@ -802,7 +1191,7 @@ struct LogsPipelineView: View {
                         TagView(type: .action, label: tag, small: true)
                     }
                     if let proj = group.analysisProject {
-                        TagView(type: .project, label: projectNames[proj] ?? proj, small: true)
+                        TagView(type: .project, label: proj, small: true)
                     }
                 }
             }
@@ -826,7 +1215,7 @@ struct LogsPipelineView: View {
         let theme = ThemeManager.shared.current
         return VStack(alignment: .leading, spacing: 10) {
             if group.tasks.isEmpty {
-                Text("No tasks generated")
+                Text("No extraction items")
                     .font(.system(size: 9))
                     .foregroundColor(theme.textTertiary)
                     .italic()
@@ -848,100 +1237,26 @@ struct LogsPipelineView: View {
             }
         }()
 
+        // Find the real extraction item for bucket picker
+        let extractionItem = appState.extractionItems.first(where: { $0.id.hasPrefix(task.id) })
+
         return VStack(alignment: .leading, spacing: 6) {
             // ID + project + mode
             HStack(spacing: 4) {
                 Text(task.id)
                     .font(.system(size: 7, design: .monospaced))
                     .foregroundColor(theme.textTertiary)
-                TagView(type: .project, label: projectNames[task.project] ?? task.project, small: true)
+                TagView(type: .project, label: task.project, small: true)
                 ModeBadge(mode: modeBadgeMode)
             }
 
-            // Title
+            // Title (content)
             Text(task.title)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(theme.warning)
+                .textSelection(.enabled)
 
-            // Skill badge
-            if let skill = task.skill {
-                Text("\u{1F9E0} \(skill)")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(theme.tertiary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule()
-                            .fill(theme.tertiary.opacity(0.09))
-                    )
-                    .overlay(
-                        Capsule()
-                            .stroke(theme.tertiary.opacity(0.15), lineWidth: 0.5)
-                    )
-            }
-
-            // Workflow visualization
-            if !task.workflowSteps.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(task.workflowSteps.enumerated()), id: \.offset) { idx, step in
-                        HStack(spacing: 4) {
-                            if idx > 0 {
-                                Text("\u{2192}")
-                                    .font(.system(size: 8))
-                                    .foregroundColor(theme.accent.opacity(0.5))
-                            }
-                            Text(step)
-                                .font(.system(size: 8, weight: .medium))
-                                .foregroundColor(theme.accent)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 5)
-                                        .fill(theme.accent.opacity(0.10))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 5)
-                                        .stroke(theme.accent.opacity(0.20), lineWidth: 0.5)
-                                )
-                        }
-                    }
-                }
-            }
-
-            // Missing connection warning
-            if let missing = task.missingConnection {
-                HStack(spacing: 6) {
-                    Text("\u{26A0}\u{FE0F}")
-                        .font(.system(size: 10))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Missing Connection")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(theme.error)
-                        Text(missing)
-                            .font(.system(size: 8))
-                            .foregroundColor(theme.error.opacity(0.80))
-                        Button {
-                            // Go to connections
-                        } label: {
-                            Text("\u{2192} Go to Connections")
-                                .font(.system(size: 8, weight: .semibold))
-                                .foregroundColor(theme.accent)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(theme.error.opacity(0.08))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(theme.error.opacity(0.20), lineWidth: 0.5)
-                )
-            }
-
-            // Prompt
+            // Source phrase (prompt)
             Text(task.prompt)
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(theme.textSecondary)
@@ -953,65 +1268,70 @@ struct LogsPipelineView: View {
                         .fill(theme.glass.opacity(0.5))
                 )
 
-            // Accept / Reject / Resolve for pending tasks
-            if task.status == .pending_approval || task.status == .needs_input {
+            // Bucket picker
+            if let item = extractionItem {
+                HStack(spacing: 6) {
+                    Text("Bucket:")
+                        .font(.system(size: 8))
+                        .foregroundColor(theme.textTertiary)
+                    ForEach(ExtractionBucket.allCases, id: \.self) { bucket in
+                        Button {
+                            appState.setExtractionBucket(id: item.id, bucket: bucket)
+                        } label: {
+                            HStack(spacing: 2) {
+                                Image(systemName: bucket.icon)
+                                    .font(.system(size: 7))
+                                Text(bucket.displayName)
+                                    .font(.system(size: 8))
+                            }
+                            .foregroundColor(item.bucket == bucket ? theme.accent : theme.textTertiary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(item.bucket == bucket ? theme.accent.opacity(0.15) : Color.clear)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            // Accept / Dismiss actions
+            if let item = extractionItem {
                 HStack(spacing: 6) {
                     Button {
-                        // Accept action
+                        appState.toggleExtraction(id: item.id)
                     } label: {
                         HStack(spacing: 3) {
-                            Image(systemName: "checkmark")
+                            Image(systemName: item.isAccepted ? "xmark" : "checkmark")
                                 .font(.system(size: 8))
-                            Text("Accept")
+                            Text(item.isAccepted ? "Dismiss" : "Accept")
                                 .font(.system(size: 8, weight: .semibold))
                         }
-                        .foregroundColor(theme.accent)
+                        .foregroundColor(item.isAccepted ? theme.error : theme.accent)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(
                             RoundedRectangle(cornerRadius: 5)
-                                .fill(theme.accent.opacity(0.18))
+                                .fill(item.isAccepted
+                                      ? theme.error.opacity(0.12)
+                                      : theme.accent.opacity(0.18))
                         )
                     }
                     .buttonStyle(.plain)
 
-                    Button {
-                        // Reject action
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 8))
-                            Text("Reject")
-                                .font(.system(size: 8, weight: .semibold))
-                        }
-                        .foregroundColor(theme.error)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(theme.error.opacity(0.12))
-                        )
+                    // Status indicator
+                    HStack(spacing: 3) {
+                        StatusDot(status: task.status.rawValue)
+                        Text(item.effectiveState)
+                            .font(.system(size: 8))
+                            .foregroundColor(statusColor(item.effectiveState, theme: theme))
                     }
-                    .buttonStyle(.plain)
 
-                    Button {
-                        // Resolve with AI
-                    } label: {
-                        HStack(spacing: 3) {
-                            Text("\u{1F4AC}")
-                                .font(.system(size: 8))
-                            Text("Resolve with AI")
-                                .font(.system(size: 8, weight: .semibold))
-                        }
-                        .foregroundColor(theme.tertiary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(theme.tertiary.opacity(0.12))
-                        )
+                    if item.applied {
+                        TagView(type: .status, label: "Applied", small: true)
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -1046,36 +1366,31 @@ struct LogsPipelineView: View {
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundColor(statusColor(task.status.rawValue, theme: theme))
                             Spacer()
-                            Text(task.result.duration)
-                                .font(.system(size: 7))
-                                .foregroundColor(theme.textTertiary)
+                            if !task.result.duration.isEmpty {
+                                Text(task.result.duration)
+                                    .font(.system(size: 7))
+                                    .foregroundColor(theme.textTertiary)
+                            }
                         }
 
-                        // Step-by-step execution log
+                        // Step-by-step detail
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(Array(task.result.steps.enumerated()), id: \.offset) { idx, step in
                                 HStack(alignment: .top, spacing: 6) {
-                                    // Step indicator circle
-                                    let isCompleted = idx < task.result.steps.count - 1
-                                        || task.status == .completed
                                     Circle()
-                                        .fill(isCompleted
-                                            ? theme.accent.opacity(0.80)
-                                            : theme.warning.opacity(0.60))
-                                        .frame(width: 12, height: 12)
+                                        .fill(theme.accent.opacity(0.60))
+                                        .frame(width: 10, height: 10)
                                         .overlay(
-                                            Text(isCompleted ? "\u{2713}" : "\u{2026}")
-                                                .font(.system(size: 7, weight: .bold))
+                                            Text("\(idx + 1)")
+                                                .font(.system(size: 6, weight: .bold))
                                                 .foregroundColor(
-                                                    theme.isDark
-                                                        ? Color.black
-                                                        : Color.white
+                                                    theme.isDark ? Color.black : Color.white
                                                 )
                                         )
-
                                     Text(step)
                                         .font(.system(size: 9))
                                         .foregroundColor(theme.textSecondary)
+                                        .textSelection(.enabled)
                                 }
                             }
                         }

@@ -5,39 +5,67 @@ import SwiftUI
 struct WorldSpaceView: View {
     @ObservedObject var appState: AppState
 
-    @State private var selectedPlaceID: String = "office"
+    @State private var selectedPlaceID: String = ""
     @State private var viewMode: String = "overview" // "overview" or "byday"
     @State private var selectedDayOffset: Int = 0
 
-    private let places = PlaceDetail.mockPlaces()
-    private let allActivities = PlaceActivity.mockActivities()
-    private let allGroups = PipelineGroup.mockData()
+    // Real data loaded on appear
+    @State private var places: [PlaceDetail] = []
+    @State private var allActivities: [String: [PlaceActivity]] = [:]
+    @State private var placePeopleNames: [String: [String]] = [:]  // placeID → person names seen there
 
-    private let mockPeople: [(id: String, name: String, role: String?)] = [
-        ("you", "You", nil),
-        ("mukul", "Mukul", "Co-founder, CTO"),
-        ("priya", "Priya", "Design Lead"),
-        ("arjun", "Arjun", "Backend Dev"),
-        ("neha", "Neha", "Marketing"),
-    ]
+    private let sessionStore = SessionStore.shared
 
     private var selectedPlace: PlaceDetail {
-        places.first(where: { $0.id == selectedPlaceID }) ?? places[0]
+        places.first(where: { $0.id == selectedPlaceID }) ?? places.first ?? PlaceDetail(id: "", name: "Unknown", icon: "\u{1F4CD}", address: "", peopleIDs: [], activityCount: 0)
     }
 
     private var activitiesForPlace: [PlaceActivity] {
         allActivities[selectedPlaceID] ?? []
     }
 
-    private var tasksForPlace: [PipelineTask] {
-        allGroups
-            .filter { $0.placeTag == selectedPlaceID }
-            .flatMap { $0.tasks }
+    /// Extraction items and structured todos, shown as tasks for the selected place.
+    private var tasksForPlace: [SpaceTaskItem] {
+        // Show all extraction items (they aren't place-scoped in the DB) when a place is selected.
+        // We also include structured todos.
+        var items: [SpaceTaskItem] = []
+
+        for item in appState.extractionItems where item.isAccepted {
+            items.append(SpaceTaskItem(
+                id: item.id,
+                title: item.content,
+                type: item.type == .todo ? "todo" : "fact",
+                status: item.applied ? "applied" : "pending",
+                priority: item.priority,
+                bucket: item.bucket.displayName,
+                timestamp: item.timestamp
+            ))
+        }
+
+        for todo in appState.structuredTodos {
+            let projectName = appState.projects.first(where: { $0.id == todo.projectID })?.name
+            items.append(SpaceTaskItem(
+                id: todo.id,
+                title: todo.content,
+                type: "structured_todo",
+                status: todo.isExecuted ? "executed" : (todo.priority ?? "pending"),
+                priority: todo.priority,
+                bucket: projectName ?? "General",
+                timestamp: todo.createdAt
+            ))
+        }
+
+        return items.sorted { $0.timestamp > $1.timestamp }
     }
 
-    private var peopleAtPlace: [(id: String, name: String, role: String?)] {
-        let ids = selectedPlace.peopleIDs
-        return mockPeople.filter { ids.contains($0.id) }
+    /// People from appState.people, filtered to those seen at the selected place
+    /// (via session_people linkage) plus always including "You".
+    private var peopleAtPlace: [Person] {
+        let namesAtPlace = Set(placePeopleNames[selectedPlaceID] ?? [])
+        // Always include "You" (isMe), and any person whose name was seen at this place
+        return appState.people.filter { person in
+            person.isMe || namesAtPlace.contains(person.name)
+        }
     }
 
     /// Unique day offsets present in current place activities, sorted ascending.
@@ -53,19 +81,207 @@ struct WorldSpaceView: View {
 
     var body: some View {
         let theme = ThemeManager.shared.current
-        HStack(spacing: 0) {
-            placeListPanel
-                .frame(width: 210)
-                .overlay(
-                    Rectangle()
-                        .fill(theme.glassBorder)
-                        .frame(width: 0.5),
-                    alignment: .trailing
-                )
+        Group {
+            if places.isEmpty {
+                emptyPlacesState
+            } else {
+                HStack(spacing: 0) {
+                    placeListPanel
+                        .frame(width: 210)
+                        .overlay(
+                            Rectangle()
+                                .fill(theme.glassBorder)
+                                .frame(width: 0.5),
+                            alignment: .trailing
+                        )
 
-            placeDetailPanel
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    placeDetailPanel
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
         }
+        .onAppear { loadData() }
+    }
+
+    // MARK: - Data Loading
+
+    private func loadData() {
+        // 1. Load places from SessionStore
+        let placeRecords = sessionStore.allPlaces()
+        let now = Date()
+        let calendar = Calendar.current
+
+        // Also include current location if it has a name but may not be in the places table yet
+        var builtPlaces: [PlaceDetail] = []
+        var builtActivities: [String: [PlaceActivity]] = [:]
+        var builtPeopleNames: [String: [String]] = [:]
+
+        for record in placeRecords {
+            let sessions = sessionStore.sessions(forPlaceID: record.id)
+            let activityCount = sessions.count
+            let icon = placeIcon(for: record.name)
+            let address = record.wifiSSID == record.name ? "" : "WiFi: \(record.wifiSSID)"
+
+            // Gather people names seen at this place
+            let pNames = sessionStore.peopleNames(forPlaceID: record.id)
+            builtPeopleNames[record.id] = pNames
+
+            // Compute peopleIDs for the card badge — map matched names to appState person IDs
+            let matchedPeopleIDs: [String] = appState.people.compactMap { person in
+                if person.isMe { return person.id.uuidString }
+                if pNames.contains(person.name) { return person.id.uuidString }
+                return nil
+            }
+
+            builtPlaces.append(PlaceDetail(
+                id: record.id,
+                name: record.name,
+                icon: icon,
+                address: address,
+                peopleIDs: matchedPeopleIDs,
+                activityCount: activityCount
+            ))
+
+            // Build activities from sessions
+            var placeActivities: [PlaceActivity] = []
+
+            for session in sessions {
+                let dayOffset = calendar.dateComponents([.day], from: calendar.startOfDay(for: session.startedAt), to: calendar.startOfDay(for: now)).day ?? 0
+
+                let timeFormatter = DateFormatter()
+                timeFormatter.dateFormat = "h:mm a"
+                let timeStr = timeFormatter.string(from: session.startedAt)
+
+                // Session arrival activity
+                placeActivities.append(PlaceActivity(
+                    time: timeStr,
+                    dayOffset: dayOffset,
+                    personID: "you",
+                    text: session.endedAt != nil
+                        ? "Session at \(record.name)"
+                        : "Arrived at \(record.name)",
+                    type: .location,
+                    project: nil
+                ))
+
+                // If there's a transcript snippet, add it as a transcript activity
+                if !session.transcriptSnippet.isEmpty {
+                    let snippetText = session.transcriptSnippet.count > 120
+                        ? String(session.transcriptSnippet.prefix(120)) + "..."
+                        : session.transcriptSnippet
+
+                    // Find speaker from the transcript records for this session
+                    let sessionTranscripts = appState.recentTranscripts().filter { $0.sessionID == session.id }
+                    let speakerName = sessionTranscripts.first?.speakerName ?? "You"
+                    let personID = appState.people.first(where: { $0.name == speakerName })?.id.uuidString ?? "you"
+
+                    // Find project name if any transcript has a project
+                    let projectName: String? = sessionTranscripts.compactMap { tr in
+                        guard let pid = tr.projectID else { return nil }
+                        return appState.projects.first(where: { $0.id == pid.uuidString })?.name
+                    }.first
+
+                    placeActivities.append(PlaceActivity(
+                        time: timeStr,
+                        dayOffset: dayOffset,
+                        personID: personID,
+                        text: snippetText,
+                        type: .transcript,
+                        project: projectName
+                    ))
+                }
+            }
+
+            // Sort activities: most recent first within each day, days ascending
+            placeActivities.sort { a, b in
+                if a.dayOffset != b.dayOffset { return a.dayOffset < b.dayOffset }
+                return a.time > b.time
+            }
+
+            builtActivities[record.id] = placeActivities
+        }
+
+        // Also add recent transcripts as activities (not session-linked ones)
+        // to enrich places where we might have transcripts but no explicit session link
+        let recentTranscripts = appState.recentTranscripts()
+        for transcript in recentTranscripts where transcript.sessionID == nil {
+            let dayOffset = calendar.dateComponents([.day], from: calendar.startOfDay(for: transcript.timestamp), to: calendar.startOfDay(for: now)).day ?? 0
+            let timeFormatter = DateFormatter()
+            timeFormatter.dateFormat = "h:mm a"
+            let timeStr = timeFormatter.string(from: transcript.timestamp)
+            let speakerName = transcript.speakerName ?? "You"
+            let personID = appState.people.first(where: { $0.name == speakerName })?.id.uuidString ?? "you"
+            let projectName: String? = transcript.projectID.flatMap { pid in
+                appState.projects.first(where: { $0.id == pid.uuidString })?.name
+            }
+            let snippetText = transcript.text.count > 120
+                ? String(transcript.text.prefix(120)) + "..."
+                : transcript.text
+
+            // Assign to "current location" place if no session link
+            if let currentPlace = builtPlaces.first(where: { $0.name == appState.locationName }) {
+                var existing = builtActivities[currentPlace.id] ?? []
+                existing.append(PlaceActivity(
+                    time: timeStr,
+                    dayOffset: dayOffset,
+                    personID: personID,
+                    text: snippetText,
+                    type: .transcript,
+                    project: projectName
+                ))
+                builtActivities[currentPlace.id] = existing
+            }
+        }
+
+        // Update state
+        places = builtPlaces
+        allActivities = builtActivities
+        placePeopleNames = builtPeopleNames
+
+        // Auto-select: current place, or first place
+        if let currentPlace = builtPlaces.first(where: { $0.name == appState.locationName }) {
+            selectedPlaceID = currentPlace.id
+        } else if let first = builtPlaces.first {
+            selectedPlaceID = first.id
+        }
+    }
+
+    /// Pick an appropriate icon based on common place name patterns.
+    private func placeIcon(for name: String) -> String {
+        let lower = name.lowercased()
+        if lower.contains("home") || lower.contains("apartment") || lower.contains("flat") { return "\u{1F3E0}" }
+        if lower.contains("office") || lower.contains("work") || lower.contains("wework") || lower.contains("cowork") { return "\u{1F3E2}" }
+        if lower.contains("cafe") || lower.contains("caf\u{00E9}") || lower.contains("coffee") || lower.contains("starbucks") { return "\u{2615}" }
+        if lower.contains("gym") || lower.contains("fitness") || lower.contains("cult") { return "\u{1F4AA}" }
+        if lower.contains("school") || lower.contains("university") || lower.contains("college") || lower.contains("campus") { return "\u{1F393}" }
+        if lower.contains("library") { return "\u{1F4DA}" }
+        if lower.contains("restaurant") || lower.contains("food") || lower.contains("dining") { return "\u{1F37D}" }
+        if lower.contains("airport") || lower.contains("terminal") { return "\u{2708}\u{FE0F}" }
+        if lower.contains("hotel") || lower.contains("hostel") { return "\u{1F3E8}" }
+        if lower.contains("hospital") || lower.contains("clinic") { return "\u{1F3E5}" }
+        if lower.contains("mobile") || lower.contains("hotspot") { return "\u{1F4F1}" }
+        return "\u{1F4CD}" // default pin
+    }
+
+    // MARK: - Empty State
+
+    private var emptyPlacesState: some View {
+        let theme = ThemeManager.shared.current
+        return VStack(spacing: 16) {
+            Spacer()
+            Text("\u{1F30D}")
+                .font(.system(size: 40))
+            Text("No places detected yet")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(theme.textPrimary)
+            Text("AutoClawd learns your places from WiFi networks as you move around.")
+                .font(.system(size: 11))
+                .foregroundColor(theme.textTertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 300)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Left Panel: Place List
@@ -326,20 +542,27 @@ struct WorldSpaceView: View {
                 .foregroundColor(theme.textSecondary)
                 .textCase(.uppercase)
 
-            // Wrapping HStack of person cards
-            FlowLayout(spacing: 6) {
-                ForEach(people, id: \.id) { person in
-                    personCard(person: person)
+            if people.isEmpty {
+                Text("No people detected at this place yet")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.textTertiary)
+                    .padding(.vertical, 8)
+            } else {
+                // Wrapping HStack of person cards
+                FlowLayout(spacing: 6) {
+                    ForEach(people) { person in
+                        personCard(person: person)
+                    }
                 }
             }
         }
     }
 
-    private func personCard(person: (id: String, name: String, role: String?)) -> some View {
+    private func personCard(person: Person) -> some View {
         let theme = ThemeManager.shared.current
         return HStack(spacing: 6) {
             Circle()
-                .fill(theme.accent)
+                .fill(person.color)
                 .frame(width: 7, height: 7)
 
             VStack(alignment: .leading, spacing: 1) {
@@ -347,8 +570,8 @@ struct WorldSpaceView: View {
                     .font(.system(size: 11))
                     .foregroundColor(theme.textPrimary)
 
-                if let role = person.role {
-                    Text(role)
+                if person.isMe {
+                    Text("You")
                         .font(.system(size: 8))
                         .foregroundColor(theme.textTertiary)
                 }
@@ -461,7 +684,7 @@ struct WorldSpaceView: View {
             Circle()
                 .fill(theme.accent)
                 .frame(width: 9, height: 9)
-                .offset(x: -22.5) // Center on the timeline line: -(18 - 5) + (9/2) -> shifted to align
+                .offset(x: -22.5) // Center on the timeline line
 
             Text(code)
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
@@ -478,7 +701,16 @@ struct WorldSpaceView: View {
     private func activityEntry(activity: PlaceActivity) -> some View {
         let theme = ThemeManager.shared.current
         let dotColor = activityDotColor(type: activity.type)
-        let personName = mockPeople.first(where: { $0.id == activity.personID })?.name ?? activity.personID
+        // Resolve person name from appState.people or fall back to personID
+        let personName: String = {
+            if let uuid = UUID(uuidString: activity.personID),
+               let person = appState.people.first(where: { $0.id == uuid }) {
+                return person.name
+            }
+            // Fallback: check by name match or use raw ID
+            return appState.people.first(where: { $0.name.lowercased() == activity.personID.lowercased() })?.name
+                ?? (activity.personID == "you" ? "You" : activity.personID)
+        }()
 
         return HStack(alignment: .top, spacing: 0) {
             // Timeline dot
@@ -545,7 +777,7 @@ struct WorldSpaceView: View {
     private var tasksSection: some View {
         let theme = ThemeManager.shared.current
         return VStack(alignment: .leading, spacing: 8) {
-            Text("TASKS")
+            Text("TASKS & EXTRACTIONS")
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(1)
                 .foregroundColor(theme.textSecondary)
@@ -556,24 +788,15 @@ struct WorldSpaceView: View {
         }
     }
 
-    private func taskCard(task: PipelineTask) -> some View {
+    private func taskCard(task: SpaceTaskItem) -> some View {
         let theme = ThemeManager.shared.current
         let statusColor: Color = {
             switch task.status {
-            case .completed:        return theme.accent
-            case .ongoing:          return theme.warning
-            case .pending_approval: return theme.warning
-            case .needs_input:      return theme.secondary
-            case .upcoming:         return theme.textTertiary
-            case .filtered:         return theme.textTertiary
-            }
-        }()
-
-        let modeValue: ModeBadge.Mode = {
-            switch task.mode {
-            case .auto: return .auto
-            case .ask:  return .ask
-            case .user: return .user
+            case "applied", "executed": return theme.accent
+            case "HIGH":                return theme.error
+            case "MEDIUM":              return theme.warning
+            case "LOW":                 return theme.textTertiary
+            default:                    return theme.secondary
             }
         }()
 
@@ -585,19 +808,30 @@ struct WorldSpaceView: View {
             Text(task.title)
                 .font(.system(size: 10))
                 .foregroundColor(theme.textPrimary)
-                .lineLimit(1)
+                .lineLimit(2)
 
             Spacer(minLength: 0)
 
             HStack(spacing: 4) {
-                TagView(type: .project, label: task.project, small: true)
-                ModeBadge(mode: modeValue)
-                TagView(type: .status, label: task.status.rawValue.replacingOccurrences(of: "_", with: " "), small: true)
+                TagView(type: .project, label: task.bucket, small: true)
+                TagView(type: .status, label: task.status, small: true)
             }
         }
         .padding(10)
         .glassCard(cornerRadius: 8)
     }
+}
+
+// MARK: - SpaceTaskItem (lightweight model for task display)
+
+private struct SpaceTaskItem: Identifiable {
+    let id: String
+    let title: String
+    let type: String       // "todo", "fact", "structured_todo"
+    let status: String
+    let priority: String?
+    let bucket: String
+    let timestamp: Date
 }
 
 // MARK: - FlowLayout (Wrapping HStack)

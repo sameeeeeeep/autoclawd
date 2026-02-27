@@ -1,41 +1,29 @@
 import SwiftUI
 
-// MARK: - Mock Speaker Dot
-
-private struct SpeakerDot: Identifiable {
-    let id = UUID()
-    let name: String
-    let xPercent: CGFloat
-    let yPercent: CGFloat
-    let isActive: Bool
-}
-
 // MARK: - WorldTimeView
 
 struct WorldTimeView: View {
     @ObservedObject var appState: AppState
 
     @State private var selectedEpisodeIndex: Int = 0
-    @State private var seekTime: TimeInterval = 52200 // ~2:30 PM
+    @State private var seekTime: TimeInterval = 0
     @State private var isPlaying: Bool = false
-    @State private var micOn: Bool = true
     @State private var viewMode: String = "now" // "now" or "replay"
+
+    // Real data loaded from stores
+    @State private var episodes: [Episode] = []
+    @State private var transcriptRecords: [TranscriptRecord] = []
 
     // Waveform animation
     @State private var waveformHeights: [CGFloat] = (0..<50).map { _ in CGFloat.random(in: 0.15...1.0) }
     @State private var waveformTimer: Timer?
 
-    private let episodes = Episode.mockEpisodes(count: 14)
-    private let transcriptGroups = PipelineGroup.mockData()
-
-    private let speakerDots: [SpeakerDot] = [
-        SpeakerDot(name: "You", xPercent: 0.35, yPercent: 0.45, isActive: true),
-        SpeakerDot(name: "Mukul", xPercent: 0.65, yPercent: 0.30, isActive: false),
-        SpeakerDot(name: "Priya", xPercent: 0.50, yPercent: 0.70, isActive: false),
-    ]
-
     private var selectedEpisode: Episode {
-        episodes[selectedEpisodeIndex]
+        guard !episodes.isEmpty, selectedEpisodeIndex < episodes.count else {
+            // Fallback: today's episode with no data
+            return Episode(id: UUID(), date: Date(), title: nil, summary: nil, segments: [])
+        }
+        return episodes[selectedEpisodeIndex]
     }
 
     private var isLive: Bool {
@@ -56,22 +44,140 @@ struct WorldTimeView: View {
             transcriptPanel
         }
         .onAppear {
+            loadEpisodes()
+            loadTranscripts()
+            seekTime = currentDaySeconds()
             updateViewMode()
         }
         .onChange(of: selectedEpisodeIndex) { _ in
+            loadTranscriptsForSelectedEpisode()
             updateViewMode()
         }
+    }
+
+    // MARK: - Data Loading
+
+    private func loadEpisodes() {
+        let sessions = SessionStore.shared.recentSessions(limit: 100)
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+
+        // Group sessions by day
+        var dayMap: [Date: [SessionRecord]] = [:]
+        for session in sessions {
+            let dayStart = cal.startOfDay(for: session.startedAt)
+            dayMap[dayStart, default: []].append(session)
+        }
+
+        // Always include today even if no sessions
+        if dayMap[today] == nil {
+            dayMap[today] = []
+        }
+
+        // Sort days descending (most recent first)
+        let sortedDays = dayMap.keys.sorted(by: >)
+
+        episodes = sortedDays.map { dayStart -> Episode in
+            let daySessions = dayMap[dayStart] ?? []
+
+            // Build segments from sessions (start/end times as seconds-of-day)
+            let segments: [(start: TimeInterval, end: TimeInterval)] = daySessions.compactMap { session in
+                let start = session.startedAt.timeIntervalSince(dayStart)
+                let end: TimeInterval
+                if let endDate = session.endedAt {
+                    end = endDate.timeIntervalSince(dayStart)
+                } else if cal.isDateInToday(session.startedAt) {
+                    // Ongoing session today: extend to current time
+                    end = Date().timeIntervalSince(dayStart)
+                } else {
+                    // Past session with no end time: estimate 30 min
+                    end = start + 1800
+                }
+                // Clamp to 0..86400
+                let clampedStart = max(0, min(86400, start))
+                let clampedEnd = max(clampedStart, min(86400, end))
+                return (start: clampedStart, end: clampedEnd)
+            }.sorted { $0.start < $1.start }
+
+            // Use the first session's snippet as title, combine all for summary
+            let title: String? = {
+                let snippets = daySessions.compactMap { s -> String? in
+                    s.transcriptSnippet.isEmpty ? nil : s.transcriptSnippet
+                }
+                return snippets.first
+            }()
+
+            let summary: String? = {
+                let placeName = daySessions.compactMap { $0.placeName }.first
+                let sessionCount = daySessions.count
+                if sessionCount == 0 { return nil }
+                var parts: [String] = []
+                parts.append("\(sessionCount) session\(sessionCount == 1 ? "" : "s")")
+                if let place = placeName { parts.append("at \(place)") }
+                let totalDuration = segments.reduce(0.0) { $0 + ($1.end - $1.start) }
+                let minutes = Int(totalDuration / 60)
+                if minutes > 0 { parts.append("\(minutes) min recorded") }
+                return parts.joined(separator: " \u{00B7} ")
+            }()
+
+            return Episode(
+                id: UUID(),
+                date: dayStart,
+                title: title,
+                summary: summary,
+                segments: segments
+            )
+        }
+
+        // If today is selected, set seek to current time
+        if !episodes.isEmpty, episodes[0].isToday {
+            selectedEpisodeIndex = 0
+            seekTime = currentDaySeconds()
+        }
+    }
+
+    private func loadTranscripts() {
+        transcriptRecords = appState.recentTranscripts()
+        filterTranscriptsForSelectedEpisode()
+    }
+
+    private func loadTranscriptsForSelectedEpisode() {
+        let allRecent = appState.recentTranscripts()
+        let ep = selectedEpisode
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: ep.date)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+
+        transcriptRecords = allRecent.filter { record in
+            record.timestamp >= dayStart && record.timestamp < dayEnd
+        }.sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private func filterTranscriptsForSelectedEpisode() {
+        guard !episodes.isEmpty else { return }
+        let ep = selectedEpisode
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: ep.date)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+
+        transcriptRecords = transcriptRecords.filter { record in
+            record.timestamp >= dayStart && record.timestamp < dayEnd
+        }.sorted { $0.timestamp < $1.timestamp }
     }
 
     // MARK: - View Mode
 
     private func updateViewMode() {
+        guard !episodes.isEmpty else { return }
         let ep = episodes[selectedEpisodeIndex]
         if ep.isToday {
             viewMode = "now"
+            seekTime = currentDaySeconds()
             startWaveformAnimation()
         } else {
             viewMode = "replay"
+            // Set seek to start of first segment, or noon
+            seekTime = ep.segments.first?.start ?? 43200
             stopWaveformAnimation()
         }
     }
@@ -83,7 +189,17 @@ struct WorldTimeView: View {
         waveformTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { _ in
             DispatchQueue.main.async {
                 withAnimation(.easeInOut(duration: 0.12)) {
-                    waveformHeights = (0..<50).map { _ in CGFloat.random(in: 0.15...1.0) }
+                    if appState.isListening {
+                        // Use real audio level to drive waveform intensity
+                        let level = CGFloat(appState.audioLevel)
+                        waveformHeights = (0..<50).map { _ in
+                            let base = CGFloat.random(in: 0.05...0.3)
+                            return min(1.0, base + level * CGFloat.random(in: 0.5...1.0))
+                        }
+                    } else {
+                        // Flat bars when not listening
+                        waveformHeights = (0..<50).map { _ in CGFloat(0.08) }
+                    }
                 }
             }
         }
@@ -113,15 +229,30 @@ struct WorldTimeView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
-            // Episode list
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 2) {
-                    ForEach(Array(episodes.enumerated()), id: \.element.id) { index, episode in
-                        episodeCard(episode: episode, index: index)
-                    }
+            if episodes.isEmpty {
+                // Empty state
+                VStack(spacing: 8) {
+                    Text("No episodes yet")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(theme.textSecondary)
+                    Text("Episodes appear as you record throughout the day.")
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.textTertiary)
+                        .multilineTextAlignment(.center)
                 }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 8)
+                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // Episode list
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(spacing: 2) {
+                        ForEach(Array(episodes.enumerated()), id: \.element.id) { index, episode in
+                            episodeCard(episode: episode, index: index)
+                        }
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 8)
+                }
             }
         }
         .frame(width: 280)
@@ -276,8 +407,12 @@ struct WorldTimeView: View {
             Button {
                 if ep.isToday {
                     viewMode = viewMode == "now" ? "replay" : "now"
-                    if viewMode == "now" { startWaveformAnimation() }
-                    else { stopWaveformAnimation() }
+                    if viewMode == "now" {
+                        seekTime = currentDaySeconds()
+                        startWaveformAnimation()
+                    } else {
+                        stopWaveformAnimation()
+                    }
                 }
             } label: {
                 Text("Now")
@@ -297,15 +432,15 @@ struct WorldTimeView: View {
             .buttonStyle(.plain)
 
             Button {
-                micOn.toggle()
+                appState.micEnabled.toggle()
             } label: {
-                Image(systemName: micOn ? "mic.fill" : "mic.slash.fill")
+                Image(systemName: appState.isListening ? "mic.fill" : "mic.slash.fill")
                     .font(.system(size: 11))
-                    .foregroundColor(micOn ? theme.accent : theme.textTertiary)
+                    .foregroundColor(appState.isListening ? theme.accent : theme.textTertiary)
                     .frame(width: 28, height: 28)
                     .background(
                         RoundedRectangle(cornerRadius: 7)
-                            .fill(micOn ? theme.accent.opacity(0.18) : theme.glass)
+                            .fill(appState.isListening ? theme.accent.opacity(0.18) : theme.glass)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 7)
@@ -363,34 +498,35 @@ struct WorldTimeView: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 16))
 
-                // Location label
-                Text("MUMBAI")
+                // Location label — real location from AppState
+                Text(appState.locationName.uppercased())
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(theme.textSecondary)
                     .tracking(1)
                     .padding(.top, 12)
                     .padding(.leading, 14)
 
-                // Speaker dots
-                ForEach(speakerDots) { dot in
+                // Speaker dots — real people from AppState
+                ForEach(appState.people.filter { !$0.isMusic }) { person in
+                    let isActive = appState.currentSpeakerID == person.id
                     VStack(spacing: 3) {
                         Circle()
-                            .fill(dot.isActive ? theme.accent : theme.textSecondary)
+                            .fill(isActive ? person.color : theme.textSecondary)
                             .frame(
-                                width: dot.isActive ? 14 : 10,
-                                height: dot.isActive ? 14 : 10
+                                width: isActive ? 14 : 10,
+                                height: isActive ? 14 : 10
                             )
                             .shadow(
-                                color: dot.isActive ? theme.accent.opacity(0.5) : .clear,
-                                radius: dot.isActive ? 8 : 0
+                                color: isActive ? person.color.opacity(0.5) : .clear,
+                                radius: isActive ? 8 : 0
                             )
-                        Text(dot.name)
+                        Text(person.name)
                             .font(.system(size: 9))
                             .foregroundColor(theme.textSecondary)
                     }
                     .position(
-                        x: size * dot.xPercent,
-                        y: size * dot.yPercent
+                        x: size * person.mapPosition.x,
+                        y: size * person.mapPosition.y
                     )
                 }
             }
@@ -404,9 +540,21 @@ struct WorldTimeView: View {
 
     private var tagsRow: some View {
         HStack(spacing: 6) {
-            TagView(type: .place, label: "office", small: true)
-            TagView(type: .project, label: "autoclawd", small: true)
-            TagView(type: .person, label: "mukul", small: true)
+            // Show location as place tag
+            if !appState.locationName.isEmpty {
+                TagView(type: .place, label: appState.locationName.lowercased(), small: true)
+            }
+
+            // Show current speaker as person tag
+            if let speakerName = appState.currentSpeakerName {
+                TagView(type: .person, label: speakerName.lowercased(), small: true)
+            }
+
+            // Show now-playing song if any
+            if let song = appState.nowPlayingSongTitle {
+                TagView(type: .status, label: song, small: true)
+            }
+
             Spacer()
         }
     }
@@ -415,6 +563,7 @@ struct WorldTimeView: View {
 
     private var waveformContainer: some View {
         let theme = ThemeManager.shared.current
+        let locationDisplay = appState.locationName
 
         return HStack(spacing: 12) {
             // Play/pause button
@@ -422,6 +571,8 @@ struct WorldTimeView: View {
                 isPlaying.toggle()
                 if isPlaying && isLive {
                     startWaveformAnimation()
+                } else if !isLive {
+                    // For replay mode, just toggle play state
                 } else {
                     stopWaveformAnimation()
                 }
@@ -477,8 +628,12 @@ struct WorldTimeView: View {
 
                 // Status text
                 HStack(spacing: 0) {
-                    if isLive {
-                        Text("Listening \u{2022} Mumbai")
+                    if isLive && appState.isListening {
+                        Text("Listening \u{2022} \(locationDisplay)")
+                            .font(.system(size: 9))
+                            .foregroundColor(theme.textTertiary)
+                    } else if isLive && !appState.isListening {
+                        Text("Mic off \u{2022} \(locationDisplay)")
                             .font(.system(size: 9))
                             .foregroundColor(theme.textTertiary)
                     } else if isPlaying {
@@ -597,7 +752,7 @@ struct WorldTimeView: View {
                 Text("Transcripts")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(theme.textPrimary)
-                Text("\(transcriptGroups.count)")
+                Text("\(transcriptRecords.count)")
                     .font(.system(size: 9))
                     .foregroundColor(theme.textTertiary)
                 Spacer()
@@ -605,15 +760,30 @@ struct WorldTimeView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
-            // Transcript entries
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 2) {
-                    ForEach(transcriptGroups) { group in
-                        transcriptEntry(group: group)
-                    }
+            if transcriptRecords.isEmpty {
+                // Empty state
+                VStack(spacing: 8) {
+                    Text("No transcripts")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(theme.textSecondary)
+                    Text("Transcripts will appear here as audio is recorded and processed.")
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.textTertiary)
+                        .multilineTextAlignment(.center)
                 }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 8)
+                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // Transcript entries
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(spacing: 2) {
+                        ForEach(transcriptRecords) { record in
+                            transcriptEntry(record: record)
+                        }
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 8)
+                }
             }
         }
         .frame(width: 250)
@@ -627,31 +797,29 @@ struct WorldTimeView: View {
 
     // MARK: - Transcript Entry
 
-    private func transcriptEntry(group: PipelineGroup) -> some View {
+    private func transcriptEntry(record: TranscriptRecord) -> some View {
         let theme = ThemeManager.shared.current
-        let isActive = abs(Double(group.timeSeconds) - seekTime) < 1800 // within 30 min
+        let recordDaySeconds = record.timestamp.timeIntervalSince(
+            Calendar.current.startOfDay(for: record.timestamp)
+        )
+        let isActive = abs(recordDaySeconds - seekTime) < 1800 // within 30 min
 
-        let previewText: String = {
-            if let cleaned = group.cleanedText {
-                return String(cleaned.prefix(80))
-            } else if let first = group.rawChunks.first {
-                return String(first.text.prefix(80))
-            }
-            return ""
+        let timeFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.dateFormat = "h:mm a"
+            return f
         }()
+
+        let previewText = String(record.text.prefix(80))
 
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text(group.time)
+                Text(timeFormatter.string(from: record.timestamp))
                     .font(.system(size: 8, design: .monospaced))
                     .foregroundColor(theme.textTertiary)
 
-                if let person = group.personTag {
-                    TagView(type: .person, label: person, small: true)
-                }
-
-                if !group.tasks.isEmpty {
-                    TagView(type: .action, label: "\(group.tasks.count)", small: true)
+                if let speaker = record.speakerName {
+                    TagView(type: .person, label: speaker, small: true)
                 }
 
                 Spacer()

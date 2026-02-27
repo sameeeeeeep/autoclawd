@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 // MARK: - Settings Section Enum
@@ -6,6 +7,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case general
     case models
     case projects
+    case people
     case skills
     case connections
     case appearance
@@ -18,6 +20,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general:     return "\u{2699}"
         case .models:      return "\u{1F9E0}"
         case .projects:    return "\u{1F4C1}"
+        case .people:      return "\u{1F465}"
         case .skills:      return "\u{1F527}"
         case .connections: return "\u{1F517}"
         case .appearance:  return "\u{1F3A8}"
@@ -30,6 +33,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general:     return "General"
         case .models:      return "Models"
         case .projects:    return "Projects"
+        case .people:      return "People"
         case .skills:      return "Skills"
         case .connections: return "Connections"
         case .appearance:  return "Appearance"
@@ -46,11 +50,21 @@ struct SettingsConsolidatedView: View {
 
     @State private var selectedSection: SettingsSection = .general
 
-    // General mock state
+    // General mock state (items not yet backed by real persistence)
     @State private var autoStart = true
     @State private var notificationsEnabled = true
 
-    // Skills state
+    // Hot words local state (synced to SettingsManager)
+    @State private var localHotWordConfigs: [HotWordConfig] = SettingsManager.shared.hotWordConfigs
+    @State private var showAddHotWord = false
+
+    // API key local state (synced to Keychain via SettingsManager)
+    @State private var groqKey: String = ""
+    @State private var anthropicKey: String = SettingsManager.shared.anthropicAPIKey
+    @State private var isValidatingGroq = false
+    @State private var groqValidationResult: Bool? = nil
+
+    // Skills state — TODO: wire to MCP capabilities when skills system is built
     @State private var skills: [SkillItem] = [
         SkillItem(name: "Web Browsing", description: "Search & retrieve", enabled: true),
         SkillItem(name: "File Management", description: "Create, edit files", enabled: true),
@@ -60,9 +74,9 @@ struct SettingsConsolidatedView: View {
         SkillItem(name: "Slack", description: "Messages", enabled: false),
     ]
 
-    // Connections state
+    // Connections state — TODO: wire to real connection system when built
     @State private var connections: [ConnectionItem] = [
-        ConnectionItem(icon: "\u{1F916}", name: "Claude Code CLI", connected: true),
+        ConnectionItem(icon: "\u{1F916}", name: "Claude Code CLI", connected: false),
         ConnectionItem(icon: "\u{1F4C5}", name: "Google Calendar", connected: false),
         ConnectionItem(icon: "\u{1F4E7}", name: "Gmail", connected: false),
         ConnectionItem(icon: "\u{1F4AC}", name: "Slack", connected: false),
@@ -76,6 +90,13 @@ struct SettingsConsolidatedView: View {
 
     // Projects sheet
     @State private var showAddProject = false
+
+    // People
+    @State private var newPersonName = ""
+
+    // Audio devices
+    @State private var audioDevices: [AVCaptureDevice] = []
+    @State private var selectedAudioDeviceID: String = ""
 
     var body: some View {
         let theme = themeManager.current
@@ -124,6 +145,7 @@ struct SettingsConsolidatedView: View {
                     case .general:     generalSection(theme: theme, isDark: isDark)
                     case .models:      modelsSection(theme: theme, isDark: isDark)
                     case .projects:    projectsSection(theme: theme, isDark: isDark)
+                    case .people:      peopleSection(theme: theme, isDark: isDark)
                     case .skills:      skillsSection(theme: theme, isDark: isDark)
                     case .connections: connectionsSection(theme: theme, isDark: isDark)
                     case .appearance:  appearanceSection(theme: theme, isDark: isDark)
@@ -140,6 +162,22 @@ struct SettingsConsolidatedView: View {
                 appState.addProject(name: name, path: path)
             }
         }
+        .sheet(isPresented: $showAddHotWord) {
+            AddHotWordSheet(configs: Binding(
+                get: { localHotWordConfigs },
+                set: {
+                    localHotWordConfigs = $0
+                    SettingsManager.shared.hotWordConfigs = $0
+                }
+            ))
+        }
+        .onAppear {
+            groqKey = appState.groqAPIKey
+            anthropicKey = SettingsManager.shared.anthropicAPIKey
+            localHotWordConfigs = SettingsManager.shared.hotWordConfigs
+            refreshAudioDevices()
+            checkClaudeCodeCLI()
+        }
     }
 
     // MARK: - General Section
@@ -151,11 +189,6 @@ struct SettingsConsolidatedView: View {
         }
         settingsRow(theme: theme, isDark: isDark, label: "Always-on listening") {
             settingsToggle(isOn: $appState.micEnabled, theme: theme)
-        }
-        settingsRow(theme: theme, isDark: isDark, label: "Hot Words") {
-            settingsDropdown(selectedValue: "3 configured", theme: theme, isDark: isDark) {
-                Text("Configure...").tag("configure")
-            }
         }
         settingsRow(theme: theme, isDark: isDark, label: "Transcription engine") {
             settingsDropdown(
@@ -170,6 +203,102 @@ struct SettingsConsolidatedView: View {
                 }
             }
         }
+
+        // Audio input device picker
+        settingsRow(theme: theme, isDark: isDark, label: "Audio input", description: "Microphone device") {
+            settingsDropdown(
+                selectedValue: audioDevices.first(where: { $0.uniqueID == selectedAudioDeviceID })?.localizedName
+                    ?? (AVCaptureDevice.default(for: .audio)?.localizedName ?? "Default"),
+                theme: theme,
+                isDark: isDark
+            ) {
+                Button("System Default") { selectedAudioDeviceID = "" }
+                Divider()
+                ForEach(audioDevices, id: \.uniqueID) { device in
+                    Button(device.localizedName) {
+                        selectedAudioDeviceID = device.uniqueID
+                    }
+                }
+            }
+        }
+
+        // Audio retention
+        settingsRow(theme: theme, isDark: isDark, label: "Delete audio after", description: "Retention period for raw audio") {
+            settingsDropdown(
+                selectedValue: "\(appState.audioRetentionDays) days",
+                theme: theme,
+                isDark: isDark
+            ) {
+                ForEach(AudioRetention.allCases, id: \.rawValue) { r in
+                    Button(r.displayName) {
+                        appState.audioRetentionDays = r.rawValue
+                    }
+                }
+            }
+        }
+
+        // Hot Words — real binding to SettingsManager.shared.hotWordConfigs
+        sectionLabel("HOT WORDS", theme: theme)
+            .padding(.top, 8)
+
+        VStack(spacing: 6) {
+            ForEach(localHotWordConfigs) { config in
+                HStack(spacing: 8) {
+                    Text("hot \(config.keyword)")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundColor(theme.accent)
+
+                    Text("\u{2192} \(config.action.displayName)")
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.textTertiary)
+
+                    if config.action == .executeImmediately && config.skipPermissions {
+                        Text("\u{26A1}")
+                            .font(.system(size: 9))
+                    }
+
+                    Spacer()
+
+                    Button {
+                        localHotWordConfigs.removeAll { $0.id == config.id }
+                        SettingsManager.shared.hotWordConfigs = localHotWordConfigs
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 9))
+                            .foregroundColor(theme.error)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(theme.glass)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(theme.glassBorder, lineWidth: 0.5)
+                )
+            }
+
+            Button { showAddHotWord = true } label: {
+                HStack {
+                    Spacer()
+                    Text("+ Add Hot Word")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(theme.textTertiary)
+                    Spacer()
+                }
+                .padding(.vertical, 9)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
+                        .foregroundColor(theme.textTertiary.opacity(0.4))
+                )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.bottom, 4)
+
         settingsRow(theme: theme, isDark: isDark, label: "Language") {
             settingsDropdown(selectedValue: "English + Hindi", theme: theme, isDark: isDark) {
                 Text("English + Hindi").tag("en_hi")
@@ -178,12 +307,136 @@ struct SettingsConsolidatedView: View {
         settingsRow(theme: theme, isDark: isDark, label: "Notifications", showBorder: false) {
             settingsToggle(isOn: $notificationsEnabled, theme: theme)
         }
+
+        // Data management
+        sectionLabel("DATA", theme: theme)
+            .padding(.top, 8)
+
+        HStack(spacing: 8) {
+            Button("Re-run Setup") { appState.showSetup() }
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(theme.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(theme.glass)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(theme.glassBorder, lineWidth: 0.5)
+                )
+                .buttonStyle(.plain)
+
+            Button("Export All") { appState.exportData() }
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(theme.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(theme.glass)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(theme.glassBorder, lineWidth: 0.5)
+                )
+                .buttonStyle(.plain)
+
+            Button("Delete All") { appState.confirmDeleteAll() }
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(theme.error)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(theme.glass)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(theme.error.opacity(0.3), lineWidth: 0.5)
+                )
+                .buttonStyle(.plain)
+        }
     }
 
     // MARK: - Models Section
 
     @ViewBuilder
     private func modelsSection(theme: ThemePalette, isDark: Bool) -> some View {
+
+        // API Keys subsection
+        sectionLabel("API KEYS", theme: theme)
+
+        VStack(alignment: .leading, spacing: 10) {
+            // Anthropic API Key
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Anthropic API Key")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(theme.textSecondary)
+                SecureField("sk-ant-...", text: $anthropicKey)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 10))
+                    .onChange(of: anthropicKey) { _ in
+                        SettingsManager.shared.anthropicAPIKey = anthropicKey
+                    }
+            }
+
+            // Groq API Key (shown when groq transcription mode selected)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Groq API Key")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(theme.textSecondary)
+                HStack(spacing: 6) {
+                    SecureField("gsk_...", text: $groqKey)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 10))
+                        .onChange(of: groqKey) { _ in
+                            appState.groqAPIKey = groqKey
+                            groqValidationResult = nil
+                        }
+
+                    Button(isValidatingGroq ? "..." : "Validate") {
+                        validateGroqKey()
+                    }
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(theme.textSecondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(theme.glass)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                    )
+                    .buttonStyle(.plain)
+                    .disabled(isValidatingGroq || groqKey.isEmpty)
+
+                    if let result = groqValidationResult {
+                        Image(systemName: result ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(result ? theme.accent : theme.error)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 9)
+                .fill(theme.glass)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(theme.glassBorder, lineWidth: 0.5)
+        )
+        .padding(.bottom, 8)
+
+        // Model assignments subsection
+        sectionLabel("MODEL ASSIGNMENTS", theme: theme)
+            .padding(.top, 4)
+
         settingsRow(theme: theme, isDark: isDark, label: "Transcription") {
             settingsDropdown(selectedValue: "Groq Whisper V3", theme: theme, isDark: isDark) {
                 Button("Groq Whisper V3") {}
@@ -207,7 +460,7 @@ struct SettingsConsolidatedView: View {
                 Button("Claude Code CLI") {}
             }
         }
-        settingsRow(theme: theme, isDark: isDark, label: "Auto-approve", showBorder: false) {
+        settingsRow(theme: theme, isDark: isDark, label: "Auto-approve", description: "Auto-synthesize after N pending items", showBorder: false) {
             settingsDropdown(
                 selectedValue: appState.synthesizeThreshold > 0
                     ? "Auto: \(appState.synthesizeThreshold)"
@@ -275,8 +528,15 @@ struct SettingsConsolidatedView: View {
                     .truncationMode(.middle)
             }
             Spacer()
-            // Toggle placeholder (projects are always "active")
-            settingsToggle(isOn: .constant(true), theme: theme)
+
+            Button {
+                appState.deleteProject(id: project.id)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 9))
+                    .foregroundColor(theme.error)
+            }
+            .buttonStyle(.plain)
         }
         .padding(12)
         .background(
@@ -289,10 +549,120 @@ struct SettingsConsolidatedView: View {
         )
     }
 
+    // MARK: - People Section
+
+    @ViewBuilder
+    private func peopleSection(theme: ThemePalette, isDark: Bool) -> some View {
+        VStack(spacing: 8) {
+            ForEach(appState.people) { person in
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(person.color)
+                        .frame(width: 8, height: 8)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(person.name)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(theme.textPrimary)
+                            if person.isMe {
+                                Text("(you)")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(theme.accent)
+                            }
+                            if person.isMusic {
+                                Text("(music)")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(theme.secondary)
+                            }
+                        }
+                        Text("Color: \(person.personColor)")
+                            .font(.system(size: 9))
+                            .foregroundColor(theme.textTertiary)
+                    }
+
+                    Spacer()
+
+                    // Don't allow deleting "Me" or "Music" special persons
+                    if !person.isMe && !person.isMusic {
+                        Button {
+                            appState.people.removeAll { $0.id == person.id }
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 9))
+                                .foregroundColor(theme.error)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(theme.glass)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9)
+                        .stroke(theme.glassBorder, lineWidth: 0.5)
+                )
+            }
+
+            // Add Person
+            HStack(spacing: 6) {
+                TextField("New person name", text: $newPersonName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 10))
+
+                Button {
+                    let name = newPersonName.trimmingCharacters(in: .whitespaces)
+                    guard !name.isEmpty else { return }
+                    appState.addPerson(name: name)
+                    newPersonName = ""
+                } label: {
+                    Text("+ Add")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(theme.accent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(theme.accent.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(theme.accent.opacity(0.3), lineWidth: 0.5)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(newPersonName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.top, 4)
+
+            // Note about world view
+            HStack(spacing: 6) {
+                Text("\u{1F4CD}")
+                    .font(.system(size: 10))
+                Text("Drag people on the World map to set their spatial position")
+                    .font(.system(size: 9))
+                    .foregroundColor(theme.textTertiary)
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(theme.glass)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(theme.glassBorder, lineWidth: 0.5)
+            )
+        }
+    }
+
     // MARK: - Skills Section
 
     @ViewBuilder
     private func skillsSection(theme: ThemePalette, isDark: Bool) -> some View {
+        // TODO: Wire to MCP capabilities when skills system is built.
+        // These are currently mock @State items for UI preview.
         VStack(spacing: 8) {
             ForEach($skills) { $skill in
                 HStack(spacing: 10) {
@@ -342,6 +712,8 @@ struct SettingsConsolidatedView: View {
 
     @ViewBuilder
     private func connectionsSection(theme: ThemePalette, isDark: Bool) -> some View {
+        // TODO: Wire to real connection system when built.
+        // Claude Code CLI status is checked on appear via `which claude`.
         VStack(spacing: 8) {
             ForEach($connections) { $conn in
                 HStack(spacing: 10) {
@@ -456,6 +828,41 @@ struct SettingsConsolidatedView: View {
                     RoundedRectangle(cornerRadius: 7)
                         .stroke(theme.glassBorder, lineWidth: 0.5)
                 )
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(theme.glass)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(theme.glassBorder, lineWidth: 0.5)
+            )
+
+            // Pill appearance mode (frosted / transparent / dynamic)
+            sectionLabel("PILL APPEARANCE", theme: theme)
+
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Pill style")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(theme.textPrimary)
+                    Text("Visual style of the floating pill")
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.textTertiary)
+                }
+                Spacer()
+                settingsDropdown(
+                    selectedValue: appState.appearanceMode.displayName,
+                    theme: theme,
+                    isDark: isDark
+                ) {
+                    ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                        Button(mode.displayName) {
+                            appState.appearanceMode = mode
+                        }
+                    }
+                }
             }
             .padding(14)
             .background(
@@ -724,6 +1131,51 @@ struct SettingsConsolidatedView: View {
             .tracking(0.8)
             .foregroundColor(theme.textSecondary)
             .padding(.top, 4)
+    }
+
+    // MARK: - Private Helpers
+
+    private func validateGroqKey() {
+        isValidatingGroq = true
+        Task {
+            let result = await TranscriptionService.validateAPIKey(groqKey)
+            await MainActor.run {
+                groqValidationResult = result
+                isValidatingGroq = false
+            }
+        }
+    }
+
+    private func refreshAudioDevices() {
+        let discoverySession = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInMicrophone, .externalUnknown],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        audioDevices = discoverySession.devices
+    }
+
+    private func checkClaudeCodeCLI() {
+        Task {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+            process.arguments = ["claude"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = Pipe()
+            do {
+                try process.run()
+                process.waitUntilExit()
+                let found = process.terminationStatus == 0
+                await MainActor.run {
+                    if let idx = connections.firstIndex(where: { $0.name == "Claude Code CLI" }) {
+                        connections[idx].connected = found
+                    }
+                }
+            } catch {
+                // which not available or failed — leave as disconnected
+            }
+        }
     }
 }
 
