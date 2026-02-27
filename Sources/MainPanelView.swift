@@ -51,10 +51,15 @@ struct MainPanelView: View {
                                 .fill(AppTheme.green)
                                 .frame(width: AppTheme.selectedAccentWidth)
                         }
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 18, weight: selectedTab == tab ? .semibold : .regular))
-                            .foregroundColor(selectedTab == tab ? AppTheme.textPrimary : AppTheme.textSecondary)
-                            .frame(maxWidth: .infinity)
+                        VStack(spacing: 3) {
+                            Image(systemName: tab.icon)
+                                .font(.system(size: 16, weight: selectedTab == tab ? .semibold : .regular))
+                                .foregroundColor(selectedTab == tab ? AppTheme.textPrimary : AppTheme.textSecondary)
+                            Text(tab.rawValue)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(selectedTab == tab ? AppTheme.textPrimary : AppTheme.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity)
                     }
                     .frame(height: 44)
                     .background(selectedTab == tab ? AppTheme.surfaceHover : Color.clear)
