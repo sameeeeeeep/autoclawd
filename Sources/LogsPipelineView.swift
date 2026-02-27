@@ -246,7 +246,7 @@ struct LogsPipelineView: View {
 
                 if selectedRowID != nil, viewMode == .pipeline {
                     detailSidebar
-                        .frame(width: 300)
+                        .frame(minWidth: 220, idealWidth: 300, maxWidth: 360)
                         .transition(.move(edge: .trailing))
                 }
             }
@@ -605,27 +605,31 @@ struct LogsPipelineView: View {
 
     private var columnHeaderRow: some View {
         let theme = ThemeManager.shared.current
-        return HStack(spacing: 0) {
-            columnHeader("TIME", color: theme.textTertiary)
-                .frame(width: 55)
-            columnHeader("TRANSCRIPT", color: theme.textSecondary)
-                .frame(maxWidth: .infinity)
-                .layoutPriority(1.2)
-            columnHeader("CLEANING", color: theme.tertiary)
-                .frame(maxWidth: .infinity)
-                .layoutPriority(1.2)
-            columnHeader("ANALYSIS", color: theme.secondary)
-                .frame(maxWidth: .infinity)
-                .layoutPriority(1.0)
-            columnHeader("TASK", color: theme.warning)
-                .frame(maxWidth: .infinity)
-                .layoutPriority(1.2)
-            columnHeader("RESULT", color: theme.accent)
-                .frame(maxWidth: .infinity)
-                .layoutPriority(1.0)
+        return GeometryReader { geo in
+            let available = max(0, geo.size.width - 60 - 30) // 60 for TIME, 30 for padding
+            let transcriptW = available * 0.22
+            let cleaningW = available * 0.18
+            let analysisW = available * 0.18
+            let taskW = available * 0.24
+            let resultW = available * 0.18
+
+            HStack(spacing: 0) {
+                columnHeader("TIME", color: theme.textTertiary)
+                    .frame(width: 60, alignment: .leading)
+                columnHeader("TRANSCRIPT", color: theme.textSecondary)
+                    .frame(width: transcriptW, alignment: .leading)
+                columnHeader("CLEANING", color: theme.tertiary)
+                    .frame(width: cleaningW, alignment: .leading)
+                columnHeader("ANALYSIS", color: theme.secondary)
+                    .frame(width: analysisW, alignment: .leading)
+                columnHeader("TASK", color: theme.warning)
+                    .frame(width: taskW, alignment: .leading)
+                columnHeader("RESULT", color: theme.accent)
+                    .frame(width: resultW, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
         }
-        .padding(.vertical, 7)
-        .padding(.horizontal, 16)
+        .frame(height: 28)
         .overlay(
             Rectangle()
                 .fill(theme.glassBorder)
@@ -660,37 +664,53 @@ struct LogsPipelineView: View {
                     .fill(isSelected ? theme.accent : Color.clear)
                     .frame(width: 2)
 
-                HStack(spacing: 0) {
-                    // Time column
-                    timeColumn(group: group)
-                        .frame(width: 55)
+                GeometryReader { geo in
+                    let available = max(0, geo.size.width - 60 - 30) // 60 for TIME, 30 for padding
+                    let transcriptW = available * 0.22
+                    let cleaningW = available * 0.18
+                    let analysisW = available * 0.18
+                    let taskW = available * 0.24
+                    let resultW = available * 0.18
 
-                    // Transcript column
-                    transcriptColumn(group: group)
-                        .frame(maxWidth: .infinity)
-                        .layoutPriority(1.2)
+                    HStack(spacing: 0) {
+                        // Time column
+                        timeColumn(group: group)
+                            .frame(width: 60, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .clipped()
 
-                    // Cleaning column
-                    cleaningColumn(group: group)
-                        .frame(maxWidth: .infinity)
-                        .layoutPriority(1.2)
+                        // Transcript column
+                        transcriptColumn(group: group)
+                            .frame(width: transcriptW, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .clipped()
 
-                    // Analysis column
-                    analysisColumn(group: group)
-                        .frame(maxWidth: .infinity)
-                        .layoutPriority(1.0)
+                        // Cleaning column
+                        cleaningColumn(group: group)
+                            .frame(width: cleaningW, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .clipped()
 
-                    // Task column
-                    taskColumn(group: group)
-                        .frame(maxWidth: .infinity)
-                        .layoutPriority(1.2)
+                        // Analysis column
+                        analysisColumn(group: group)
+                            .frame(width: analysisW, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .clipped()
 
-                    // Result column
-                    resultColumn(group: group)
-                        .frame(maxWidth: .infinity)
-                        .layoutPriority(1.0)
+                        // Task column
+                        taskColumn(group: group)
+                            .frame(width: taskW, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .clipped()
+
+                        // Result column
+                        resultColumn(group: group)
+                            .frame(width: resultW, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .clipped()
+                    }
+                    .padding(.horizontal, 16)
                 }
-                .padding(.horizontal, 14)
                 .padding(.vertical, 8)
             }
             .frame(minHeight: isMerged ? 70 : 48)
@@ -818,13 +838,6 @@ struct LogsPipelineView: View {
 
     private func taskMiniCard(task: PipelineTask, groupID: String) -> some View {
         let theme = ThemeManager.shared.current
-        let modeBadgeMode: ModeBadge.Mode = {
-            switch task.mode {
-            case .auto: return .auto
-            case .ask:  return .ask
-            case .user: return .user
-            }
-        }()
 
         // Extract the real extraction item ID from task ID
         let extractionID: String? = {
@@ -838,7 +851,7 @@ struct LogsPipelineView: View {
                 Text(task.id)
                     .font(.system(size: 7, design: .monospaced))
                     .foregroundColor(theme.textTertiary)
-                ModeBadge(mode: modeBadgeMode)
+                TagView(type: .status, label: task.mode == .user ? "user" : "auto", small: true)
             }
             Text(String(task.title.prefix(50)))
                 .font(.system(size: 9, weight: .semibold))
@@ -1229,13 +1242,6 @@ struct LogsPipelineView: View {
 
     private func expandedTaskCard(task: PipelineTask) -> some View {
         let theme = ThemeManager.shared.current
-        let modeBadgeMode: ModeBadge.Mode = {
-            switch task.mode {
-            case .auto: return .auto
-            case .ask:  return .ask
-            case .user: return .user
-            }
-        }()
 
         // Find the real extraction item for bucket picker
         let extractionItem = appState.extractionItems.first(where: { $0.id.hasPrefix(task.id) })
@@ -1247,7 +1253,7 @@ struct LogsPipelineView: View {
                     .font(.system(size: 7, design: .monospaced))
                     .foregroundColor(theme.textTertiary)
                 TagView(type: .project, label: task.project, small: true)
-                ModeBadge(mode: modeBadgeMode)
+                TagView(type: .status, label: task.mode == .user ? "user" : "auto", small: true)
             }
 
             // Title (content)

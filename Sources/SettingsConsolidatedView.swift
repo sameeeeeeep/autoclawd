@@ -64,16 +64,6 @@ struct SettingsConsolidatedView: View {
     @State private var isValidatingGroq = false
     @State private var groqValidationResult: Bool? = nil
 
-    // Skills state — TODO: wire to MCP capabilities when skills system is built
-    @State private var skills: [SkillItem] = [
-        SkillItem(name: "Web Browsing", description: "Search & retrieve", enabled: true),
-        SkillItem(name: "File Management", description: "Create, edit files", enabled: true),
-        SkillItem(name: "Code Execution", description: "Scripts & CLI", enabled: true),
-        SkillItem(name: "Calendar", description: "Manage events", enabled: false),
-        SkillItem(name: "Email", description: "Draft & send", enabled: false),
-        SkillItem(name: "Slack", description: "Messages", enabled: false),
-    ]
-
     // Connections state — TODO: wire to real connection system when built
     @State private var connections: [ConnectionItem] = [
         ConnectionItem(icon: "\u{1F916}", name: "Claude Code CLI", connected: false),
@@ -129,7 +119,7 @@ struct SettingsConsolidatedView: View {
                 }
                 Spacer()
             }
-            .frame(width: 160)
+            .frame(minWidth: 120, idealWidth: 160, maxWidth: 200)
             .padding(.top, 12)
             .padding(.horizontal, 8)
 
@@ -443,22 +433,20 @@ struct SettingsConsolidatedView: View {
                 Button("Local Whisper") {}
             }
         }
-        settingsRow(theme: theme, isDark: isDark, label: "Cleaning") {
-            settingsDropdown(selectedValue: "Claude Haiku 4.5", theme: theme, isDark: isDark) {
-                Button("Claude Haiku 4.5") {}
-                Button("Claude Sonnet 4.5") {}
-            }
+        settingsRow(theme: theme, isDark: isDark, label: "Cleaning", description: "Coming soon") {
+            Text("Claude Haiku 4.5")
+                .font(.system(size: 10))
+                .foregroundColor(theme.textTertiary)
         }
-        settingsRow(theme: theme, isDark: isDark, label: "Analysis") {
-            settingsDropdown(selectedValue: "Claude Sonnet 4.5", theme: theme, isDark: isDark) {
-                Button("Claude Sonnet 4.5") {}
-                Button("Claude Opus 4") {}
-            }
+        settingsRow(theme: theme, isDark: isDark, label: "Analysis", description: "Coming soon") {
+            Text("Claude Sonnet 4.5")
+                .font(.system(size: 10))
+                .foregroundColor(theme.textTertiary)
         }
-        settingsRow(theme: theme, isDark: isDark, label: "Execution") {
-            settingsDropdown(selectedValue: "Claude Code CLI", theme: theme, isDark: isDark) {
-                Button("Claude Code CLI") {}
-            }
+        settingsRow(theme: theme, isDark: isDark, label: "Execution", description: "Coming soon") {
+            Text("Claude Code CLI")
+                .font(.system(size: 10))
+                .foregroundColor(theme.textTertiary)
         }
         settingsRow(theme: theme, isDark: isDark, label: "Auto-approve", description: "Auto-synthesize after N pending items", showBorder: false) {
             settingsDropdown(
@@ -661,61 +649,30 @@ struct SettingsConsolidatedView: View {
 
     @ViewBuilder
     private func skillsSection(theme: ThemePalette, isDark: Bool) -> some View {
-        // TODO: Wire to MCP capabilities when skills system is built.
-        // These are currently mock @State items for UI preview.
-        VStack(spacing: 8) {
-            ForEach($skills) { $skill in
-                HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(skill.name)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(theme.textPrimary)
-                        Text(skill.description)
-                            .font(.system(size: 9))
-                            .foregroundColor(theme.textTertiary)
-                    }
-                    Spacer()
-                    settingsToggle(isOn: $skill.enabled, theme: theme)
-                }
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 9)
-                        .fill(theme.glass)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9)
-                        .stroke(theme.glassBorder, lineWidth: 0.5)
-                )
-            }
-
-            // Add Skill button
-            Button {} label: {
-                HStack {
-                    Spacer()
-                    Text("+ Add Skill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(theme.textTertiary)
-                    Spacer()
-                }
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 9)
-                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
-                        .foregroundColor(theme.textTertiary.opacity(0.4))
-                )
-            }
-            .buttonStyle(.plain)
+        VStack(spacing: 16) {
+            Spacer()
+            Text("\u{1F527}")
+                .font(.system(size: 28))
+            Text("Skills — Coming Soon")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(theme.textPrimary)
+            Text("MCP-based skills like web browsing, file management, and calendar integration will be available in a future update.")
+                .font(.system(size: 10))
+                .foregroundColor(theme.textTertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 300)
+            Spacer()
         }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Connections Section
 
     @ViewBuilder
     private func connectionsSection(theme: ThemePalette, isDark: Bool) -> some View {
-        // TODO: Wire to real connection system when built.
-        // Claude Code CLI status is checked on appear via `which claude`.
         VStack(spacing: 8) {
             ForEach($connections) { $conn in
+                let isCC = conn.name == "Claude Code CLI"
                 HStack(spacing: 10) {
                     Text(conn.icon)
                         .font(.system(size: 14))
@@ -724,29 +681,37 @@ struct SettingsConsolidatedView: View {
                         Text(conn.name)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(theme.textPrimary)
-                        Text(conn.connected ? "Connected" : "Not connected")
-                            .font(.system(size: 9))
-                            .foregroundColor(conn.connected ? theme.accent : theme.textTertiary)
+                        if isCC {
+                            Text(conn.connected ? "Connected" : "Not connected")
+                                .font(.system(size: 9))
+                                .foregroundColor(conn.connected ? theme.accent : theme.textTertiary)
+                        } else {
+                            Text("Coming Soon")
+                                .font(.system(size: 9))
+                                .foregroundColor(theme.textTertiary)
+                        }
                     }
 
                     Spacer()
 
-                    Button(conn.connected ? "Manage" : "Connect") {
-                        // mock action
+                    if isCC {
+                        Button(conn.connected ? "Manage" : "Connect") {
+                            // Claude Code CLI connection action
+                        }
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.textSecondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(theme.glass)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(theme.glassBorder, lineWidth: 0.5)
+                        )
+                        .buttonStyle(.plain)
                     }
-                    .font(.system(size: 9))
-                    .foregroundColor(theme.textSecondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(theme.glass)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(theme.glassBorder, lineWidth: 0.5)
-                    )
-                    .buttonStyle(.plain)
                 }
                 .padding(12)
                 .background(
@@ -757,6 +722,7 @@ struct SettingsConsolidatedView: View {
                     RoundedRectangle(cornerRadius: 9)
                         .stroke(theme.glassBorder, lineWidth: 0.5)
                 )
+                .opacity(isCC ? 1.0 : 0.45)
             }
         }
     }

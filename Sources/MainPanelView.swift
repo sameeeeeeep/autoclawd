@@ -52,7 +52,7 @@ struct MainPanelView: View {
                 .background(.ultraThinMaterial)
                 .overlay(ambientGlowOverlays)
         }
-        .frame(minWidth: 700, minHeight: 500)
+        .frame(minWidth: 600, minHeight: 400)
         .background(theme.bgGradientStops.first ?? theme.surface)
     }
 

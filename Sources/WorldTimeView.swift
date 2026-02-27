@@ -7,12 +7,14 @@ struct WorldTimeView: View {
 
     @State private var selectedEpisodeIndex: Int = 0
     @State private var seekTime: TimeInterval = 0
-    @State private var isPlaying: Bool = false
     @State private var viewMode: String = "now" // "now" or "replay"
 
     // Real data loaded from stores
     @State private var episodes: [Episode] = []
     @State private var transcriptRecords: [TranscriptRecord] = []
+
+    // Drag state for map dots
+    @State private var dragStarts: [UUID: CGPoint] = [:]
 
     // Waveform animation
     @State private var waveformHeights: [CGFloat] = (0..<50).map { _ in CGFloat.random(in: 0.15...1.0) }
@@ -255,7 +257,7 @@ struct WorldTimeView: View {
                 }
             }
         }
-        .frame(width: 280)
+        .frame(minWidth: 200, idealWidth: 280, maxWidth: 320)
         .overlay(
             Rectangle()
                 .fill(theme.glassBorder)
@@ -506,28 +508,55 @@ struct WorldTimeView: View {
                     .padding(.top, 12)
                     .padding(.leading, 14)
 
-                // Speaker dots — real people from AppState
-                ForEach(appState.people.filter { !$0.isMusic }) { person in
-                    let isActive = appState.currentSpeakerID == person.id
-                    VStack(spacing: 3) {
-                        Circle()
-                            .fill(isActive ? person.color : theme.textSecondary)
-                            .frame(
-                                width: isActive ? 14 : 10,
-                                height: isActive ? 14 : 10
-                            )
-                            .shadow(
-                                color: isActive ? person.color.opacity(0.5) : .clear,
-                                radius: isActive ? 8 : 0
-                            )
-                        Text(person.name)
-                            .font(.system(size: 9))
-                            .foregroundColor(theme.textSecondary)
+                // Speaker dots — real people from AppState (draggable)
+                ForEach(Array(appState.people.enumerated()), id: \.element.id) { index, person in
+                    if !person.isMusic {
+                        let isActive = appState.currentSpeakerID == person.id
+                        VStack(spacing: 3) {
+                            Circle()
+                                .fill(isActive ? person.color : theme.textSecondary)
+                                .frame(
+                                    width: isActive ? 14 : 10,
+                                    height: isActive ? 14 : 10
+                                )
+                                .shadow(
+                                    color: isActive ? person.color.opacity(0.5) : .clear,
+                                    radius: isActive ? 8 : 0
+                                )
+                            Text(person.name)
+                                .font(.system(size: 9))
+                                .foregroundColor(theme.textSecondary)
+                        }
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 6)
+                                .onChanged { drag in
+                                    if dragStarts[person.id] == nil {
+                                        dragStarts[person.id] = person.mapPosition
+                                    }
+                                    let start = dragStarts[person.id]!
+                                    let newX = start.x + drag.translation.width  / size
+                                    let newY = start.y + drag.translation.height / size
+                                    appState.people[index].mapPosition = CGPoint(
+                                        x: max(0.05, min(0.95, newX)),
+                                        y: max(0.05, min(0.95, newY))
+                                    )
+                                }
+                                .onEnded { _ in
+                                    dragStarts.removeValue(forKey: person.id)
+                                }
+                        )
+                        .onHover { hovering in
+                            if hovering {
+                                NSCursor.openHand.push()
+                            } else {
+                                NSCursor.pop()
+                            }
+                        }
+                        .position(
+                            x: size * person.mapPosition.x,
+                            y: size * person.mapPosition.y
+                        )
                     }
-                    .position(
-                        x: size * person.mapPosition.x,
-                        y: size * person.mapPosition.y
-                    )
                 }
             }
             .frame(width: size, height: size)
@@ -566,54 +595,6 @@ struct WorldTimeView: View {
         let locationDisplay = appState.locationName
 
         return HStack(spacing: 12) {
-            // Play/pause button
-            Button {
-                isPlaying.toggle()
-                if isPlaying && isLive {
-                    startWaveformAnimation()
-                } else if !isLive {
-                    // For replay mode, just toggle play state
-                } else {
-                    stopWaveformAnimation()
-                }
-            } label: {
-                ZStack {
-                    Circle()
-                        .fill(Color.clear)
-                        .frame(width: 40, height: 40)
-                        .overlay(
-                            Circle()
-                                .stroke(
-                                    isLive ? theme.error : theme.accent,
-                                    lineWidth: 1.5
-                                )
-                        )
-                        .shadow(
-                            color: (isLive ? theme.error : theme.accent).opacity(0.3),
-                            radius: 6
-                        )
-
-                    if isPlaying {
-                        // Pause icon: two rects
-                        HStack(spacing: 4) {
-                            RoundedRectangle(cornerRadius: 1)
-                                .fill(isLive ? theme.error : theme.accent)
-                                .frame(width: 3.5, height: 14)
-                            RoundedRectangle(cornerRadius: 1)
-                                .fill(isLive ? theme.error : theme.accent)
-                                .frame(width: 3.5, height: 14)
-                        }
-                    } else {
-                        // Play triangle
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(isLive ? theme.error : theme.accent)
-                            .offset(x: 1)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-
             // Waveform bars + status
             VStack(spacing: 6) {
                 // Bars
@@ -636,12 +617,8 @@ struct WorldTimeView: View {
                         Text("Mic off \u{2022} \(locationDisplay)")
                             .font(.system(size: 9))
                             .foregroundColor(theme.textTertiary)
-                    } else if isPlaying {
-                        Text("Replay \u{2022} \(formatTime(seekTime))")
-                            .font(.system(size: 9))
-                            .foregroundColor(theme.textTertiary)
                     } else {
-                        Text("Paused")
+                        Text("Paused at \(formatTime(seekTime))")
                             .font(.system(size: 9))
                             .foregroundColor(theme.textTertiary)
                     }
@@ -786,7 +763,7 @@ struct WorldTimeView: View {
                 }
             }
         }
-        .frame(width: 250)
+        .frame(minWidth: 180, idealWidth: 250, maxWidth: 300)
         .overlay(
             Rectangle()
                 .fill(theme.glassBorder)

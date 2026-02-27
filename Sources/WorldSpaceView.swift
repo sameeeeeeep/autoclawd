@@ -87,7 +87,7 @@ struct WorldSpaceView: View {
             } else {
                 HStack(spacing: 0) {
                     placeListPanel
-                        .frame(width: 210)
+                        .frame(minWidth: 160, idealWidth: 210, maxWidth: 260)
                         .overlay(
                             Rectangle()
                                 .fill(theme.glassBorder)
