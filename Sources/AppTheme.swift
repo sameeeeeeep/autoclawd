@@ -1,22 +1,24 @@
 // Sources/AppTheme.swift
+import AppKit
 import SwiftUI
 
 // MARK: - App Design Tokens
 
 enum AppTheme {
-    // MARK: Colors
-    static let background    = Color(hex: "#FFFFFF")
-    static let surface       = Color(hex: "#F7F7F7")
-    static let surfaceHover  = Color(hex: "#EBEBEB")
-    static let textPrimary   = Color(hex: "#0A0A0A")
-    static let textSecondary = Color(hex: "#6B6B6B")
-    static let green         = Color(hex: "#16C172")
-    static let cyan          = Color(hex: "#06B6D4")
-    static let border        = Color(hex: "#E4E4E4")
-    static let destructive   = Color(hex: "#EF4444")
+    // MARK: Colors (all adaptive — light/dark)
+    static let background     = Color.adaptive(light: Color(hex: "#FFFFFF"), dark: Color(hex: "#0F0F0F"))
+    static let surface        = Color.adaptive(light: Color(hex: "#F0F0F0"), dark: Color(hex: "#1A1A1A"))
+    static let surfaceHover   = Color.adaptive(light: Color(hex: "#E5E5E5"), dark: Color(hex: "#252525"))
+    static let textPrimary    = Color.adaptive(light: Color(hex: "#0A0A0A"), dark: Color(hex: "#F0F0F0"))
+    static let textSecondary  = Color.adaptive(light: Color(hex: "#525252"), dark: Color(hex: "#A0A0A0"))
+    static let textDisabled   = Color.adaptive(light: Color(hex: "#B0B0B0"), dark: Color(hex: "#4A4A4A"))
+    static let green          = Color(hex: "#16C172")
+    static let cyan           = Color(hex: "#06B6D4")
+    static let border         = Color.adaptive(light: Color(hex: "#D4D4D4"), dark: Color(hex: "#2E2E2E"))
+    static let destructive    = Color(hex: "#EF4444")
 
     // MARK: Typography
-    static let caption  = Font.system(size: 11, weight: .regular)
+    static let caption  = Font.system(size: 12, weight: .regular)
     static let body     = Font.system(size: 13, weight: .regular)
     static let label    = Font.system(size: 13, weight: .medium)
     static let heading  = Font.system(size: 15, weight: .semibold)
@@ -33,7 +35,7 @@ enum AppTheme {
 
     // MARK: Geometry
     static let cornerRadius:        CGFloat = 6
-    static let sidebarWidth:        CGFloat = 52
+    static let sidebarWidth:        CGFloat = 60
     static let selectedAccentWidth: CGFloat = 3
 }
 
@@ -48,6 +50,13 @@ extension Color {
         let g = Double((int >>  8) & 0xFF) / 255
         let b = Double( int        & 0xFF) / 255
         self.init(red: r, green: g, blue: b)
+    }
+
+    static func adaptive(light: Color, dark: Color) -> Color {
+        Color(NSColor(name: nil, dynamicProvider: { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor(dark) : NSColor(light)
+        }))
     }
 }
 
@@ -84,7 +93,7 @@ struct SecondaryButtonStyle: ButtonStyle {
             .foregroundColor(AppTheme.textPrimary)
             .padding(.horizontal, AppTheme.md)
             .padding(.vertical, AppTheme.sm)
-            .background(Color.white)
+            .background(AppTheme.background)
             .overlay(RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
                         .stroke(AppTheme.border, lineWidth: 1))
             .opacity(configuration.isPressed ? 0.7 : 1)
@@ -98,7 +107,7 @@ struct DestructiveButtonStyle: ButtonStyle {
             .foregroundColor(AppTheme.destructive)
             .padding(.horizontal, AppTheme.md)
             .padding(.vertical, AppTheme.sm)
-            .background(Color.white)
+            .background(AppTheme.background)
             .overlay(RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
                         .stroke(AppTheme.destructive, lineWidth: 1))
             .opacity(configuration.isPressed ? 0.7 : 1)
