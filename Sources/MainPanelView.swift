@@ -4,17 +4,33 @@ import SwiftUI
 // MARK: - Panel Tab
 
 enum PanelTab: String, CaseIterable, Identifiable {
-    case world        = "World"
-    case intelligence = "Intelligence"
-    case settings     = "Settings"
+    case world    = "World"
+    case logs     = "Logs"
+    case settings = "Settings"
 
     var id: String { rawValue }
 
     var icon: String {
         switch self {
-        case .world:        return "globe"
-        case .intelligence: return "brain.head.profile"
-        case .settings:     return "gearshape"
+        case .world:    return "globe"
+        case .logs:     return "doc.text"
+        case .settings: return "gearshape"
+        }
+    }
+}
+
+// MARK: - World Sub-Tab
+
+enum WorldSubTab: String, CaseIterable, Identifiable {
+    case time  = "Time"
+    case space = "Space"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .time:  return "\u{1F550} Time"
+        case .space: return "\u{1F4CD} Space"
         }
     }
 }
@@ -24,63 +40,128 @@ enum PanelTab: String, CaseIterable, Identifiable {
 struct MainPanelView: View {
     @ObservedObject var appState: AppState
     @State private var selectedTab: PanelTab = .world
+    @State private var selectedWorldSubTab: WorldSubTab = .time
 
     var body: some View {
+        let theme = ThemeManager.shared.current
         HStack(spacing: 0) {
-            sidebar
-            Divider()
+            navRail
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(AppTheme.background)
+                .background(theme.glass)
+                .background(.ultraThinMaterial)
+                .overlay(ambientGlowOverlays)
         }
         .frame(minWidth: 700, minHeight: 500)
-        .background(AppTheme.background)
+        .background(theme.bgGradientStops.first ?? theme.surface)
     }
 
-    // MARK: - Sidebar
+    // MARK: - Ambient Glow Overlays
 
-    private var sidebar: some View {
-        VStack(spacing: 0) {
-            Spacer().frame(height: AppTheme.xl)
+    private var ambientGlowOverlays: some View {
+        let theme = ThemeManager.shared.current
+        return ZStack {
+            // Top-right radial gradient
+            RadialGradient(
+                colors: [theme.glow1.opacity(0.06), Color.clear],
+                center: .topTrailing,
+                startRadius: 0,
+                endRadius: 210
+            )
+            .frame(width: 420, height: 420)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
 
-            ForEach(PanelTab.allCases) { tab in
-                Button { selectedTab = tab } label: {
-                    ZStack(alignment: .leading) {
-                        if selectedTab == tab {
-                            Rectangle()
-                                .fill(AppTheme.green)
-                                .frame(width: AppTheme.selectedAccentWidth)
-                        }
-                        VStack(spacing: 3) {
-                            Image(systemName: tab.icon)
-                                .font(.system(size: 16, weight: selectedTab == tab ? .semibold : .regular))
-                                .foregroundColor(selectedTab == tab ? AppTheme.textPrimary : AppTheme.textSecondary)
-                            Text(tab.rawValue)
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(selectedTab == tab ? AppTheme.textPrimary : AppTheme.textSecondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .frame(height: 44)
-                    .background(selectedTab == tab ? AppTheme.surfaceHover : Color.clear)
+            // Bottom-left radial gradient
+            RadialGradient(
+                colors: [theme.glow2.opacity(0.05), Color.clear],
+                center: .bottomLeading,
+                startRadius: 0,
+                endRadius: 170
+            )
+            .frame(width: 340, height: 340)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        }
+        .allowsHitTesting(false)
+    }
+
+    // MARK: - Nav Rail (56px)
+
+    private var navRail: some View {
+        let theme = ThemeManager.shared.current
+        return VStack(spacing: 0) {
+            // Glowing dot logo
+            Circle()
+                .fill(theme.accent)
+                .frame(width: 11, height: 11)
+                .shadow(color: theme.accent.opacity(0.5), radius: 12)
+                .shadow(color: theme.accent.opacity(0.15), radius: 30)
+                .padding(.top, 16)
+                .padding(.bottom, 20)
+
+            // Nav items
+            VStack(spacing: 2) {
+                ForEach(PanelTab.allCases) { tab in
+                    navItem(tab: tab)
                 }
-                .buttonStyle(.plain)
-                .help(tab.rawValue)
             }
 
             Spacer()
 
-            statusDot
-                .padding(.bottom, AppTheme.xl)
+            // Status dot
+            Circle()
+                .fill(appState.isListening
+                    ? theme.accent
+                    : theme.textSecondary.opacity(0.4))
+                .frame(width: 5, height: 5)
+                .padding(.bottom, 16)
         }
-        .frame(width: AppTheme.sidebarWidth)
-        .background(AppTheme.surface)
+        .frame(width: 56)
+        .background(
+            theme.isDark
+                ? Color.black.opacity(0.18)
+                : Color.black.opacity(0.02)
+        )
     }
 
-    private var statusDot: some View {
-        Circle()
-            .fill(appState.isListening ? AppTheme.green : AppTheme.textSecondary.opacity(0.4))
-            .frame(width: 8, height: 8)
+    // MARK: - Nav Item
+
+    private func navItem(tab: PanelTab) -> some View {
+        let theme = ThemeManager.shared.current
+        let isActive = selectedTab == tab
+
+        return Button {
+            selectedTab = tab
+        } label: {
+            ZStack(alignment: .leading) {
+                // Active indicator bar
+                if isActive {
+                    RoundedRectangle(cornerRadius: 1.25)
+                        .fill(theme.accent)
+                        .frame(width: 2.5, height: 14)
+                        .offset(x: -16.75) // Position at far left of the 40pt item
+                }
+
+                VStack(spacing: 2) {
+                    Image(systemName: tab.icon)
+                        .font(.system(size: 16))
+                        .foregroundColor(isActive ? theme.accent : theme.textTertiary)
+                        .frame(width: 40, height: 28)
+
+                    Text(tab.rawValue)
+                        .font(.system(size: 7, weight: isActive ? .semibold : .regular))
+                        .foregroundColor(isActive ? theme.accent : theme.textTertiary)
+                }
+                .frame(width: 40, height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(isActive ? theme.accent.opacity(0.04) : Color.clear)
+                )
+            }
+            .frame(width: 40, height: 40)
+        }
+        .buttonStyle(.plain)
+        .frame(width: 56, height: 46) // Full rail width for centering
+        .help(tab.rawValue)
     }
 
     // MARK: - Content
@@ -88,9 +169,65 @@ struct MainPanelView: View {
     @ViewBuilder
     private var content: some View {
         switch selectedTab {
-        case .world:        WorldView(appState: appState)
-        case .intelligence: IntelligenceConsolidatedView(appState: appState)
-        case .settings:     SettingsConsolidatedView(appState: appState)
+        case .world:
+            VStack(spacing: 0) {
+                worldSubTabBar
+                worldSubTabContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .logs:
+            LogsPipelineView(appState: appState)
+        case .settings:
+            SettingsConsolidatedView(appState: appState)
+        }
+    }
+
+    // MARK: - World Sub-Tab Bar
+
+    private var worldSubTabBar: some View {
+        let theme = ThemeManager.shared.current
+        return HStack(spacing: 16) {
+            ForEach(WorldSubTab.allCases) { subTab in
+                let isActive = selectedWorldSubTab == subTab
+                Button {
+                    selectedWorldSubTab = subTab
+                } label: {
+                    VStack(spacing: 4) {
+                        Text(subTab.label)
+                            .font(.system(size: 10, weight: isActive ? .semibold : .regular))
+                            .foregroundColor(isActive ? theme.accent : theme.textSecondary)
+                            .padding(.horizontal, 8)
+                            .padding(.top, 8)
+                            .padding(.bottom, 4)
+
+                        // Underline indicator
+                        Rectangle()
+                            .fill(isActive ? theme.accent : Color.clear)
+                            .frame(height: 2)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .overlay(
+            Rectangle()
+                .fill(theme.glassBorder)
+                .frame(height: 1),
+            alignment: .bottom
+        )
+    }
+
+    // MARK: - World Sub-Tab Content
+
+    @ViewBuilder
+    private var worldSubTabContent: some View {
+        switch selectedWorldSubTab {
+        case .time:
+            WorldTimeView(appState: appState)
+        case .space:
+            WorldSpaceView(appState: appState)
         }
     }
 }
@@ -288,4 +425,3 @@ struct TabHeader<Trailing: View>: View {
         .padding(.vertical, 10)
     }
 }
-

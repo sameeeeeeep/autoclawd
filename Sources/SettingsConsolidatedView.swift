@@ -1,293 +1,774 @@
 import SwiftUI
 
+// MARK: - Settings Section Enum
+
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case general
+    case models
+    case projects
+    case skills
+    case connections
+    case appearance
+    case widget
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .general:     return "\u{2699}"
+        case .models:      return "\u{1F9E0}"
+        case .projects:    return "\u{1F4C1}"
+        case .skills:      return "\u{1F527}"
+        case .connections: return "\u{1F517}"
+        case .appearance:  return "\u{1F3A8}"
+        case .widget:      return "\u{1F4F1}"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .general:     return "General"
+        case .models:      return "Models"
+        case .projects:    return "Projects"
+        case .skills:      return "Skills"
+        case .connections: return "Connections"
+        case .appearance:  return "Appearance"
+        case .widget:      return "Widget"
+        }
+    }
+}
+
 // MARK: - SettingsConsolidatedView
 
 struct SettingsConsolidatedView: View {
     @ObservedObject var appState: AppState
+    @ObservedObject private var themeManager = ThemeManager.shared
 
-    // API key local state
-    @State private var anthropicKey: String = SettingsManager.shared.anthropicAPIKey
-    @State private var groqKey: String = ""
-    @State private var isValidating = false
-    @State private var validationResult: Bool? = nil
+    @State private var selectedSection: SettingsSection = .general
 
-    // Hot words local state
-    @State private var localHotWordConfigs: [HotWordConfig] = SettingsManager.shared.hotWordConfigs
-    @State private var showAddHotWord = false
+    // General mock state
+    @State private var autoStart = true
+    @State private var notificationsEnabled = true
+
+    // Skills state
+    @State private var skills: [SkillItem] = [
+        SkillItem(name: "Web Browsing", description: "Search & retrieve", enabled: true),
+        SkillItem(name: "File Management", description: "Create, edit files", enabled: true),
+        SkillItem(name: "Code Execution", description: "Scripts & CLI", enabled: true),
+        SkillItem(name: "Calendar", description: "Manage events", enabled: false),
+        SkillItem(name: "Email", description: "Draft & send", enabled: false),
+        SkillItem(name: "Slack", description: "Messages", enabled: false),
+    ]
+
+    // Connections state
+    @State private var connections: [ConnectionItem] = [
+        ConnectionItem(icon: "\u{1F916}", name: "Claude Code CLI", connected: true),
+        ConnectionItem(icon: "\u{1F4C5}", name: "Google Calendar", connected: false),
+        ConnectionItem(icon: "\u{1F4E7}", name: "Gmail", connected: false),
+        ConnectionItem(icon: "\u{1F4AC}", name: "Slack", connected: false),
+        ConnectionItem(icon: "\u{1F4DD}", name: "Notion", connected: false),
+        ConnectionItem(icon: "\u{1F419}", name: "GitHub", connected: false),
+    ]
+
+    // Widget mock state
+    @State private var showWaveform = true
+    @State private var showRecentTranscripts = true
 
     // Projects sheet
     @State private var showAddProject = false
 
-    // Appearance
-    @AppStorage("color_scheme_setting") private var colorSchemeSetting: String = "system"
-
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: AppTheme.xl) {
+        let theme = themeManager.current
+        let isDark = theme.isDark
 
-                // MARK: PROJECTS
-                sectionHeader("PROJECTS")
-                VStack(spacing: AppTheme.xs) {
-                    ForEach(appState.projects) { project in
-                        HStack(spacing: AppTheme.sm) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(project.name)
-                                    .font(AppTheme.label)
-                                    .foregroundColor(AppTheme.textPrimary)
-                                Text(project.localPath)
-                                    .font(AppTheme.caption)
-                                    .foregroundColor(AppTheme.textSecondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                if !project.tags.isEmpty {
-                                    HStack(spacing: 4) {
-                                        ForEach(project.tags, id: \.self) { tag in
-                                            Text(tag)
-                                                .font(.system(size: 12, weight: .medium))
-                                                .foregroundColor(.white)
-                                                .padding(.horizontal, AppTheme.xs)
-                                                .padding(.vertical, 2)
-                                                .background(AppTheme.green)
-                                                .cornerRadius(AppTheme.cornerRadius)
-                                        }
-                                    }
-                                }
-                            }
-                            Spacer()
-                            Button {
-                                appState.deleteProject(id: project.id)
-                            } label: {
-                                Image(systemName: "trash")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(AppTheme.destructive)
-                            }
-                            .buttonStyle(.plain)
+        HStack(spacing: 0) {
+            // MARK: Left Nav
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(SettingsSection.allCases) { section in
+                    let isActive = selectedSection == section
+                    Button {
+                        selectedSection = section
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(section.icon)
+                                .font(.system(size: 11))
+                            Text(section.label)
+                                .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+                                .foregroundColor(isActive ? theme.textPrimary : theme.textSecondary)
                         }
-                        .padding(AppTheme.md)
-                        .background(AppTheme.surface)
-                        .cornerRadius(AppTheme.cornerRadius)
+                        .padding(.vertical, 7)
+                        .padding(.horizontal, 9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7)
+                                .fill(isActive ? theme.accent.opacity(0.08) : Color.clear)
+                        )
                     }
-
-                    Button("+ Add Project") { showAddProject = true }
-                        .buttonStyle(SecondaryButtonStyle())
+                    .buttonStyle(.plain)
                 }
-                .sheet(isPresented: $showAddProject) {
-                    AddProjectSheet(isPresented: $showAddProject) { name, path in
-                        appState.addProject(name: name, path: path)
-                    }
-                }
-
-                // MARK: HOT WORDS
-                sectionHeader("HOT WORDS")
-                VStack(spacing: AppTheme.xs) {
-                    ForEach(localHotWordConfigs) { config in
-                        HStack(spacing: AppTheme.sm) {
-                            Text("hot \(config.keyword)")
-                                .font(AppTheme.mono)
-                                .foregroundColor(AppTheme.green)
-                            Text("→ \(config.action.displayName)")
-                                .font(AppTheme.caption)
-                                .foregroundColor(AppTheme.textSecondary)
-                            if config.action == .executeImmediately && config.skipPermissions {
-                                Text("⚡")
-                                    .font(AppTheme.caption)
-                                    .foregroundColor(AppTheme.textSecondary)
-                            }
-                            Spacer()
-                            Button {
-                                localHotWordConfigs.removeAll { $0.id == config.id }
-                                SettingsManager.shared.hotWordConfigs = localHotWordConfigs
-                            } label: {
-                                Image(systemName: "trash")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(AppTheme.destructive)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(AppTheme.md)
-                        .background(AppTheme.surface)
-                        .cornerRadius(AppTheme.cornerRadius)
-                    }
-
-                    Button("+ Add Hot Word") { showAddHotWord = true }
-                        .buttonStyle(SecondaryButtonStyle())
-                }
-                .sheet(isPresented: $showAddHotWord) {
-                    AddHotWordSheet(configs: Binding(
-                        get: { localHotWordConfigs },
-                        set: {
-                            localHotWordConfigs = $0
-                            SettingsManager.shared.hotWordConfigs = $0
-                        }
-                    ))
-                }
-
-                // MARK: TRANSCRIPTION
-                sectionHeader("TRANSCRIPTION")
-                VStack(alignment: .leading, spacing: AppTheme.sm) {
-                    Picker("", selection: $appState.transcriptionMode) {
-                        ForEach(TranscriptionMode.allCases, id: \.self) { mode in
-                            Text(mode.displayName).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.radioGroup)
-                    .labelsHidden()
-                }
-                .padding(AppTheme.md)
-                .background(AppTheme.surface)
-                .cornerRadius(AppTheme.cornerRadius)
-
-                // MARK: API KEYS
-                sectionHeader("API KEYS")
-                VStack(alignment: .leading, spacing: AppTheme.sm) {
-                    Text("Anthropic API Key")
-                        .font(AppTheme.caption)
-                        .foregroundColor(AppTheme.textSecondary)
-                    SecureField("sk-ant-...", text: $anthropicKey)
-                        .textFieldStyle(.roundedBorder)
-                        .onChange(of: anthropicKey) { SettingsManager.shared.anthropicAPIKey = $0 }
-
-                    if appState.transcriptionMode == .groq {
-                        Divider().padding(.vertical, AppTheme.xs)
-                        Text("Groq API Key")
-                            .font(AppTheme.caption)
-                            .foregroundColor(AppTheme.textSecondary)
-                        HStack(spacing: AppTheme.sm) {
-                            SecureField("gsk_...", text: $groqKey)
-                                .textFieldStyle(.roundedBorder)
-                                .onChange(of: groqKey) {
-                                    appState.groqAPIKey = $0
-                                    validationResult = nil
-                                }
-                            Button(isValidating ? "..." : "Validate") {
-                                validateGroqKey()
-                            }
-                            .buttonStyle(SecondaryButtonStyle())
-                            .disabled(isValidating || groqKey.isEmpty)
-
-                            if let result = validationResult {
-                                Image(systemName: result ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                    .foregroundColor(result ? AppTheme.green : AppTheme.destructive)
-                            }
-                        }
-                    }
-                }
-                .padding(AppTheme.md)
-                .background(AppTheme.surface)
-                .cornerRadius(AppTheme.cornerRadius)
-
-                // MARK: DISPLAY
-                sectionHeader("DISPLAY")
-                VStack(alignment: .leading, spacing: AppTheme.sm) {
-                    HStack {
-                        Text("Appearance")
-                            .font(AppTheme.label)
-                            .foregroundColor(AppTheme.textPrimary)
-                        Spacer()
-                        Picker("", selection: $colorSchemeSetting) {
-                            ForEach(ColorSchemeSetting.allCases, id: \.rawValue) { setting in
-                                Text(setting.displayName).tag(setting.rawValue)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 200)
-                    }
-                    Divider().padding(.vertical, AppTheme.xs)
-                    Toggle(isOn: $appState.showAmbientWidget) {
-                        Text("Show Ambient Widget")
-                            .font(AppTheme.label)
-                            .foregroundColor(AppTheme.textPrimary)
-                    }
-                    Divider().padding(.vertical, AppTheme.xs)
-                    Text("Pill Appearance")
-                        .font(AppTheme.caption)
-                        .foregroundColor(AppTheme.textSecondary)
-                    Picker("", selection: $appState.appearanceMode) {
-                        ForEach(AppearanceMode.allCases, id: \.self) { mode in
-                            Text(mode.displayName).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-                .padding(AppTheme.md)
-                .background(AppTheme.surface)
-                .cornerRadius(AppTheme.cornerRadius)
-
-                // MARK: MICROPHONE & AUDIO
-                sectionHeader("MICROPHONE & AUDIO")
-                VStack(alignment: .leading, spacing: AppTheme.sm) {
-                    Toggle(isOn: $appState.micEnabled) {
-                        Text("Always-on Listening")
-                            .font(AppTheme.label)
-                            .foregroundColor(AppTheme.textPrimary)
-                    }
-                    Divider().padding(.vertical, AppTheme.xs)
-                    Text("Delete audio after")
-                        .font(AppTheme.caption)
-                        .foregroundColor(AppTheme.textSecondary)
-                    Picker("", selection: $appState.audioRetentionDays) {
-                        ForEach(AudioRetention.allCases, id: \.rawValue) { r in
-                            Text(r.displayName).tag(r.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: 200)
-                }
-                .padding(AppTheme.md)
-                .background(AppTheme.surface)
-                .cornerRadius(AppTheme.cornerRadius)
-
-                // MARK: DATA
-                sectionHeader("DATA")
-                HStack(spacing: AppTheme.sm) {
-                    Button("Re-run Setup") { appState.showSetup() }
-                        .buttonStyle(SecondaryButtonStyle())
-                    Button("Export All") { appState.exportData() }
-                        .buttonStyle(SecondaryButtonStyle())
-                    Button("Delete All") { appState.confirmDeleteAll() }
-                        .buttonStyle(DestructiveButtonStyle())
-                }
-                .padding(AppTheme.md)
-                .background(AppTheme.surface)
-                .cornerRadius(AppTheme.cornerRadius)
-
-                Spacer(minLength: AppTheme.xl)
+                Spacer()
             }
-            .padding(AppTheme.lg)
+            .frame(width: 160)
+            .padding(.top, 12)
+            .padding(.horizontal, 8)
+
+            // Divider
+            Rectangle()
+                .fill(theme.glassBorder)
+                .frame(width: 0.5)
+
+            // MARK: Content Area
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    switch selectedSection {
+                    case .general:     generalSection(theme: theme, isDark: isDark)
+                    case .models:      modelsSection(theme: theme, isDark: isDark)
+                    case .projects:    projectsSection(theme: theme, isDark: isDark)
+                    case .skills:      skillsSection(theme: theme, isDark: isDark)
+                    case .connections: connectionsSection(theme: theme, isDark: isDark)
+                    case .appearance:  appearanceSection(theme: theme, isDark: isDark)
+                    case .widget:      widgetSection(theme: theme, isDark: isDark)
+                    }
+                }
+                .padding(20)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppTheme.background)
-        .onAppear {
-            groqKey = appState.groqAPIKey
-            anthropicKey = SettingsManager.shared.anthropicAPIKey
-            localHotWordConfigs = SettingsManager.shared.hotWordConfigs
-        }
-    }
-
-    // MARK: - Section Header
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundColor(AppTheme.textSecondary)
-            .kerning(0.3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, AppTheme.sm)
-    }
-
-    // MARK: - Validate Groq
-
-    private func validateGroqKey() {
-        isValidating = true
-        Task {
-            let result = await TranscriptionService.validateAPIKey(groqKey)
-            await MainActor.run {
-                validationResult = result
-                isValidating = false
+        .sheet(isPresented: $showAddProject) {
+            AddProjectSheet(isPresented: $showAddProject) { name, path in
+                appState.addProject(name: name, path: path)
             }
         }
     }
+
+    // MARK: - General Section
+
+    @ViewBuilder
+    private func generalSection(theme: ThemePalette, isDark: Bool) -> some View {
+        settingsRow(theme: theme, isDark: isDark, label: "Auto-start", description: "Launch on login") {
+            settingsToggle(isOn: $autoStart, theme: theme)
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Always-on listening") {
+            settingsToggle(isOn: $appState.micEnabled, theme: theme)
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Hot Words") {
+            settingsDropdown(selectedValue: "3 configured", theme: theme, isDark: isDark) {
+                Text("Configure...").tag("configure")
+            }
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Transcription engine") {
+            settingsDropdown(
+                selectedValue: appState.transcriptionMode.displayName,
+                theme: theme,
+                isDark: isDark
+            ) {
+                ForEach(TranscriptionMode.allCases, id: \.self) { mode in
+                    Button(mode.displayName) {
+                        appState.transcriptionMode = mode
+                    }
+                }
+            }
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Language") {
+            settingsDropdown(selectedValue: "English + Hindi", theme: theme, isDark: isDark) {
+                Text("English + Hindi").tag("en_hi")
+            }
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Notifications", showBorder: false) {
+            settingsToggle(isOn: $notificationsEnabled, theme: theme)
+        }
+    }
+
+    // MARK: - Models Section
+
+    @ViewBuilder
+    private func modelsSection(theme: ThemePalette, isDark: Bool) -> some View {
+        settingsRow(theme: theme, isDark: isDark, label: "Transcription") {
+            settingsDropdown(selectedValue: "Groq Whisper V3", theme: theme, isDark: isDark) {
+                Button("Groq Whisper V3") {}
+                Button("Local Whisper") {}
+            }
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Cleaning") {
+            settingsDropdown(selectedValue: "Claude Haiku 4.5", theme: theme, isDark: isDark) {
+                Button("Claude Haiku 4.5") {}
+                Button("Claude Sonnet 4.5") {}
+            }
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Analysis") {
+            settingsDropdown(selectedValue: "Claude Sonnet 4.5", theme: theme, isDark: isDark) {
+                Button("Claude Sonnet 4.5") {}
+                Button("Claude Opus 4") {}
+            }
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Execution") {
+            settingsDropdown(selectedValue: "Claude Code CLI", theme: theme, isDark: isDark) {
+                Button("Claude Code CLI") {}
+            }
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Auto-approve", showBorder: false) {
+            settingsDropdown(
+                selectedValue: appState.synthesizeThreshold > 0
+                    ? "Auto: \(appState.synthesizeThreshold)"
+                    : "Manual",
+                theme: theme,
+                isDark: isDark
+            ) {
+                Button("Auto: 5") { appState.synthesizeThreshold = 5 }
+                Button("Auto: 10") { appState.synthesizeThreshold = 10 }
+                Button("Auto: 20") { appState.synthesizeThreshold = 20 }
+                Button("Manual") { appState.synthesizeThreshold = 0 }
+            }
+        }
+    }
+
+    // MARK: - Projects Section
+
+    @ViewBuilder
+    private func projectsSection(theme: ThemePalette, isDark: Bool) -> some View {
+        let dotColors = [theme.accent, theme.tertiary, theme.secondary]
+        VStack(spacing: 8) {
+            ForEach(Array(appState.projects.enumerated()), id: \.element.id) { index, project in
+                projectCard(
+                    project: project,
+                    dotColor: dotColors[index % dotColors.count],
+                    theme: theme,
+                    isDark: isDark
+                )
+            }
+
+            // Add Project button
+            Button { showAddProject = true } label: {
+                HStack {
+                    Spacer()
+                    Text("+ Add Project")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(theme.textTertiary)
+                    Spacer()
+                }
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 9)
+                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
+                        .foregroundColor(theme.textTertiary.opacity(0.4))
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func projectCard(project: Project, dotColor: Color, theme: ThemePalette, isDark: Bool) -> some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 6, height: 6)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.name)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(theme.textPrimary)
+                Text(project.localPath)
+                    .font(.system(size: 9))
+                    .foregroundColor(theme.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            // Toggle placeholder (projects are always "active")
+            settingsToggle(isOn: .constant(true), theme: theme)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 9)
+                .fill(theme.glass)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(theme.glassBorder, lineWidth: 0.5)
+        )
+    }
+
+    // MARK: - Skills Section
+
+    @ViewBuilder
+    private func skillsSection(theme: ThemePalette, isDark: Bool) -> some View {
+        VStack(spacing: 8) {
+            ForEach($skills) { $skill in
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(skill.name)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(theme.textPrimary)
+                        Text(skill.description)
+                            .font(.system(size: 9))
+                            .foregroundColor(theme.textTertiary)
+                    }
+                    Spacer()
+                    settingsToggle(isOn: $skill.enabled, theme: theme)
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(theme.glass)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9)
+                        .stroke(theme.glassBorder, lineWidth: 0.5)
+                )
+            }
+
+            // Add Skill button
+            Button {} label: {
+                HStack {
+                    Spacer()
+                    Text("+ Add Skill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(theme.textTertiary)
+                    Spacer()
+                }
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 9)
+                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
+                        .foregroundColor(theme.textTertiary.opacity(0.4))
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Connections Section
+
+    @ViewBuilder
+    private func connectionsSection(theme: ThemePalette, isDark: Bool) -> some View {
+        VStack(spacing: 8) {
+            ForEach($connections) { $conn in
+                HStack(spacing: 10) {
+                    Text(conn.icon)
+                        .font(.system(size: 14))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(conn.name)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(theme.textPrimary)
+                        Text(conn.connected ? "Connected" : "Not connected")
+                            .font(.system(size: 9))
+                            .foregroundColor(conn.connected ? theme.accent : theme.textTertiary)
+                    }
+
+                    Spacer()
+
+                    Button(conn.connected ? "Manage" : "Connect") {
+                        // mock action
+                    }
+                    .font(.system(size: 9))
+                    .foregroundColor(theme.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(theme.glass)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                    )
+                    .buttonStyle(.plain)
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(theme.glass)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9)
+                        .stroke(theme.glassBorder, lineWidth: 0.5)
+                )
+            }
+        }
+    }
+
+    // MARK: - Appearance Section
+
+    @ViewBuilder
+    private func appearanceSection(theme: ThemePalette, isDark: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+
+            // 1. Mode Toggle (Light / Dark)
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Mode")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(theme.textPrimary)
+                    Text("Switch between light and dark interface")
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.textTertiary)
+                }
+                Spacer()
+                HStack(spacing: 0) {
+                    let isLight = themeManager.key == .light
+                    Button {
+                        themeManager.key = .light
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("\u{2600}\u{FE0F}")
+                                .font(.system(size: 10))
+                            Text("Light")
+                                .font(.system(size: 10, weight: isLight ? .semibold : .regular))
+                        }
+                        .foregroundColor(isLight ? theme.textPrimary : theme.textSecondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(isLight ? theme.accent.opacity(0.12) : Color.clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        if themeManager.key == .light {
+                            themeManager.key = .neon
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("\u{1F319}")
+                                .font(.system(size: 10))
+                            Text("Dark")
+                                .font(.system(size: 10, weight: !isLight ? .semibold : .regular))
+                        }
+                        .foregroundColor(!isLight ? theme.textPrimary : theme.textSecondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(!isLight ? theme.accent.opacity(0.12) : Color.clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(isDark ? Color.white.opacity(0.04) : Color.black.opacity(0.03))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(theme.glassBorder, lineWidth: 0.5)
+                )
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(theme.glass)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(theme.glassBorder, lineWidth: 0.5)
+            )
+
+            // 2. Color Palette section (only visible when dark)
+            if isDark {
+                sectionLabel("COLOR PALETTE", theme: theme)
+
+                VStack(spacing: 8) {
+                    paletteCard(key: .neon, palette: .neon, theme: theme, isDark: isDark)
+                    paletteCard(key: .pastel, palette: .pastel, theme: theme, isDark: isDark)
+                    paletteCard(key: .cyber, palette: .cyber, theme: theme, isDark: isDark)
+                }
+            }
+
+            // 3. Custom Theme section
+            sectionLabel("CUSTOM", theme: theme)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Text("\u{1F3A8}")
+                        .font(.system(size: 14))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Create Custom Theme")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(theme.textPrimary)
+                        Text("Design your own color palette")
+                            .font(.system(size: 9))
+                            .foregroundColor(theme.textTertiary)
+                    }
+                }
+
+                // Voice command suggestion box
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("TRY SAYING:")
+                        .font(.system(size: 8, weight: .semibold))
+                        .tracking(0.5)
+                        .foregroundColor(theme.textTertiary)
+
+                    HStack(spacing: 6) {
+                        Text("\u{1F399}")
+                            .font(.system(size: 10))
+                        Text("\"DOT p0 for autoclawd add appearance theme monotone\"")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(theme.accent)
+                    }
+
+                    Text("Use voice commands to create themes hands-free")
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.textTertiary)
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(theme.glass)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(theme.glassBorder, lineWidth: 0.5)
+                )
+
+                // Create Manually button
+                Button {} label: {
+                    HStack {
+                        Spacer()
+                        Text("+ Create Manually")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(theme.accent)
+                        Spacer()
+                    }
+                    .padding(.vertical, 9)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(theme.accent.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7)
+                            .stroke(theme.accent.opacity(0.3), lineWidth: 0.5)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
+                    .foregroundColor(theme.textTertiary.opacity(0.3))
+            )
+        }
+    }
+
+    private func paletteCard(key: ThemeKey, palette: ThemePalette, theme: ThemePalette, isDark: Bool) -> some View {
+        let isActive = themeManager.key == key
+
+        return Button {
+            themeManager.key = key
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(key.displayName)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(theme.textPrimary)
+                    Spacer()
+                    if isActive {
+                        Text("Active")
+                            .font(.system(size: 8, weight: .semibold))
+                            .tracking(0.3)
+                            .foregroundColor(theme.accent)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule().fill(theme.accent.opacity(0.12))
+                            )
+                    }
+                }
+
+                // Color swatches
+                HStack(spacing: 6) {
+                    colorSwatch(palette.accent)
+                    colorSwatch(palette.secondary)
+                    colorSwatch(palette.tertiary)
+                    colorSwatch(palette.warning)
+                    colorSwatch(palette.error)
+                }
+
+                // Tag previews
+                HStack(spacing: 6) {
+                    TagView(type: .project, label: "Project", small: true)
+                    TagView(type: .person, label: "Person", small: true)
+                    TagView(type: .action, label: "Action", small: true)
+                }
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(palette.glass.opacity(0.6))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(
+                        isActive ? theme.accent : theme.glassBorder,
+                        lineWidth: isActive ? 1.5 : 0.5
+                    )
+            )
+            .shadow(
+                color: isActive ? theme.accent.opacity(0.15) : .clear,
+                radius: 8,
+                x: 0,
+                y: 2
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func colorSwatch(_ color: Color) -> some View {
+        RoundedRectangle(cornerRadius: 4)
+            .fill(color)
+            .frame(width: 18, height: 18)
+    }
+
+    // MARK: - Widget Section
+
+    @ViewBuilder
+    private func widgetSection(theme: ThemePalette, isDark: Bool) -> some View {
+        settingsRow(theme: theme, isDark: isDark, label: "Show in menu bar") {
+            settingsToggle(isOn: $appState.showAmbientWidget, theme: theme)
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Show waveform") {
+            settingsToggle(isOn: $showWaveform, theme: theme)
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Recent transcripts") {
+            settingsToggle(isOn: $showRecentTranscripts, theme: theme)
+        }
+        settingsRow(theme: theme, isDark: isDark, label: "Widget theme", showBorder: false) {
+            settingsDropdown(selectedValue: "Glassmorphic", theme: theme, isDark: isDark) {
+                Button("Glassmorphic") {}
+                Button("Minimal") {}
+                Button("Solid") {}
+            }
+        }
+    }
+
+    // MARK: - Reusable Components
+
+    /// Standard settings row with label, optional description, and trailing control.
+    private func settingsRow<Control: View>(
+        theme: ThemePalette,
+        isDark: Bool,
+        label: String,
+        description: String? = nil,
+        showBorder: Bool = true,
+        @ViewBuilder control: () -> Control
+    ) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(theme.textPrimary)
+                    if let description {
+                        Text(description)
+                            .font(.system(size: 9))
+                            .foregroundColor(theme.textTertiary)
+                    }
+                }
+                Spacer()
+                control()
+            }
+            .padding(.vertical, 11)
+
+            if showBorder {
+                Rectangle()
+                    .fill(isDark ? Color.white.opacity(0.03) : Color.black.opacity(0.04))
+                    .frame(height: 0.5)
+            }
+        }
+    }
+
+    /// Glassmorphic dropdown menu.
+    private func settingsDropdown<MenuContent: View>(
+        selectedValue: String,
+        theme: ThemePalette,
+        isDark: Bool,
+        @ViewBuilder content: () -> MenuContent
+    ) -> some View {
+        Menu {
+            content()
+        } label: {
+            HStack(spacing: 4) {
+                Text(selectedValue)
+                    .font(.system(size: 10))
+                    .foregroundColor(theme.textSecondary)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7))
+                    .foregroundColor(theme.textTertiary)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isDark ? Color.white.opacity(0.05) : Color.black.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(theme.glassBorder, lineWidth: 0.5)
+            )
+        }
+    }
+
+    /// Custom toggle matching v2.0 wireframe: 36x20pt rounded rect.
+    private func settingsToggle(isOn: Binding<Bool>, theme: ThemePalette) -> some View {
+        SettingsCustomToggle(isOn: isOn, theme: theme)
+    }
+
+    /// Section label (uppercase, 10pt, semibold, letter-spaced).
+    private func sectionLabel(_ title: String, theme: ThemePalette) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(0.8)
+            .foregroundColor(theme.textSecondary)
+            .padding(.top, 4)
+    }
+}
+
+// MARK: - Custom Toggle
+
+struct SettingsCustomToggle: View {
+    @Binding var isOn: Bool
+    let theme: ThemePalette
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isOn.toggle()
+            }
+        } label: {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isOn ? theme.accent : (theme.isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.10)))
+                    .frame(width: 36, height: 20)
+
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 16, height: 16)
+                    .padding(2)
+                    .shadow(color: Color.black.opacity(0.15), radius: 1, x: 0, y: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Data Models for Skills and Connections
+
+struct SkillItem: Identifiable {
+    let id = UUID()
+    let name: String
+    let description: String
+    var enabled: Bool
+}
+
+struct ConnectionItem: Identifiable {
+    let id = UUID()
+    let icon: String
+    let name: String
+    var connected: Bool
 }
 
 // MARK: - AddHotWordSheet

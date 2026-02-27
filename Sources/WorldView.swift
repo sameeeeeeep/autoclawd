@@ -1,9 +1,9 @@
 // Sources/WorldView.swift
 import SwiftUI
 
-// MARK: - Sub-tab
+// MARK: - Sub-tab (moved to MainPanelView.swift)
 
-enum WorldSubTab: String, CaseIterable {
+private enum LegacyWorldSubTab: String, CaseIterable {
     case past   = "Past"
     case today  = "Today"
     case future = "Future"
@@ -13,7 +13,7 @@ enum WorldSubTab: String, CaseIterable {
 
 struct WorldView: View {
     @ObservedObject var appState: AppState
-    @State private var subTab: WorldSubTab = .today
+    @State private var subTab: LegacyWorldSubTab = .today
     @State private var displayMonth: Date = Date()
     @State private var selectedDate: Date? = nil
     @State private var transcripts: [TranscriptRecord] = []
@@ -52,7 +52,7 @@ struct WorldView: View {
                 Spacer()
 
                 Picker("", selection: $subTab) {
-                    ForEach(WorldSubTab.allCases, id: \.self) { t in
+                    ForEach(LegacyWorldSubTab.allCases, id: \.self) { t in
                         Text(t.rawValue).tag(t)
                     }
                 }
