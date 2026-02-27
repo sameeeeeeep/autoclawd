@@ -166,6 +166,12 @@ struct IntelligenceConsolidatedView: View {
             }
         }
         .background(AppTheme.surface)
+        .task {
+            while true {
+                try? await Task.sleep(for: .seconds(2))
+                loadLogs()
+            }
+        }
     }
 
     private func logRow(_ entry: LogEntry) -> some View {
