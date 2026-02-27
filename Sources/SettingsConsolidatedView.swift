@@ -18,6 +18,9 @@ struct SettingsConsolidatedView: View {
     // Projects sheet
     @State private var showAddProject = false
 
+    // Appearance
+    @AppStorage("color_scheme_setting") private var colorSchemeSetting: String = "system"
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppTheme.xl) {
@@ -35,11 +38,12 @@ struct SettingsConsolidatedView: View {
                                     .font(AppTheme.caption)
                                     .foregroundColor(AppTheme.textSecondary)
                                     .lineLimit(1)
+                                    .truncationMode(.middle)
                                 if !project.tags.isEmpty {
                                     HStack(spacing: 4) {
                                         ForEach(project.tags, id: \.self) { tag in
                                             Text(tag)
-                                                .font(.system(size: 10, weight: .medium))
+                                                .font(.system(size: 12, weight: .medium))
                                                 .foregroundColor(.white)
                                                 .padding(.horizontal, AppTheme.xs)
                                                 .padding(.vertical, 2)
@@ -175,6 +179,20 @@ struct SettingsConsolidatedView: View {
                 // MARK: DISPLAY
                 sectionHeader("DISPLAY")
                 VStack(alignment: .leading, spacing: AppTheme.sm) {
+                    HStack {
+                        Text("Appearance")
+                            .font(AppTheme.label)
+                            .foregroundColor(AppTheme.textPrimary)
+                        Spacer()
+                        Picker("", selection: $colorSchemeSetting) {
+                            ForEach(ColorSchemeSetting.allCases, id: \.rawValue) { setting in
+                                Text(setting.displayName).tag(setting.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 200)
+                    }
+                    Divider().padding(.vertical, AppTheme.xs)
                     Toggle(isOn: $appState.showAmbientWidget) {
                         Text("Show Ambient Widget")
                             .font(AppTheme.label)
@@ -249,13 +267,13 @@ struct SettingsConsolidatedView: View {
 
     // MARK: - Section Header
 
-    @ViewBuilder
     private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(AppTheme.caption)
+        Text(title.uppercased())
+            .font(.system(size: 11, weight: .semibold))
             .foregroundColor(AppTheme.textSecondary)
-            .textCase(.uppercase)
-            .tracking(0.5)
+            .kerning(0.3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, AppTheme.sm)
     }
 
     // MARK: - Validate Groq
