@@ -68,6 +68,7 @@ struct WorldView: View {
             calendarGrid
                 .padding(.horizontal, AppTheme.lg)
                 .padding(.vertical, AppTheme.md)
+                .layoutPriority(1)
 
             Divider()
 
@@ -192,10 +193,9 @@ struct WorldView: View {
     private var unscheduledSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("UNSCHEDULED")
-                    .font(AppTheme.caption)
-                    .foregroundColor(AppTheme.textSecondary)
-                    .kerning(0.5)
+                Text("Unscheduled")
+                    .font(AppTheme.label)
+                    .foregroundColor(AppTheme.textPrimary)
                 Text("\(unscheduledTodos.count)")
                     .font(AppTheme.caption)
                     .foregroundColor(.white)
@@ -225,7 +225,7 @@ struct WorldView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 200)
+                .frame(maxHeight: 280)
             }
         }
     }
@@ -326,7 +326,7 @@ struct DayCell: View {
                     .foregroundColor(
                         isToday ? .white :
                         isSelected ? AppTheme.textPrimary :
-                        isCurrentMonth ? AppTheme.textPrimary : AppTheme.textSecondary.opacity(0.4)
+                        isCurrentMonth ? AppTheme.textPrimary : AppTheme.textDisabled
                     )
                     .frame(width: 28, height: 28)
                     .background(
@@ -376,7 +376,9 @@ struct UnscheduledTodoRow: View {
             Text(todo.content)
                 .font(AppTheme.body)
                 .foregroundColor(AppTheme.textPrimary)
-                .lineLimit(1)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text(projectName)
                 .font(AppTheme.caption)
