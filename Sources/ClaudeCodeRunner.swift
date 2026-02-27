@@ -70,7 +70,12 @@ final class ClaudeCodeRunner: Sendable {
 
                 let process = Process()
                 process.executableURL = claudeURL
-                process.arguments = ["--print", todo.content]
+                var args: [String] = []
+                if let mcpConfigPath = MCPConfigManager.configPath() {
+                    args += ["--mcp-config", mcpConfigPath]
+                }
+                args += ["--print", todo.content]
+                process.arguments = args
                 process.currentDirectoryURL = URL(fileURLWithPath: project.localPath)
 
                 var env = ProcessInfo.processInfo.environment
@@ -122,7 +127,11 @@ final class ClaudeCodeRunner: Sendable {
 
                 let process = Process()
                 process.executableURL = claudeURL
-                var args = ["--print", prompt]
+                var args: [String] = []
+                if let mcpConfigPath = MCPConfigManager.configPath() {
+                    args += ["--mcp-config", mcpConfigPath]
+                }
+                args += ["--print", prompt]
                 if dangerouslySkipPermissions {
                     args.append("--dangerously-skip-permissions")
                 }
@@ -174,8 +183,13 @@ final class ClaudeCodeRunner: Sendable {
         // Shell-safe: escape single quotes in prompt using the POSIX technique
         let safePrompt = prompt.replacingOccurrences(of: "'", with: "'\\''")
         let safePath = project.localPath.replacingOccurrences(of: "'", with: "'\\''")
+        var mcpFlag = ""
+        if let mcpPath = MCPConfigManager.configPath() {
+            let safeMCP = mcpPath.replacingOccurrences(of: "'", with: "'\\''")
+            mcpFlag = " --mcp-config '\(safeMCP)'"
+        }
         let permFlag = dangerouslySkipPermissions ? " --dangerously-skip-permissions" : ""
-        let fullCmd = "cd '\(safePath)' && '\(claudeExec)'\(permFlag) '\(safePrompt)'"
+        let fullCmd = "cd '\(safePath)' && '\(claudeExec)'\(mcpFlag)\(permFlag) '\(safePrompt)'"
 
         // Write to a uniquely-named temp script so concurrent calls don't collide
         let scriptName = "autoclawd-\(UUID().uuidString.prefix(8)).sh"
