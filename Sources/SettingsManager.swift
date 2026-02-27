@@ -72,7 +72,6 @@ final class SettingsManager: @unchecked Sendable {
     private let kShowAmbientWidget = "show_ambient_widget"
     private let kAppearanceMode = "appearance_mode"
     private let kHotWordConfigs = "hotWordConfigs"
-    private let kShazamEnabled  = "shazam_enabled"
     private let kColorScheme    = "color_scheme_setting"
 
     // MARK: - Properties
@@ -163,11 +162,6 @@ final class SettingsManager: @unchecked Sendable {
             }
             defaults.set(data, forKey: kHotWordConfigs)
         }
-    }
-
-    var shazamEnabled: Bool {
-        get { defaults.object(forKey: kShazamEnabled) as? Bool ?? false }
-        set { defaults.set(newValue, forKey: kShazamEnabled) }
     }
 
     private init() {}

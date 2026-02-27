@@ -107,12 +107,6 @@ final class AppState: ObservableObject {
     let locationService = LocationService.shared
     let nowPlaying = NowPlayingService()
     let shazam = ShazamKitService()
-    @Published var shazamEnabled: Bool = SettingsManager.shared.shazamEnabled {
-        didSet {
-            SettingsManager.shared.shazamEnabled = shazamEnabled
-            if shazamEnabled { shazam.start() } else { shazam.stop() }
-        }
-    }
     private let ollama = OllamaService()
     private lazy var todoFramingService = TodoFramingService(ollama: ollama)
     private let worldModelService = WorldModelService()
@@ -183,29 +177,40 @@ final class AppState: ObservableObject {
         buildTranscriptionService()
         configureChunkManager()
 
-        // Start ShazamKit ambient recognition
+        // Forward mic buffers to ShazamKit for recognition
         chunkManager.setBufferHandler { [weak self] buf in
             Task { @MainActor [weak self] in
                 self?.shazam.process(buf)
             }
         }
 
-        // Surface Shazam matches when NowPlayingService isn't already playing
+        // Display Shazam-detected title when music dot is active and NowPlaying isn't running
         shazam.$currentTitle
             .receive(on: RunLoop.main)
             .sink { [weak self] title in
                 guard let self, !self.nowPlaying.isPlaying else { return }
-                guard let musicPerson = self.people.first(where: { $0.isMusic }) else { return }
-                if let title {
-                    self.currentSpeakerID    = musicPerson.id
-                    self.nowPlayingSongTitle = title
-                } else if self.currentSpeakerID == musicPerson.id {
-                    self.currentSpeakerID    = nil
-                    self.nowPlayingSongTitle = nil
+                guard let musicPerson = self.people.first(where: { $0.isMusic }),
+                      self.currentSpeakerID == musicPerson.id else { return }
+                self.nowPlayingSongTitle = title
+            }
+            .store(in: &cancellables)
+
+        // Start/stop Shazam based on whether the Music dot is the active speaker
+        $currentSpeakerID
+            .receive(on: RunLoop.main)
+            .sink { [weak self] id in
+                guard let self else { return }
+                let musicPerson = self.people.first(where: { $0.isMusic })
+                if id == musicPerson?.id {
+                    self.shazam.start()
+                } else {
+                    self.shazam.stop()
+                    if !self.nowPlaying.isPlaying {
+                        self.nowPlayingSongTitle = nil
+                    }
                 }
             }
             .store(in: &cancellables)
-        if shazamEnabled { shazam.start() }
 
         // Auto-activate Music person when NowPlayingService detects a song
         nowPlaying.$isPlaying
