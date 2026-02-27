@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 enum TranscriptionMode: String, CaseIterable {
     case groq  = "groq"
@@ -33,6 +34,28 @@ enum AppearanceMode: String, CaseIterable {
     }
 }
 
+enum ColorSchemeSetting: String, CaseIterable {
+    case system = "system"
+    case light  = "light"
+    case dark   = "dark"
+
+    var displayName: String {
+        switch self {
+        case .system: return "System"
+        case .light:  return "Light"
+        case .dark:   return "Dark"
+        }
+    }
+
+    var preferredColorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+}
+
 
 final class SettingsManager: @unchecked Sendable {
     static let shared = SettingsManager()
@@ -50,6 +73,7 @@ final class SettingsManager: @unchecked Sendable {
     private let kAppearanceMode = "appearance_mode"
     private let kHotWordConfigs = "hotWordConfigs"
     private let kShazamEnabled  = "shazam_enabled"
+    private let kColorScheme    = "color_scheme_setting"
 
     // MARK: - Properties
 
@@ -75,6 +99,14 @@ final class SettingsManager: @unchecked Sendable {
               ? 10
               : UserDefaults.standard.integer(forKey: "synthesizeThreshold") }
         set { UserDefaults.standard.set(newValue, forKey: "synthesizeThreshold") }
+    }
+
+    var colorSchemeSetting: ColorSchemeSetting {
+        get {
+            let raw = defaults.string(forKey: kColorScheme) ?? ColorSchemeSetting.system.rawValue
+            return ColorSchemeSetting(rawValue: raw) ?? .system
+        }
+        set { defaults.set(newValue.rawValue, forKey: kColorScheme) }
     }
 
     var micEnabled: Bool {
