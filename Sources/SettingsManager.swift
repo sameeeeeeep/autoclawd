@@ -73,6 +73,10 @@ final class SettingsManager: @unchecked Sendable {
     private let kAppearanceMode = "appearance_mode"
     private let kHotWordConfigs = "hotWordConfigs"
     private let kColorScheme    = "color_scheme_setting"
+    private let kWhatsAppEnabled = "whatsapp_enabled"
+    private let kWhatsAppNotifyTasks = "whatsapp_notify_tasks"
+    private let kWhatsAppNotifySummaries = "whatsapp_notify_summaries"
+    private let kWhatsAppMyJID = "whatsapp_my_jid"
 
     // MARK: - Properties
 
@@ -162,6 +166,28 @@ final class SettingsManager: @unchecked Sendable {
             }
             defaults.set(data, forKey: kHotWordConfigs)
         }
+    }
+
+    // MARK: - WhatsApp
+
+    var whatsAppEnabled: Bool {
+        get { defaults.object(forKey: kWhatsAppEnabled) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: kWhatsAppEnabled) }
+    }
+
+    var whatsAppNotifyTasks: Bool {
+        get { defaults.object(forKey: kWhatsAppNotifyTasks) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: kWhatsAppNotifyTasks) }
+    }
+
+    var whatsAppNotifySummaries: Bool {
+        get { defaults.object(forKey: kWhatsAppNotifySummaries) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: kWhatsAppNotifySummaries) }
+    }
+
+    var whatsAppMyJID: String {
+        get { defaults.string(forKey: kWhatsAppMyJID) ?? "" }
+        set { defaults.set(newValue, forKey: kWhatsAppMyJID) }
     }
 
     private init() {}

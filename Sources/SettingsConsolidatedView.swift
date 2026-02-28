@@ -726,7 +726,11 @@ struct SettingsConsolidatedView: View {
 
     @ViewBuilder
     private func connectionsSection(theme: ThemePalette, isDark: Bool) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 12) {
+            // ── WhatsApp Connection ──────────────────────────────────
+            WhatsAppConnectionCard(appState: appState, theme: theme, isDark: isDark)
+
+            // ── Other Connections ────────────────────────────────────
             ForEach($connections) { $conn in
                 let isCC = conn.name == "Claude Code CLI"
                 HStack(spacing: 10) {
@@ -1226,6 +1230,254 @@ struct SettingsCustomToggle: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - WhatsApp Connection Card
+
+struct WhatsAppConnectionCard: View {
+    @ObservedObject var appState: AppState
+    let theme: ThemePalette
+    let isDark: Bool
+
+    @State private var qrImage: String? = nil // base64 data URL
+    @State private var isConnecting = false
+    @State private var pollTimer: Timer? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Header
+            HStack(spacing: 8) {
+                Text("\u{1F4F2}")
+                    .font(.system(size: 14))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("WhatsApp")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(theme.textPrimary)
+                    Text(statusText)
+                        .font(.system(size: 9))
+                        .foregroundColor(statusColor)
+                }
+
+                Spacer()
+
+                if case .connected = appState.whatsAppStatus {
+                    Button("Disconnect") {
+                        Task { await disconnect() }
+                    }
+                    .font(.system(size: 9))
+                    .foregroundColor(.red.opacity(0.8))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(theme.glass)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                    )
+                    .buttonStyle(.plain)
+                } else if case .waitingForQR = appState.whatsAppStatus {
+                    // QR is showing, no button needed
+                } else {
+                    Button(isConnecting ? "Connecting..." : "Connect") {
+                        Task { await startConnection() }
+                    }
+                    .font(.system(size: 9))
+                    .foregroundColor(theme.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(theme.glass)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                    )
+                    .buttonStyle(.plain)
+                    .disabled(isConnecting)
+                }
+            }
+
+            // QR Code display
+            if case .waitingForQR = appState.whatsAppStatus, let qr = qrImage {
+                VStack(spacing: 8) {
+                    // Parse the data URL and display image
+                    if let imageData = dataFromBase64URL(qr),
+                       let nsImage = NSImage(data: imageData) {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .interpolation(.none)
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 180, height: 180)
+                            .background(Color.white)
+                            .cornerRadius(8)
+                    }
+
+                    Text("Scan with WhatsApp")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(theme.textSecondary)
+                    Text("Open WhatsApp \u{2192} Settings \u{2192} Linked Devices \u{2192} Link a Device")
+                        .font(.system(size: 8))
+                        .foregroundColor(theme.textTertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+
+            // Connected state — notification settings
+            if case .connected = appState.whatsAppStatus {
+                VStack(alignment: .leading, spacing: 6) {
+                    Divider()
+                        .background(theme.glassBorder)
+
+                    Toggle(isOn: Binding(
+                        get: { SettingsManager.shared.whatsAppNotifyTasks },
+                        set: { SettingsManager.shared.whatsAppNotifyTasks = $0 }
+                    )) {
+                        Text("Task update notifications")
+                            .font(.system(size: 10))
+                            .foregroundColor(theme.textSecondary)
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+
+                    Toggle(isOn: Binding(
+                        get: { SettingsManager.shared.whatsAppNotifySummaries },
+                        set: { SettingsManager.shared.whatsAppNotifySummaries = $0 }
+                    )) {
+                        Text("Daily summary notifications")
+                            .font(.system(size: 10))
+                            .foregroundColor(theme.textSecondary)
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 9)
+                .fill(theme.glass)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(
+                    appState.whatsAppStatus == .connected
+                        ? theme.accent.opacity(0.3)
+                        : theme.glassBorder,
+                    lineWidth: appState.whatsAppStatus == .connected ? 1 : 0.5
+                )
+        )
+        .onDisappear {
+            pollTimer?.invalidate()
+            pollTimer = nil
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var statusText: String {
+        switch appState.whatsAppStatus {
+        case .disconnected: return "Not connected"
+        case .connecting:   return "Connecting..."
+        case .waitingForQR: return "Scan QR code to link"
+        case .connected:    return "Connected"
+        }
+    }
+
+    private var statusColor: Color {
+        switch appState.whatsAppStatus {
+        case .connected:    return theme.accent
+        case .waitingForQR: return .orange
+        case .connecting:   return .yellow
+        case .disconnected: return theme.textTertiary
+        }
+    }
+
+    private func startConnection() async {
+        isConnecting = true
+
+        // Start sidecar if not running
+        if !WhatsAppSidecar.shared.running {
+            WhatsAppSidecar.shared.start()
+            // Wait a moment for sidecar to start
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+
+        // Tell sidecar to connect
+        do {
+            try await WhatsAppService.shared.connect()
+        } catch {
+            Log.warn(.system, "[WhatsApp] Connection failed: \(error)")
+        }
+
+        isConnecting = false
+
+        // Start polling for QR code and status updates
+        startStatusPolling()
+    }
+
+    private func disconnect() async {
+        pollTimer?.invalidate()
+        pollTimer = nil
+        do {
+            try await WhatsAppService.shared.disconnect(clearAuth: true)
+            appState.whatsAppStatus = .disconnected
+            SettingsManager.shared.whatsAppEnabled = false
+            SettingsManager.shared.whatsAppMyJID = ""
+            qrImage = nil
+            appState.stopWhatsApp()
+        } catch {
+            Log.warn(.system, "[WhatsApp] Disconnect failed: \(error)")
+        }
+    }
+
+    private func startStatusPolling() {
+        pollTimer?.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            Task { @MainActor in
+                await pollStatus()
+            }
+        }
+    }
+
+    private func pollStatus() async {
+        let status = await WhatsAppService.shared.checkHealth()
+        appState.whatsAppStatus = status
+
+        switch status {
+        case .waitingForQR:
+            // Fetch QR code
+            if let qr = await WhatsAppService.shared.getQRCode() {
+                qrImage = qr
+            }
+
+        case .connected:
+            // Stop polling, we're connected
+            pollTimer?.invalidate()
+            pollTimer = nil
+            qrImage = nil
+            SettingsManager.shared.whatsAppEnabled = true
+            appState.startWhatsApp()
+
+        case .disconnected:
+            qrImage = nil
+
+        case .connecting:
+            break
+        }
+    }
+
+    /// Parse a data URL (data:image/png;base64,...) into raw Data.
+    private func dataFromBase64URL(_ dataURL: String) -> Data? {
+        guard let commaIndex = dataURL.firstIndex(of: ",") else { return nil }
+        let base64 = String(dataURL[dataURL.index(after: commaIndex)...])
+        return Data(base64Encoded: base64)
     }
 }
 
