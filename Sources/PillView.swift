@@ -27,6 +27,9 @@ struct PillView: View {
     @State private var scanOffset: CGFloat = -120
     @State private var scanTimer: Timer? = nil
     @State private var pulseOpacity: Double = 1.0
+    @State private var shineOffset: CGFloat = -250
+
+    private var theme: ThemePalette { ThemeManager.shared.current }
 
     var body: some View {
         ZStack {
@@ -67,6 +70,19 @@ struct PillView: View {
         }
     }
 
+    // MARK: - Shine Animation
+
+    private func startShine() {
+        shineOffset = -250
+        withAnimation(.linear(duration: 4.0).repeatForever(autoreverses: false)) {
+            shineOffset = 280
+        }
+    }
+
+    private var isActiveState: Bool {
+        state == .listening || state == .processing
+    }
+
     // MARK: - Full Pill
 
     private var fullPillView: some View {
@@ -86,12 +102,17 @@ struct PillView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
+        .frame(maxWidth: .infinity) // stretch to fill parent width for consistent sizing
         .background(pillBackground)
         .overlay(pillBorder)
         .frame(height: 40)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .shadow(color: theme.accent.opacity(isActiveState ? 0.12 : 0), radius: 12, y: 4)
         .opacity(pillOpacity)
-        .onAppear { startPulse() }
+        .onAppear {
+            startPulse()
+            startShine()
+        }
         .onChange(of: state) { _ in startPulse() }
     }
 
@@ -101,7 +122,7 @@ struct PillView: View {
         Button(action: onCycleMode) {
             Image(systemName: pillMode.icon)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(state == .paused ? .white.opacity(0.35) : AppTheme.green)
+                .foregroundColor(state == .paused ? .white.opacity(0.35) : theme.accent)
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
@@ -153,7 +174,7 @@ struct PillView: View {
     }
 
     private func barColor(index: Int) -> Color {
-        state == .listening ? AppTheme.green : Color.white.opacity(0.20)
+        state == .listening ? theme.accent : Color.white.opacity(0.20)
     }
 
     // MARK: - Scan Line (processing)
@@ -193,7 +214,7 @@ struct PillView: View {
 
     private var stateDotColor: Color {
         switch state {
-        case .listening:  return AppTheme.green
+        case .listening:  return theme.accent
         case .processing: return Color(red: 1.0, green: 0.65, blue: 0.0)
         case .paused:     return Color.white.opacity(0.30)
         case .silence:    return Color.white.opacity(0.15)
@@ -201,14 +222,11 @@ struct PillView: View {
         }
     }
 
-    private var isActiveState: Bool {
-        state == .listening || state == .processing
-    }
-
-    // MARK: - Background & Border
+    // MARK: - Background & Border (Enhanced Glassmorphism)
 
     private var pillBackground: some View {
         ZStack {
+            // Layer 1: Base glass material
             switch appearanceMode {
             case .frosted:
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -227,19 +245,68 @@ struct PillView: View {
                 }
                 .animation(.easeInOut(duration: 0.4), value: isActiveState)
             }
-            // Specular sheen (both modes)
+
+            // Layer 2: Color gradient tint (accent → secondary diagonal)
             LinearGradient(
-                colors: [Color.white.opacity(0.10), Color.clear],
+                colors: [
+                    theme.glow1.opacity(isActiveState ? 0.10 : 0.04),
+                    Color.clear,
+                    theme.glow2.opacity(isActiveState ? 0.07 : 0.02)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .animation(.easeInOut(duration: 0.6), value: isActiveState)
+
+            // Layer 3: Specular sheen (top highlight)
+            LinearGradient(
+                colors: [Color.white.opacity(0.14), Color.white.opacity(0.04), Color.clear],
                 startPoint: .top,
                 endPoint: .center
             )
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+            // Layer 4: Animated shine sweep (only when active)
+            if isActiveState {
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .clear,
+                                Color.white.opacity(0.06),
+                                Color.white.opacity(0.14),
+                                Color.white.opacity(0.06),
+                                .clear
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: 50)
+                    .blur(radius: 4)
+                    .rotationEffect(.degrees(20))
+                    .offset(x: shineOffset)
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            }
         }
     }
 
     private var pillBorder: some View {
         RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .stroke(Color.white.opacity(0.25), lineWidth: 1)
+            .stroke(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.30),
+                        Color.white.opacity(0.12),
+                        theme.accent.opacity(isActiveState ? 0.20 : 0.06),
+                        Color.white.opacity(0.18)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: 1
+            )
     }
 
     // MARK: - Context Menu

@@ -447,7 +447,10 @@ final class ChunkManager: ObservableObject {
 
         case .transcription:
             guard let pasteService else { break }
-            await MainActor.run { pasteService.paste(text: transcript) }
+            await MainActor.run {
+                pasteService.paste(text: transcript)
+                self.appState?.latestTranscriptChunk = transcript
+            }
 
         case .aiSearch:
             guard let qaService, let qaStore else { break }

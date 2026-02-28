@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.onShowSetup = { [weak self] in Task { @MainActor in self?.showSetupWindowSync() } }
 
         showPill()
-        pillWindow?.setAmbientExpanded(appState.pillMode == .ambientIntelligence)
+        pillWindow?.setWidgetHeight(Self.widgetHeight(for: appState.pillMode))
 
         // Show first-run setup if dependencies are missing
         showSetupIfNeeded()
@@ -36,12 +36,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] entry in self?.showToast(entry) }
             .store(in: &cancellables)
 
-        // Resize pill window when ambient mode toggles
+        // Resize pill window when mode changes — each mode has its own widget height
         appState.$pillMode
             .dropFirst()  // initial resize handled above
             .receive(on: DispatchQueue.main)
             .sink { [weak self] mode in
-                self?.pillWindow?.setAmbientExpanded(mode == .ambientIntelligence)
+                self?.pillWindow?.setWidgetHeight(Self.widgetHeight(for: mode))
             }
             .store(in: &cancellables)
 
@@ -93,6 +93,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pill.orderFront(nil)
         pillWindow = pill
         Log.info(.ui, "Pill window shown")
+    }
+
+    /// Widget panel height for each pill mode.
+    static func widgetHeight(for mode: PillMode) -> CGFloat {
+        switch mode {
+        case .ambientIntelligence: return 220  // map square
+        case .transcription:       return 140  // text + apply button
+        case .aiSearch:            return 150  // Q + A display
+        }
     }
 
     private func toggleMinimal() {
@@ -274,16 +283,40 @@ struct PillContentView: View {
                 appearanceMode: appState.appearanceMode
             )
 
-            if appState.pillMode == .ambientIntelligence {
-                AmbientMapView(appState: appState)
-                    .transition(.opacity.combined(with: .offset(y: -6)))
-            }
+            widgetForCurrentMode
         }
+        .frame(width: 220) // consistent width across all modes
         .animation(.easeInOut(duration: 0.22), value: appState.pillMode)
         .onReceive(
             Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
         ) { _ in
             displayLevel = appState.chunkManager.audioLevel
+        }
+    }
+
+    // MARK: - Mode-Specific Widget
+
+    @ViewBuilder
+    private var widgetForCurrentMode: some View {
+        switch appState.pillMode {
+        case .ambientIntelligence:
+            AmbientMapView(appState: appState)
+                .transition(.opacity.combined(with: .offset(y: -6)))
+
+        case .transcription:
+            TranscriptionWidgetView(
+                latestText: appState.latestTranscriptChunk,
+                isListening: appState.isListening,
+                onApply: { appState.applyLatestTranscript() }
+            )
+            .transition(.opacity.combined(with: .offset(y: -6)))
+
+        case .aiSearch:
+            QAWidgetView(
+                latestItem: appState.qaStore.items.first,
+                isListening: appState.isListening
+            )
+            .transition(.opacity.combined(with: .offset(y: -6)))
         }
     }
 }
