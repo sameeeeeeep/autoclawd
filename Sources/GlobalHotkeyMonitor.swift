@@ -7,6 +7,7 @@ final class GlobalHotkeyMonitor {
     var onAmbientMode:  (() -> Void)?  // ⌃A — switch to Ambient, mic on
     var onSearchMode:   (() -> Void)?  // ⌃S — switch to AI Search, mic on
     var onTranscribeMode: (() -> Void)?  // ⌃X — switch to Transcribe, mic on
+    var onCodeMode:     (() -> Void)?  // ⌃D — switch to Code mode
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -30,6 +31,8 @@ final class GlobalHotkeyMonitor {
                 self?.onSearchMode?()
             case 7:   // X
                 self?.onTranscribeMode?()
+            case 2:   // D
+                self?.onCodeMode?()
             default:
                 break
             }
@@ -40,7 +43,7 @@ final class GlobalHotkeyMonitor {
             handler(event)
             return event
         }
-        Log.info(.system, "GlobalHotkeyMonitor started (⌃Z toggle mic, ⌃A ambient, ⌃S search, ⌃X transcribe)")
+        Log.info(.system, "GlobalHotkeyMonitor started (⌃Z toggle mic, ⌃A ambient, ⌃S search, ⌃X transcribe, ⌃D code)")
     }
 
     func stop() {

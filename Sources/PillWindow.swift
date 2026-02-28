@@ -140,6 +140,9 @@ final class PillWindow: NSPanel {
         }
     }
 
-    override var canBecomeKey: Bool { false }
+    /// Set to true when the code co-pilot needs keyboard input.
+    var needsKeyboardInput: Bool = false
+
+    override var canBecomeKey: Bool { needsKeyboardInput }
     override var canBecomeMain: Bool { false }
 }

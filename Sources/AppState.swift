@@ -17,6 +17,21 @@ enum ExecutionMode: String, CaseIterable {
     }
 }
 
+// MARK: - Code Widget Models
+
+enum CodeWidgetStep {
+    case projectSelect
+    case copilot
+}
+
+struct CodeMessage: Identifiable {
+    let id = UUID()
+    let role: Role
+    var text: String
+
+    enum Role { case user, assistant, tool, status, error }
+}
+
 // MARK: - AppState
 
 @MainActor
@@ -58,6 +73,9 @@ final class AppState: ObservableObject {
         didSet {
             UserDefaults.standard.set(pillMode.rawValue, forKey: "pillMode")
             chunkManager.pillMode = pillMode
+            if oldValue == .code && pillMode != .code {
+                resetCodeWidget()
+            }
             Log.info(.system, "Pill mode → \(pillMode.rawValue)")
         }
     }
@@ -110,6 +128,16 @@ final class AppState: ObservableObject {
 
     // Widget live data — latest transcript chunk for the floating widget
     @Published var latestTranscriptChunk: String = ""
+
+    // Code widget state
+    @Published var codeWidgetStep: CodeWidgetStep = .projectSelect
+    @Published var codeSelectedProject: Project? = nil
+    @Published var codeSessionMessages: [CodeMessage] = []
+    @Published var codeIsStreaming: Bool = false
+    @Published var codeCurrentToolName: String? = nil
+    @Published var codeSkipPermissions: Bool = true
+    private(set) var codeSession: ClaudeSession? = nil
+    private var codeStreamTask: Task<Void, Never>? = nil
 
     // WhatsApp state
     @Published var whatsAppStatus: WhatsAppStatus = .disconnected
@@ -330,6 +358,12 @@ final class AppState: ObservableObject {
                 if !self.isListening { self.startListening() }
             }
         }
+        hotkeys.onCodeMode = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.pillMode = .code
+            }
+        }
         hotkeys.start()
 
         if micEnabled {
@@ -391,6 +425,107 @@ final class AppState: ObservableObject {
     func applyLatestTranscript() {
         guard !latestTranscriptChunk.isEmpty else { return }
         pasteService.paste(text: latestTranscriptChunk)
+    }
+
+    // MARK: - Code Widget Actions
+
+    /// Start a co-pilot session for the selected project (promptless — voice feeds in).
+    func startCodeSession() {
+        guard let project = codeSelectedProject else { return }
+        codeSessionMessages = []
+        codeIsStreaming = true
+        codeWidgetStep = .copilot
+
+        let initialPrompt = "You are a co-pilot for this project. Listen for instructions and execute them. Start by briefly describing what this project is (1-2 sentences)."
+
+        guard let (session, stream) = claudeCodeRunner.startSession(
+            prompt: initialPrompt, in: project,
+            dangerouslySkipPermissions: codeSkipPermissions
+        ) else {
+            codeSessionMessages.append(CodeMessage(role: .error, text: "Failed to start Claude CLI"))
+            codeIsStreaming = false
+            return
+        }
+        codeSession = session
+        codeSessionMessages.append(CodeMessage(role: .status, text: "Session started"))
+
+        codeStreamTask = Task { @MainActor in
+            await processCodeStream(stream)
+        }
+    }
+
+    /// Feed a voice transcript into the active code session.
+    func feedVoiceToCodeSession(_ transcript: String) {
+        guard let session = codeSession, session.isRunning else { return }
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        codeSessionMessages.append(CodeMessage(role: .user, text: trimmed))
+        session.sendMessage(trimmed)
+        codeIsStreaming = true
+    }
+
+    func stopCodeSession() {
+        codeStreamTask?.cancel()
+        codeStreamTask = nil
+        codeSession?.stop()
+        codeSession = nil
+        codeIsStreaming = false
+        codeCurrentToolName = nil
+    }
+
+    func resetCodeWidget() {
+        stopCodeSession()
+        codeWidgetStep = .projectSelect
+        codeSessionMessages = []
+    }
+
+    private func processCodeStream(_ stream: AsyncThrowingStream<ClaudeEvent, Error>) async {
+        var accumulatedText = ""
+        do {
+            for try await event in stream {
+                switch event {
+                case .text(let t):
+                    accumulatedText += t
+                    if let lastIdx = codeSessionMessages.indices.last,
+                       codeSessionMessages[lastIdx].role == .assistant {
+                        codeSessionMessages[lastIdx] = CodeMessage(role: .assistant, text: accumulatedText)
+                    } else {
+                        codeSessionMessages.append(CodeMessage(role: .assistant, text: accumulatedText))
+                    }
+
+                case .toolUse(let name, _):
+                    if !accumulatedText.isEmpty { accumulatedText = "" }
+                    codeCurrentToolName = name
+                    codeSessionMessages.append(CodeMessage(role: .tool, text: "Using \(name)…"))
+
+                case .toolResult(let name, let output):
+                    codeCurrentToolName = nil
+                    let summary = output.isEmpty ? "\(name) done" : "\(name): \(String(output.prefix(120)))"
+                    codeSessionMessages.append(CodeMessage(role: .tool, text: summary))
+
+                case .result(let text):
+                    if !accumulatedText.isEmpty { accumulatedText = "" }
+                    if !text.isEmpty {
+                        codeSessionMessages.append(CodeMessage(role: .assistant, text: text))
+                    }
+                    codeIsStreaming = false
+
+                case .status(let msg):
+                    codeSessionMessages.append(CodeMessage(role: .status, text: msg))
+
+                case .error(let msg):
+                    codeSessionMessages.append(CodeMessage(role: .error, text: msg))
+
+                case .sessionInit:
+                    break
+                }
+            }
+        } catch {
+            codeSessionMessages.append(
+                CodeMessage(role: .error, text: error.localizedDescription)
+            )
+        }
+        codeIsStreaming = false
     }
 
     // MARK: - WhatsApp

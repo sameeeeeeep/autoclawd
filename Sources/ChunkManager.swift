@@ -469,6 +469,12 @@ final class ChunkManager: ObservableObject {
             } catch {
                 Log.error(.qa, "QA failed: \(error.localizedDescription)")
             }
+
+        case .code:
+            // Feed voice transcription into the active co-pilot session
+            await MainActor.run {
+                self.appState?.feedVoiceToCodeSession(transcript)
+            }
         }
 
         // Purge old audio

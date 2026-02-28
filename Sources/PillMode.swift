@@ -4,12 +4,14 @@ enum PillMode: String, CaseIterable {
     case ambientIntelligence = "ambientIntelligence"
     case transcription       = "transcription"
     case aiSearch            = "aiSearch"
+    case code                = "code"
 
     var displayName: String {
         switch self {
         case .ambientIntelligence: return "Ambient"
         case .transcription:       return "Transcribe"
         case .aiSearch:            return "AI Search"
+        case .code:                return "Code"
         }
     }
 
@@ -18,6 +20,7 @@ enum PillMode: String, CaseIterable {
         case .ambientIntelligence: return "brain"
         case .transcription:       return "text.cursor"
         case .aiSearch:            return "magnifyingglass"
+        case .code:                return "chevron.left.forwardslash.chevron.right"
         }
     }
 
@@ -26,6 +29,7 @@ enum PillMode: String, CaseIterable {
         case .ambientIntelligence: return "[AMB]"
         case .transcription:       return "[TRS]"
         case .aiSearch:            return "[SRC]"
+        case .code:                return "[COD]"
         }
     }
 

@@ -153,7 +153,8 @@ final class ClaudeCodeRunner: Sendable {
         prompt: String,
         in project: Project,
         resumeSessionID: String? = nil,
-        attachments: [Attachment] = []
+        attachments: [Attachment] = [],
+        dangerouslySkipPermissions: Bool = true
     ) -> (ClaudeSession, AsyncThrowingStream<ClaudeEvent, Error>)? {
         guard let claudeURL = ClaudeCodeRunner.findCLI() else {
             Log.error(.taskExec, "Claude CLI not found")
@@ -168,8 +169,10 @@ final class ClaudeCodeRunner: Sendable {
             "--input-format", "stream-json",
             "--verbose",
             "--include-partial-messages",
-            "--dangerously-skip-permissions",
         ]
+        if dangerouslySkipPermissions {
+            args.append("--dangerously-skip-permissions")
+        }
         if let mcpConfigPath = MCPConfigManager.configPath() {
             args += ["--mcp-config", mcpConfigPath]
         }
