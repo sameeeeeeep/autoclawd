@@ -35,9 +35,13 @@ MCP_SWIFT_FLAGS = \
 	-target $(TARGET) \
 	-lsqlite3
 
-.PHONY: all clean run dmg mcp-server
+# ── WhatsApp Sidecar ──────────────────────────────────────────────────────────
+WHATSAPP_DIR = WhatsAppSidecar
+WHATSAPP_DEST = $(RESOURCES)/WhatsAppSidecar
 
-all: $(MACOS_DIR)/$(APP_NAME) mcp-server
+.PHONY: all clean run dmg mcp-server whatsapp-sidecar
+
+all: $(MACOS_DIR)/$(APP_NAME) mcp-server whatsapp-sidecar
 
 mcp-server: $(MCP_BINARY)
 
@@ -63,6 +67,19 @@ $(MACOS_DIR)/$(APP_NAME): $(SOURCES) Info.plist $(ICON_ICNS) $(MCP_BINARY)
 	@codesign --force --sign "$(CODESIGN_IDENTITY)" \
 		--entitlements AutoClawd.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
+
+whatsapp-sidecar: $(MACOS_DIR)/$(APP_NAME)
+	@if [ -d "$(WHATSAPP_DIR)" ] && [ -f "$(WHATSAPP_DIR)/package.json" ]; then \
+		echo "Bundling WhatsApp sidecar..."; \
+		mkdir -p "$(WHATSAPP_DEST)"; \
+		cp -r "$(WHATSAPP_DIR)/src" "$(WHATSAPP_DEST)/"; \
+		cp "$(WHATSAPP_DIR)/package.json" "$(WHATSAPP_DEST)/"; \
+		cp "$(WHATSAPP_DIR)/tsconfig.json" "$(WHATSAPP_DEST)/"; \
+		if [ -d "$(WHATSAPP_DIR)/node_modules" ]; then \
+			cp -r "$(WHATSAPP_DIR)/node_modules" "$(WHATSAPP_DEST)/"; \
+		fi; \
+		echo "WhatsApp sidecar bundled"; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR)
