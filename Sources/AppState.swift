@@ -104,6 +104,9 @@ final class AppState: ObservableObject {
     @Published var pipelineTasks: [PipelineTaskRecord] = []
     @Published var skills: [Skill] = []
 
+    // Widget live data — latest transcript chunk for the floating widget
+    @Published var latestTranscriptChunk: String = ""
+
     // MARK: - Services
 
     private let storage = FileStorageManager.shared
@@ -360,6 +363,12 @@ final class AppState: ObservableObject {
 
     func cyclePillMode() {
         pillMode = pillMode.next()
+    }
+
+    /// Re-paste the latest transcript chunk into the active text field.
+    func applyLatestTranscript() {
+        guard !latestTranscriptChunk.isEmpty else { return }
+        pasteService.paste(text: latestTranscriptChunk)
     }
 
     // MARK: - Actions

@@ -45,13 +45,12 @@ struct AmbientMapView: View {
     @State private var showEditor  = false
     @State private var dragStarts: [UUID: CGPoint] = [:]
 
-    private let mapSize: CGFloat = 200
+    private let mapSize: CGFloat = 220
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // Background
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.ultraThinMaterial)
+            // Glassmorphic background (matches pill style)
+            WidgetGlassBackground(isActive: appState.isListening)
 
             // Subtle grid
             Canvas { ctx, size in
@@ -141,9 +140,6 @@ struct AmbientMapView: View {
             }
             .padding(16)
 
-            // Border
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.18), lineWidth: 1)
         }
         .frame(width: mapSize, height: mapSize)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
