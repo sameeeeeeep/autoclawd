@@ -13,7 +13,7 @@ struct VoiceDot: Identifiable {
     static let mock: [VoiceDot] = [
         VoiceDot(id: "me",
                  name: "You",
-                 color: AppTheme.green,
+                 color: Color.green,
                  position: CGPoint(x: 0.50, y: 0.58),
                  isSpeaking: false,
                  isMe: true),

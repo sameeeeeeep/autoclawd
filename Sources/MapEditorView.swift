@@ -14,7 +14,7 @@ struct MapEditorView: View {
             HStack {
                 Text("EDIT ROOM")
                     .font(AppTheme.caption)
-                    .foregroundColor(AppTheme.textSecondary)
+                    .foregroundColor(.secondary)
                 Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
@@ -78,7 +78,7 @@ struct MapEditorView: View {
                 Button(action: addPerson) {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(AppTheme.green)
+                        .foregroundColor(Color.green)
                 }
                 .buttonStyle(.plain)
                 .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)

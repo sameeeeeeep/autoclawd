@@ -27,9 +27,6 @@ struct PillView: View {
     @State private var scanOffset: CGFloat = -120
     @State private var scanTimer: Timer? = nil
     @State private var pulseOpacity: Double = 1.0
-    @State private var shineOffset: CGFloat = -250
-
-    private var theme: ThemePalette { ThemeManager.shared.current }
 
     var body: some View {
         ZStack {
@@ -70,15 +67,6 @@ struct PillView: View {
         }
     }
 
-    // MARK: - Shine Animation
-
-    private func startShine() {
-        shineOffset = -250
-        withAnimation(.linear(duration: 4.0).repeatForever(autoreverses: false)) {
-            shineOffset = 280
-        }
-    }
-
     private var isActiveState: Bool {
         state == .listening || state == .processing
     }
@@ -102,17 +90,15 @@ struct PillView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .frame(maxWidth: .infinity) // stretch to fill parent width for consistent sizing
+        .frame(maxWidth: .infinity)
         .background(pillBackground)
         .overlay(pillBorder)
         .frame(height: 40)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .shadow(color: theme.accent.opacity(isActiveState ? 0.12 : 0), radius: 12, y: 4)
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+        .shadow(color: .black.opacity(0.05), radius: 2, y: 1)
         .opacity(pillOpacity)
-        .onAppear {
-            startPulse()
-            startShine()
-        }
+        .onAppear { startPulse() }
         .onChange(of: state) { _ in startPulse() }
     }
 
@@ -122,7 +108,7 @@ struct PillView: View {
         Button(action: onCycleMode) {
             Image(systemName: pillMode.icon)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(state == .paused ? .white.opacity(0.35) : theme.accent)
+                .foregroundColor(state == .paused ? .secondary : .accentColor)
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
@@ -135,9 +121,9 @@ struct PillView: View {
         Button(action: onTogglePause) {
             Image(systemName: state == .paused ? "play.fill" : "pause.fill")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(.white.opacity(state == .paused ? 0.85 : 0.55))
+                .foregroundColor(.primary.opacity(state == .paused ? 0.85 : 0.55))
                 .frame(width: 24, height: 24)
-                .background(Circle().fill(Color.white.opacity(state == .paused ? 0.15 : 0.08)))
+                .background(Circle().fill(Color.primary.opacity(state == .paused ? 0.12 : 0.06)))
         }
         .buttonStyle(.plain)
     }
@@ -146,9 +132,10 @@ struct PillView: View {
 
     private var minimalView: some View {
         Circle()
-            .fill(Color.black)
+            .fill(Color(NSColor.controlBackgroundColor))
             .frame(width: 12, height: 12)
-            .overlay(Circle().stroke(Color.white.opacity(0.3), lineWidth: 0.5))
+            .overlay(Circle().stroke(Color(NSColor.separatorColor), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
     }
 
     // MARK: - Waveform Bars
@@ -174,14 +161,14 @@ struct PillView: View {
     }
 
     private func barColor(index: Int) -> Color {
-        state == .listening ? theme.accent : Color.white.opacity(0.20)
+        state == .listening ? .accentColor : .secondary.opacity(0.3)
     }
 
     // MARK: - Scan Line (processing)
 
     private var scanLine: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.6))
+            .fill(Color.primary.opacity(0.5))
             .frame(width: 2, height: 24)
             .offset(x: scanOffset)
             .onAppear { startScan() }
@@ -214,19 +201,18 @@ struct PillView: View {
 
     private var stateDotColor: Color {
         switch state {
-        case .listening:  return theme.accent
-        case .processing: return Color(red: 1.0, green: 0.65, blue: 0.0)
-        case .paused:     return Color.white.opacity(0.30)
-        case .silence:    return Color.white.opacity(0.15)
-        case .minimal:    return Color.clear
+        case .listening:  return .green
+        case .processing: return .orange
+        case .paused:     return .secondary.opacity(0.4)
+        case .silence:    return .secondary.opacity(0.2)
+        case .minimal:    return .clear
         }
     }
 
-    // MARK: - Background & Border (Enhanced Glassmorphism)
+    // MARK: - Background & Border (Clean macOS style)
 
     private var pillBackground: some View {
         ZStack {
-            // Layer 1: Base glass material
             switch appearanceMode {
             case .frosted:
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -235,68 +221,12 @@ struct PillView: View {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .fill(Color(NSColor.windowBackgroundColor))
             }
-
-            // Layer 2: Color gradient tint (accent → secondary diagonal)
-            LinearGradient(
-                colors: [
-                    theme.glow1.opacity(isActiveState ? 0.10 : 0.04),
-                    Color.clear,
-                    theme.glow2.opacity(isActiveState ? 0.07 : 0.02)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .animation(.easeInOut(duration: 0.6), value: isActiveState)
-
-            // Layer 3: Specular sheen (top highlight)
-            LinearGradient(
-                colors: [Color.white.opacity(0.14), Color.white.opacity(0.04), Color.clear],
-                startPoint: .top,
-                endPoint: .center
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-
-            // Layer 4: Animated shine sweep (only when active)
-            if isActiveState {
-                Rectangle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                .clear,
-                                Color.white.opacity(0.06),
-                                Color.white.opacity(0.14),
-                                Color.white.opacity(0.06),
-                                .clear
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .frame(width: 50)
-                    .blur(radius: 4)
-                    .rotationEffect(.degrees(20))
-                    .offset(x: shineOffset)
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            }
         }
     }
 
     private var pillBorder: some View {
         RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .stroke(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.30),
-                        Color.white.opacity(0.12),
-                        theme.accent.opacity(isActiveState ? 0.20 : 0.06),
-                        Color.white.opacity(0.18)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: 1
-            )
+            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
     }
 
     // MARK: - Context Menu
@@ -304,11 +234,11 @@ struct PillView: View {
     private var contextMenu: some View {
         Group {
             Button("Open Panel") { onOpenPanel() }
-            Button(state == .paused ? "Resume Listening  ⌃Z" : "Pause Listening  ⌃Z") { onTogglePause() }
+            Button(state == .paused ? "Resume Listening  \u{2303}Z" : "Pause Listening  \u{2303}Z") { onTogglePause() }
             Divider()
-            Button("Ambient Mode  ⌃A") { onCycleMode() }
-            Button("AI Search Mode  ⌃S") { onCycleMode() }
-            Button("Transcribe Mode  ⌃X") { onCycleMode() }
+            Button("Ambient Mode  \u{2303}A") { onCycleMode() }
+            Button("AI Search Mode  \u{2303}S") { onCycleMode() }
+            Button("Transcribe Mode  \u{2303}X") { onCycleMode() }
             Divider()
             Button("View Logs") { onOpenLogs() }
             Divider()

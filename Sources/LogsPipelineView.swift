@@ -9,20 +9,20 @@ private enum PipelineViewMode: String, CaseIterable {
 
 // MARK: - Status Color Helper
 
-private func statusColor(_ status: String, theme: ThemePalette) -> Color {
+private func statusColor(_ status: String) -> Color {
     switch status {
     case "completed", "accepted", "relevant":
-        return theme.accent
+        return .accentColor
     case "ongoing", "pending":
-        return theme.warning
+        return .orange
     case "pending_approval":
-        return theme.warning
+        return .orange
     case "needs_input":
-        return theme.secondary
+        return .purple
     case "dismissed", "nonrelevant":
-        return theme.error
+        return .red
     default:
-        return theme.textTertiary
+        return Color(NSColor.tertiaryLabelColor)
     }
 }
 
@@ -330,7 +330,6 @@ struct LogsPipelineView: View {
     // MARK: - Body
 
     var body: some View {
-        let theme = ThemeManager.shared.current
         GeometryReader { geo in
             let showDetailInline = geo.size.width >= 700
 
@@ -368,7 +367,7 @@ struct LogsPipelineView: View {
 
                             detailSidebar
                                 .frame(width: min(320, geo.size.width * 0.8))
-                                .background(theme.surface)
+                                .background(Color(NSColor.controlBackgroundColor))
                                 .shadow(color: .black.opacity(0.2), radius: 12)
                                 .transition(.move(edge: .trailing))
                         }
@@ -376,7 +375,7 @@ struct LogsPipelineView: View {
                 }
             }
         }
-        .background(ThemeManager.shared.current.isDark ? Color.black.opacity(0.05) : Color.black.opacity(0.01))
+        .background(Color.black.opacity(0.03))
         .onAppear { loadData() }
         .task {
             // Auto-refresh every 2 seconds
@@ -397,13 +396,12 @@ struct LogsPipelineView: View {
     // MARK: - Filter Bar
 
     private var filterBar: some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             // Title row — wraps extraction actions below on narrow windows
             HStack(spacing: 8) {
                 Text("Pipeline Logs")
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(.primary)
                     .lineLimit(1)
                     .layoutPriority(1)
 
@@ -436,7 +434,7 @@ struct LogsPipelineView: View {
                 HStack(spacing: 6) {
                     Text("Filter:")
                         .font(.system(size: 8, weight: .regular))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         .padding(.trailing, 2)
 
                     // Project filters (from real projects)
@@ -444,7 +442,7 @@ struct LogsPipelineView: View {
                         filterChip(
                             label: project.name,
                             isActive: filterProject == project.name,
-                            activeColor: theme.tagProject
+                            activeColor: .blue
                         ) {
                             filterProject = filterProject == project.name ? nil : project.name
                         }
@@ -459,7 +457,7 @@ struct LogsPipelineView: View {
                         filterChip(
                             label: bucket.displayName,
                             isActive: filterBucket == bucket,
-                            activeColor: theme.tagAction
+                            activeColor: .orange
                         ) {
                             filterBucket = filterBucket == bucket ? nil : bucket
                         }
@@ -472,7 +470,7 @@ struct LogsPipelineView: View {
                         filterChip(
                             label: state.replacingOccurrences(of: "_", with: " "),
                             isActive: filterState == state,
-                            activeColor: statusColor(state, theme: theme)
+                            activeColor: statusColor(state)
                         ) {
                             filterState = filterState == state ? nil : state
                         }
@@ -487,12 +485,12 @@ struct LogsPipelineView: View {
                         } label: {
                             Text("Clear")
                                 .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(theme.error)
+                                .foregroundColor(.red)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 4)
                                 .background(
                                     RoundedRectangle(cornerRadius: 14)
-                                        .fill(theme.error.opacity(0.12))
+                                        .fill(Color.red.opacity(0.12))
                                 )
                         }
                         .buttonStyle(.plain)
@@ -507,7 +505,7 @@ struct LogsPipelineView: View {
         .padding(.bottom, 10)
         .overlay(
             Rectangle()
-                .fill(theme.glassBorder)
+                .fill(Color(NSColor.separatorColor))
                 .frame(height: 0.5),
             alignment: .bottom
         )
@@ -516,7 +514,6 @@ struct LogsPipelineView: View {
     // MARK: - Pipeline Status Bar
 
     private var pipelineStatusBar: some View {
-        let theme = ThemeManager.shared.current
         let pendingTasks = appState.pipelineTasks.filter {
             $0.status == .pending_approval || $0.status == .needs_input
         }.count
@@ -531,7 +528,7 @@ struct LogsPipelineView: View {
                     StatusDot(status: "ongoing")
                     Text("\(activeTasks) running")
                         .font(.system(size: 9))
-                        .foregroundColor(theme.warning)
+                        .foregroundColor(.orange)
                 }
             }
             if pendingTasks > 0 {
@@ -539,21 +536,20 @@ struct LogsPipelineView: View {
                     StatusDot(status: "pending_approval")
                     Text("\(pendingTasks) awaiting")
                         .font(.system(size: 9))
-                        .foregroundColor(theme.secondary)
+                        .foregroundColor(.purple)
                 }
             }
             if activeTasks == 0 && pendingTasks == 0 && !appState.pipelineTasks.isEmpty {
                 Text("All clear")
                     .font(.system(size: 9))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
             }
         }
     }
 
     private var filterSeparator: some View {
-        let theme = ThemeManager.shared.current
-        return Rectangle()
-            .fill(theme.glassBorder)
+        Rectangle()
+            .fill(Color(NSColor.separatorColor))
             .frame(width: 1, height: 12)
     }
 
@@ -566,7 +562,7 @@ struct LogsPipelineView: View {
         Button(action: action) {
             Text(label)
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(isActive ? activeColor : ThemeManager.shared.current.textTertiary)
+                .foregroundColor(isActive ? activeColor : Color(NSColor.tertiaryLabelColor))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(
@@ -576,7 +572,7 @@ struct LogsPipelineView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 14)
                         .stroke(
-                            isActive ? activeColor.opacity(0.50) : ThemeManager.shared.current.glassBorder,
+                            isActive ? activeColor.opacity(0.50) : Color(NSColor.separatorColor),
                             lineWidth: 0.5
                         )
                 )
@@ -587,8 +583,7 @@ struct LogsPipelineView: View {
     // MARK: - Pipeline Content
 
     private var pipelineContent: some View {
-        let theme = ThemeManager.shared.current
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             if filteredGroups.isEmpty {
                 emptyPipelineState
             } else {
@@ -602,22 +597,21 @@ struct LogsPipelineView: View {
                 }
             }
         }
-        .background(theme.isDark ? Color.clear : Color.clear)
+        .background(Color.clear)
     }
 
     private var emptyPipelineState: some View {
-        let theme = ThemeManager.shared.current
-        return VStack(spacing: 12) {
+        VStack(spacing: 12) {
             Spacer()
             Image(systemName: "waveform.path")
                 .font(.system(size: 32))
-                .foregroundColor(theme.glassBorder)
+                .foregroundColor(Color(NSColor.separatorColor))
             Text("No pipeline data yet")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(theme.textSecondary)
+                .foregroundColor(.secondary)
             Text("Start listening to see transcripts flow through the pipeline.")
                 .font(.system(size: 10))
-                .foregroundColor(theme.textTertiary)
+                .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 .multilineTextAlignment(.center)
             if appState.isListening {
                 LiveBadge()
@@ -631,17 +625,16 @@ struct LogsPipelineView: View {
     // MARK: - Raw Logs Content
 
     private var rawLogsContent: some View {
-        let theme = ThemeManager.shared.current
-        return Group {
+        Group {
             if logEntries.isEmpty {
                 VStack(spacing: 12) {
                     Spacer()
                     Image(systemName: "doc.text")
                         .font(.system(size: 32))
-                        .foregroundColor(theme.glassBorder)
+                        .foregroundColor(Color(NSColor.separatorColor))
                     Text("No logs yet.")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(theme.textSecondary)
+                        .foregroundColor(.secondary)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -662,14 +655,13 @@ struct LogsPipelineView: View {
     }
 
     private func logRow(_ entry: LogEntry) -> some View {
-        let theme = ThemeManager.shared.current
-        return GeometryReader { geo in
+        GeometryReader { geo in
             let isCompact = geo.size.width < 400
 
             HStack(alignment: .top, spacing: isCompact ? 4 : 6) {
                 Text(Self.logTimeFormatter.string(from: entry.timestamp))
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     .frame(minWidth: 48, alignment: .leading)
                     .layoutPriority(-1)
 
@@ -682,7 +674,7 @@ struct LogsPipelineView: View {
                 if !isCompact {
                     Text("[\(entry.component.rawValue)]")
                         .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(theme.textSecondary)
+                        .foregroundColor(.secondary)
                         .frame(minWidth: 50, alignment: .leading)
                         .lineLimit(1)
                         .layoutPriority(-1)
@@ -690,7 +682,7 @@ struct LogsPipelineView: View {
 
                 Text(entry.message)
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(.primary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -702,20 +694,19 @@ struct LogsPipelineView: View {
         .frame(minHeight: 20)
         .background(
             entry.level == .error
-                ? ThemeManager.shared.current.error.opacity(0.06)
+                ? Color.red.opacity(0.06)
                 : entry.level == .warn
-                    ? ThemeManager.shared.current.warning.opacity(0.04)
+                    ? Color.orange.opacity(0.04)
                     : Color.clear
         )
     }
 
     private func logLevelColor(_ level: LogLevel) -> Color {
-        let theme = ThemeManager.shared.current
         switch level {
-        case .error: return theme.error
+        case .error: return .red
         case .warn:  return .orange
-        case .info:  return theme.textSecondary
-        case .debug: return theme.textTertiary
+        case .info:  return .secondary
+        case .debug: return Color(NSColor.tertiaryLabelColor)
         }
     }
 
@@ -728,26 +719,25 @@ struct LogsPipelineView: View {
     // MARK: - Column Header Row
 
     private var columnHeaderRow: some View {
-        let theme = ThemeManager.shared.current
-        return HStack(spacing: 0) {
-            columnHeader("TIME", color: theme.textTertiary)
+        HStack(spacing: 0) {
+            columnHeader("TIME", color: Color(NSColor.tertiaryLabelColor))
                 .frame(width: 56, alignment: .leading)
-            columnHeader("TRANSCRIPT", color: theme.textSecondary)
+            columnHeader("TRANSCRIPT", color: .secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            columnHeader("CLEANING", color: theme.tertiary)
+            columnHeader("CLEANING", color: .cyan)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            columnHeader("ANALYSIS", color: theme.secondary)
+            columnHeader("ANALYSIS", color: .purple)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            columnHeader("TASK", color: theme.warning)
+            columnHeader("TASK", color: .orange)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            columnHeader("RESULT", color: theme.accent)
+            columnHeader("RESULT", color: .accentColor)
                 .frame(width: 90, alignment: .leading)
         }
         .padding(.horizontal, 14)
         .frame(height: 28)
         .overlay(
             Rectangle()
-                .fill(theme.glassBorder)
+                .fill(Color(NSColor.separatorColor))
                 .frame(height: 0.5),
             alignment: .bottom
         )
@@ -763,7 +753,6 @@ struct LogsPipelineView: View {
     // MARK: - Pipeline Row
 
     private func pipelineRow(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
         let isSelected = selectedRowID == group.id
 
         return Button {
@@ -775,7 +764,7 @@ struct LogsPipelineView: View {
             HStack(spacing: 0) {
                 // Left accent border
                 Rectangle()
-                    .fill(isSelected ? theme.accent : Color.clear)
+                    .fill(isSelected ? Color.accentColor : Color.clear)
                     .frame(width: 2)
 
                 HStack(alignment: .top, spacing: 0) {
@@ -800,10 +789,10 @@ struct LogsPipelineView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
             }
-            .background(isSelected ? theme.accent.opacity(0.06) : Color.clear)
+            .background(isSelected ? Color.accentColor.opacity(0.06) : Color.clear)
             .overlay(
                 Rectangle()
-                    .fill(theme.isDark ? Color.white.opacity(0.02) : Color.black.opacity(0.03))
+                    .fill(Color(NSColor.separatorColor))
                     .frame(height: 0.5),
                 alignment: .bottom
             )
@@ -814,15 +803,14 @@ struct LogsPipelineView: View {
     // MARK: - Time Column
 
     private func timeColumn(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(group.time)
                 .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(theme.textSecondary)
+                .foregroundColor(.secondary)
             if let firstChunk = group.rawChunks.first {
                 Text(firstChunk.id.prefix(8))
                     .font(.system(size: 7, design: .monospaced))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
             }
         }
     }
@@ -830,30 +818,29 @@ struct LogsPipelineView: View {
     // MARK: - Transcript Column
 
     private func transcriptColumn(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
             ForEach(group.rawChunks) { chunk in
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
                         Text(chunk.id)
                             .font(.system(size: 7, design: .monospaced))
-                            .foregroundColor(theme.textTertiary)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         if !chunk.duration.isEmpty {
                             Text(chunk.duration)
                                 .font(.system(size: 7, design: .monospaced))
-                                .foregroundColor(theme.textTertiary)
+                                .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         }
                     }
                     Text(String(chunk.text.prefix(55)))
                         .font(.system(size: 9))
-                        .foregroundColor(theme.textSecondary.opacity(0.80))
+                        .foregroundColor(Color.secondary.opacity(0.80))
                         .lineLimit(2)
                 }
                 .padding(4)
                 .background(
                     group.rawChunks.count > 1
                         ? RoundedRectangle(cornerRadius: 4)
-                            .fill(theme.glass.opacity(0.5))
+                            .fill(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.5))
                         : nil
                 )
             }
@@ -863,8 +850,7 @@ struct LogsPipelineView: View {
     // MARK: - Cleaning Column
 
     private func cleaningColumn(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
             if !group.cleaningTags.isEmpty {
                 HStack(spacing: 3) {
                     ForEach(group.cleaningTags, id: \.self) { tag in
@@ -875,7 +861,7 @@ struct LogsPipelineView: View {
             if let cleaned = group.cleanedText {
                 Text(String(cleaned.prefix(70)))
                     .font(.system(size: 9))
-                    .foregroundColor(theme.tertiary.opacity(0.80))
+                    .foregroundColor(Color.cyan.opacity(0.80))
                     .lineLimit(2)
             }
         }
@@ -884,8 +870,7 @@ struct LogsPipelineView: View {
     // MARK: - Analysis Column
 
     private func analysisColumn(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
             if !group.analysisTags.isEmpty {
                 HStack(spacing: 3) {
                     ForEach(group.analysisTags, id: \.self) { tag in
@@ -899,7 +884,7 @@ struct LogsPipelineView: View {
             if let text = group.analysisText {
                 Text(String(text.prefix(55)))
                     .font(.system(size: 9))
-                    .foregroundColor(theme.secondary.opacity(0.80))
+                    .foregroundColor(Color.purple.opacity(0.80))
                     .lineLimit(2)
             }
         }
@@ -908,12 +893,11 @@ struct LogsPipelineView: View {
     // MARK: - Task Column
 
     private func taskColumn(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
             if group.tasks.isEmpty {
                 Text("\u{2014}")
                     .font(.system(size: 9))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
             } else {
                 ForEach(group.tasks) { task in
                     taskMiniCard(task: task, groupID: group.id)
@@ -923,14 +907,13 @@ struct LogsPipelineView: View {
     }
 
     private func taskMiniCard(task: PipelineTask, groupID: String) -> some View {
-        let theme = ThemeManager.shared.current
         let isPipelineTask = task.id.hasPrefix("T-")
 
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
                 Text(task.id)
                     .font(.system(size: 7, design: .monospaced))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 ModeBadge(mode: modeBadgeMode(task.mode))
                 if let skill = task.skill {
                     TagView(type: .action, label: skill, small: true)
@@ -941,7 +924,7 @@ struct LogsPipelineView: View {
             }
             Text(String(task.title.prefix(50)))
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(theme.warning)
+                .foregroundColor(.orange)
                 .lineLimit(2)
 
             // Run button for stuck ongoing tasks
@@ -955,12 +938,12 @@ struct LogsPipelineView: View {
                         Text("Run")
                             .font(.system(size: 8))
                     }
-                    .foregroundColor(theme.accent)
+                    .foregroundColor(.accentColor)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(
                         RoundedRectangle(cornerRadius: 5)
-                            .fill(theme.accent.opacity(0.18))
+                            .fill(Color.accentColor.opacity(0.18))
                     )
                 }
                 .buttonStyle(.plain)
@@ -982,12 +965,12 @@ struct LogsPipelineView: View {
                             Text("Accept")
                                 .font(.system(size: 8))
                         }
-                        .foregroundColor(theme.accent)
+                        .foregroundColor(.accentColor)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(
                             RoundedRectangle(cornerRadius: 5)
-                                .fill(theme.accent.opacity(0.18))
+                                .fill(Color.accentColor.opacity(0.18))
                         )
                     }
                     .buttonStyle(.plain)
@@ -1005,12 +988,12 @@ struct LogsPipelineView: View {
                             Text("Dismiss")
                                 .font(.system(size: 8))
                         }
-                        .foregroundColor(theme.error)
+                        .foregroundColor(.red)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(
                             RoundedRectangle(cornerRadius: 5)
-                                .fill(theme.error.opacity(0.12))
+                                .fill(Color.red.opacity(0.12))
                         )
                     }
                     .buttonStyle(.plain)
@@ -1021,14 +1004,14 @@ struct LogsPipelineView: View {
         .background(
             RoundedRectangle(cornerRadius: 5)
                 .fill(task.status == .filtered
-                      ? theme.textTertiary.opacity(0.04)
-                      : theme.warning.opacity(0.06))
+                      ? Color(NSColor.tertiaryLabelColor).opacity(0.04)
+                      : Color.orange.opacity(0.06))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 5)
                 .stroke(task.status == .filtered
-                        ? theme.textTertiary.opacity(0.08)
-                        : theme.warning.opacity(0.12),
+                        ? Color(NSColor.tertiaryLabelColor).opacity(0.08)
+                        : Color.orange.opacity(0.12),
                         lineWidth: 0.5)
         )
     }
@@ -1036,25 +1019,24 @@ struct LogsPipelineView: View {
     // MARK: - Result Column
 
     private func resultColumn(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
             if group.tasks.isEmpty {
                 Text("\u{2014}")
                     .font(.system(size: 9))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
             } else {
                 ForEach(group.tasks) { task in
                     HStack(spacing: 4) {
                         StatusDot(status: task.status.rawValue)
                         Text(task.result.finalStatus)
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(statusColor(task.status.rawValue, theme: theme))
+                            .foregroundColor(statusColor(task.status.rawValue))
                             .lineLimit(2)
                     }
                     if !task.result.duration.isEmpty {
                         Text(task.result.duration)
                             .font(.system(size: 7))
-                            .foregroundColor(theme.textTertiary)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     }
                 }
             }
@@ -1064,7 +1046,6 @@ struct LogsPipelineView: View {
     // MARK: - Detail Sidebar
 
     private var detailSidebar: some View {
-        let theme = ThemeManager.shared.current
         let selectedGroup = filteredGroups.first { $0.id == selectedRowID }
 
         return VStack(spacing: 0) {
@@ -1077,35 +1058,35 @@ struct LogsPipelineView: View {
                             stage: "transcript",
                             emoji: "",
                             name: "TRANSCRIPT",
-                            color: theme.textSecondary,
+                            color: .secondary,
                             group: group
                         )
                         detailStageSection(
                             stage: "cleaning",
                             emoji: "",
                             name: "CLEANING",
-                            color: theme.tertiary,
+                            color: .cyan,
                             group: group
                         )
                         detailStageSection(
                             stage: "analysis",
                             emoji: "",
                             name: "ANALYSIS",
-                            color: theme.secondary,
+                            color: .purple,
                             group: group
                         )
                         detailStageSection(
                             stage: "task",
                             emoji: "",
                             name: "TASKS",
-                            color: theme.warning,
+                            color: .orange,
                             group: group
                         )
                         detailStageSection(
                             stage: "result",
                             emoji: "",
                             name: "RESULT",
-                            color: theme.accent,
+                            color: .accentColor,
                             group: group
                         )
                     }
@@ -1115,15 +1096,15 @@ struct LogsPipelineView: View {
                 Spacer()
                 Text("Select a row to inspect")
                     .font(.system(size: 10))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 Spacer()
             }
         }
         .frame(maxHeight: .infinity)
-        .background(theme.isDark ? Color.black.opacity(0.12) : Color.black.opacity(0.02))
+        .background(Color.black.opacity(0.04))
         .overlay(
             Rectangle()
-                .fill(theme.glassBorder)
+                .fill(Color(NSColor.separatorColor))
                 .frame(width: 0.5),
             alignment: .leading
         )
@@ -1132,15 +1113,14 @@ struct LogsPipelineView: View {
     // MARK: - Detail Header
 
     private func detailHeader(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
-        return HStack {
+        HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(group.id)
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(.primary)
                 Text(group.time)
                     .font(.system(size: 9))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
             }
             Spacer()
             Button {
@@ -1151,15 +1131,15 @@ struct LogsPipelineView: View {
             } label: {
                 Text("\u{00D7}")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(.secondary)
                     .frame(width: 20, height: 20)
                     .background(
                         RoundedRectangle(cornerRadius: 5)
-                            .fill(theme.glass)
+                            .fill(Color(NSColor.windowBackgroundColor).opacity(0.8))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 5)
-                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
                     )
             }
             .buttonStyle(.plain)
@@ -1191,7 +1171,6 @@ struct LogsPipelineView: View {
         color: Color,
         group: PipelineGroup
     ) -> some View {
-        let theme = ThemeManager.shared.current
         let isExpanded = expandedStage == stage
 
         return VStack(alignment: .leading, spacing: 0) {
@@ -1216,12 +1195,12 @@ struct LogsPipelineView: View {
                 .padding(.vertical, 7)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(isExpanded ? color.opacity(0.04) : theme.glass.opacity(0.3))
+                        .fill(isExpanded ? color.opacity(0.04) : Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.3))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(
-                            isExpanded ? color.opacity(0.25) : theme.glassBorder,
+                            isExpanded ? color.opacity(0.25) : Color(NSColor.separatorColor),
                             lineWidth: 0.5
                         )
                 )
@@ -1256,23 +1235,22 @@ struct LogsPipelineView: View {
     // MARK: - Expanded Transcript
 
     private func expandedTranscript(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(group.rawChunks) { chunk in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 4) {
                         Text(chunk.id)
                             .font(.system(size: 7, design: .monospaced))
-                            .foregroundColor(theme.textTertiary)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         if !chunk.duration.isEmpty {
                             Text(chunk.duration)
                                 .font(.system(size: 7, design: .monospaced))
-                                .foregroundColor(theme.textTertiary)
+                                .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         }
                     }
                     Text(chunk.text)
                         .font(.system(size: 9))
-                        .foregroundColor(theme.textPrimary)
+                        .foregroundColor(.primary)
                         .textSelection(.enabled)
                 }
             }
@@ -1282,8 +1260,7 @@ struct LogsPipelineView: View {
     // MARK: - Expanded Cleaning
 
     private func expandedCleaning(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             if !group.cleaningTags.isEmpty {
                 HStack(spacing: 3) {
                     ForEach(group.cleaningTags, id: \.self) { tag in
@@ -1294,12 +1271,12 @@ struct LogsPipelineView: View {
             if let cleaned = group.cleanedText {
                 Text(cleaned)
                     .font(.system(size: 9))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(.primary)
                     .textSelection(.enabled)
             } else {
                 Text("No accepted extractions from this chunk")
                     .font(.system(size: 9))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     .italic()
             }
         }
@@ -1308,14 +1285,13 @@ struct LogsPipelineView: View {
     // MARK: - Expanded Analysis
 
     private func expandedAnalysis(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
         let isEditing = editingAnalysisID == group.analysisID && group.analysisID != nil
         return VStack(alignment: .leading, spacing: 6) {
             if isEditing {
                 // Editable mode
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
-                        Text("Project").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                        Text("Project").font(.system(size: 7, weight: .medium)).foregroundColor(Color(NSColor.tertiaryLabelColor))
                         Picker("", selection: $editProject) {
                             Text("none").tag("")
                             ForEach(appState.projects, id: \.id) { p in
@@ -1326,7 +1302,7 @@ struct LogsPipelineView: View {
                         .frame(width: 100)
                     }
                     HStack(spacing: 4) {
-                        Text("Priority").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                        Text("Priority").font(.system(size: 7, weight: .medium)).foregroundColor(Color(NSColor.tertiaryLabelColor))
                         Picker("", selection: $editPriority) {
                             Text("none").tag("")
                             Text("p0").tag("p0")
@@ -1338,23 +1314,23 @@ struct LogsPipelineView: View {
                         .frame(width: 70)
                     }
                     HStack(spacing: 4) {
-                        Text("Tags").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                        Text("Tags").font(.system(size: 7, weight: .medium)).foregroundColor(Color(NSColor.tertiaryLabelColor))
                         TextField("comma-separated", text: $editTags)
                             .textFieldStyle(.plain)
                             .font(.system(size: 9))
-                            .foregroundColor(theme.textPrimary)
+                            .foregroundColor(.primary)
                             .padding(3)
-                            .background(RoundedRectangle(cornerRadius: 3).fill(theme.glass.opacity(0.5)))
+                            .background(RoundedRectangle(cornerRadius: 3).fill(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.5)))
                     }
                     HStack(spacing: 4) {
-                        Text("Summary").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                        Text("Summary").font(.system(size: 7, weight: .medium)).foregroundColor(Color(NSColor.tertiaryLabelColor))
                     }
                     TextField("Summary", text: $editSummary)
                         .textFieldStyle(.plain)
                         .font(.system(size: 9))
-                        .foregroundColor(theme.textPrimary)
+                        .foregroundColor(.primary)
                         .padding(3)
-                        .background(RoundedRectangle(cornerRadius: 3).fill(theme.glass.opacity(0.5)))
+                        .background(RoundedRectangle(cornerRadius: 3).fill(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.5)))
                     HStack(spacing: 6) {
                         Button("Save") {
                             if let aid = group.analysisID {
@@ -1367,12 +1343,12 @@ struct LogsPipelineView: View {
                             editingAnalysisID = nil
                         }
                         .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(theme.accent)
+                        .foregroundColor(.accentColor)
                         .buttonStyle(.plain)
 
                         Button("Cancel") { editingAnalysisID = nil }
                         .font(.system(size: 8))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         .buttonStyle(.plain)
                     }
                 }
@@ -1399,7 +1375,7 @@ struct LogsPipelineView: View {
                         } label: {
                             Image(systemName: "pencil")
                                 .font(.system(size: 8))
-                                .foregroundColor(theme.textTertiary)
+                                .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         }
                         .buttonStyle(.plain)
                     }
@@ -1407,12 +1383,12 @@ struct LogsPipelineView: View {
                 if let text = group.analysisText {
                     Text(text)
                         .font(.system(size: 9))
-                        .foregroundColor(theme.textPrimary)
+                        .foregroundColor(.primary)
                         .textSelection(.enabled)
                 } else {
                     Text("No analysis generated")
                         .font(.system(size: 9))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         .italic()
                 }
             }
@@ -1422,12 +1398,11 @@ struct LogsPipelineView: View {
     // MARK: - Expanded Task
 
     private func expandedTask(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
             if group.tasks.isEmpty {
                 Text("No extraction items")
                     .font(.system(size: 9))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     .italic()
             } else {
                 ForEach(group.tasks) { task in
@@ -1438,7 +1413,6 @@ struct LogsPipelineView: View {
     }
 
     private func expandedTaskCard(task: PipelineTask) -> some View {
-        let theme = ThemeManager.shared.current
         let isPipelineTask = task.id.hasPrefix("T-")
         let isEditing = editingTaskID == task.id && isPipelineTask
 
@@ -1449,7 +1423,7 @@ struct LogsPipelineView: View {
                     HStack(spacing: 4) {
                         Text(task.id)
                             .font(.system(size: 7, design: .monospaced))
-                            .foregroundColor(theme.textTertiary)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         Picker("", selection: $editTaskProject) {
                             Text("none").tag("")
                             ForEach(appState.projects, id: \.id) { p in
@@ -1459,21 +1433,21 @@ struct LogsPipelineView: View {
                         .labelsHidden()
                         .frame(width: 100)
                     }
-                    Text("Title").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                    Text("Title").font(.system(size: 7, weight: .medium)).foregroundColor(Color(NSColor.tertiaryLabelColor))
                     TextField("Task title", text: $editTaskTitle)
                         .textFieldStyle(.plain)
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(theme.warning)
+                        .foregroundColor(.orange)
                         .padding(4)
-                        .background(RoundedRectangle(cornerRadius: 3).fill(theme.glass.opacity(0.5)))
-                    Text("Prompt").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                        .background(RoundedRectangle(cornerRadius: 3).fill(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.5)))
+                    Text("Prompt").font(.system(size: 7, weight: .medium)).foregroundColor(Color(NSColor.tertiaryLabelColor))
                     TextEditor(text: $editTaskPrompt)
                         .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(theme.textSecondary)
+                        .foregroundColor(.secondary)
                         .scrollContentBackground(.hidden)
                         .frame(minHeight: 60, maxHeight: 120)
                         .padding(4)
-                        .background(RoundedRectangle(cornerRadius: 5).fill(theme.glass.opacity(0.5)))
+                        .background(RoundedRectangle(cornerRadius: 5).fill(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.5)))
                     HStack(spacing: 6) {
                         Button("Save") {
                             let proj = editTaskProject.isEmpty ? nil : editTaskProject
@@ -1482,12 +1456,12 @@ struct LogsPipelineView: View {
                             editingTaskID = nil
                         }
                         .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(theme.accent)
+                        .foregroundColor(.accentColor)
                         .buttonStyle(.plain)
 
                         Button("Cancel") { editingTaskID = nil }
                         .font(.system(size: 8))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         .buttonStyle(.plain)
                     }
                 }
@@ -1497,7 +1471,7 @@ struct LogsPipelineView: View {
                 HStack(spacing: 4) {
                     Text(task.id)
                         .font(.system(size: 7, design: .monospaced))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     TagView(type: .project, label: task.project, small: true)
                     ModeBadge(mode: modeBadgeMode(task.mode))
                     if isPipelineTask {
@@ -1510,7 +1484,7 @@ struct LogsPipelineView: View {
                         } label: {
                             Image(systemName: "pencil")
                                 .font(.system(size: 8))
-                                .foregroundColor(theme.textTertiary)
+                                .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         }
                         .buttonStyle(.plain)
                     }
@@ -1519,19 +1493,19 @@ struct LogsPipelineView: View {
                 // Title
                 Text(task.title)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(theme.warning)
+                    .foregroundColor(.orange)
                     .textSelection(.enabled)
 
                 // Prompt
                 Text(task.prompt)
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(.secondary)
                     .textSelection(.enabled)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: 5)
-                            .fill(theme.glass.opacity(0.5))
+                            .fill(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.5))
                     )
 
                 // Skill & workflow info
@@ -1551,10 +1525,10 @@ struct LogsPipelineView: View {
                     HStack(spacing: 3) {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 8))
-                            .foregroundColor(theme.warning)
+                            .foregroundColor(.orange)
                         Text("Missing: \(missing)")
                             .font(.system(size: 8))
-                            .foregroundColor(theme.warning)
+                            .foregroundColor(.orange)
                     }
                 }
 
@@ -1562,13 +1536,13 @@ struct LogsPipelineView: View {
                 if let question = task.pendingQuestion {
                     Text(question)
                         .font(.system(size: 9))
-                        .foregroundColor(theme.secondary)
+                        .foregroundColor(.purple)
                         .italic()
                         .padding(6)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(
                             RoundedRectangle(cornerRadius: 5)
-                                .fill(theme.secondary.opacity(0.08))
+                                .fill(Color.purple.opacity(0.08))
                         )
                 }
             }
@@ -1586,12 +1560,12 @@ struct LogsPipelineView: View {
                                 Text("Accept")
                                     .font(.system(size: 8, weight: .semibold))
                             }
-                            .foregroundColor(theme.accent)
+                            .foregroundColor(.accentColor)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(
                                 RoundedRectangle(cornerRadius: 5)
-                                    .fill(theme.accent.opacity(0.18))
+                                    .fill(Color.accentColor.opacity(0.18))
                             )
                         }
                         .buttonStyle(.plain)
@@ -1605,12 +1579,12 @@ struct LogsPipelineView: View {
                                 Text("Dismiss")
                                     .font(.system(size: 8, weight: .semibold))
                             }
-                            .foregroundColor(theme.error)
+                            .foregroundColor(.red)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(
                                 RoundedRectangle(cornerRadius: 5)
-                                    .fill(theme.error.opacity(0.12))
+                                    .fill(Color.red.opacity(0.12))
                             )
                         }
                         .buttonStyle(.plain)
@@ -1625,12 +1599,12 @@ struct LogsPipelineView: View {
                             Text(item.isAccepted ? "Dismiss" : "Accept")
                                 .font(.system(size: 8, weight: .semibold))
                         }
-                        .foregroundColor(item.isAccepted ? theme.error : theme.accent)
+                        .foregroundColor(item.isAccepted ? .red : .accentColor)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(
                             RoundedRectangle(cornerRadius: 5)
-                                .fill(item.isAccepted ? theme.error.opacity(0.12) : theme.accent.opacity(0.18))
+                                .fill(item.isAccepted ? Color.red.opacity(0.12) : Color.accentColor.opacity(0.18))
                         )
                     }
                     .buttonStyle(.plain)
@@ -1641,30 +1615,29 @@ struct LogsPipelineView: View {
                     StatusDot(status: task.status.rawValue)
                     Text(task.result.finalStatus)
                         .font(.system(size: 8))
-                        .foregroundColor(statusColor(task.status.rawValue, theme: theme))
+                        .foregroundColor(statusColor(task.status.rawValue))
                 }
             }
         }
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(theme.warning.opacity(0.04))
+                .fill(Color.orange.opacity(0.04))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(theme.warning.opacity(0.10), lineWidth: 0.5)
+                .stroke(Color.orange.opacity(0.10), lineWidth: 0.5)
         )
     }
 
     // MARK: - Expanded Result
 
     private func expandedResult(group: PipelineGroup) -> some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             if group.tasks.isEmpty {
                 Text("No results")
                     .font(.system(size: 9))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     .italic()
             } else {
                 ForEach(group.tasks) { task in
@@ -1674,12 +1647,12 @@ struct LogsPipelineView: View {
                             StatusDot(status: task.status.rawValue)
                             Text(task.result.finalStatus)
                                 .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(statusColor(task.status.rawValue, theme: theme))
+                                .foregroundColor(statusColor(task.status.rawValue))
                             Spacer()
                             if !task.result.duration.isEmpty {
                                 Text(task.result.duration)
                                     .font(.system(size: 7))
-                                    .foregroundColor(theme.textTertiary)
+                                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                             }
                             // Chat button for active/completed sessions
                             if task.status == .ongoing || task.status == .completed {
@@ -1693,12 +1666,12 @@ struct LogsPipelineView: View {
                                         Text("Chat")
                                             .font(.system(size: 7, weight: .semibold))
                                     }
-                                    .foregroundColor(theme.accent)
+                                    .foregroundColor(.accentColor)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 3)
                                     .background(
                                         RoundedRectangle(cornerRadius: 4)
-                                            .fill(theme.accent.opacity(0.12))
+                                            .fill(Color.accentColor.opacity(0.12))
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -1714,25 +1687,23 @@ struct LogsPipelineView: View {
                             if steps.count > 8 {
                                 Text("\(steps.count - 8) earlier steps hidden")
                                     .font(.system(size: 7))
-                                    .foregroundColor(theme.textTertiary)
+                                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                                     .italic()
                             }
                             ForEach(Array(displaySteps.enumerated()), id: \.offset) { idx, step in
                                 HStack(alignment: .top, spacing: 6) {
                                     let stepNum = offset + idx + 1
                                     Circle()
-                                        .fill(stepColor(step: step, theme: theme))
+                                        .fill(stepColor(step: step))
                                         .frame(width: 10, height: 10)
                                         .overlay(
                                             Text("\(stepNum)")
                                                 .font(.system(size: 6, weight: .bold))
-                                                .foregroundColor(
-                                                    theme.isDark ? Color.black : Color.white
-                                                )
+                                                .foregroundColor(Color.white)
                                         )
                                     Text(step)
                                         .font(.system(size: 9))
-                                        .foregroundColor(stepTextColor(step: step, theme: theme))
+                                        .foregroundColor(stepTextColor(step: step))
                                         .textSelection(.enabled)
                                         .lineLimit(3)
                                 }
@@ -1745,16 +1716,16 @@ struct LogsPipelineView: View {
                                 TextField("Reply to Claude...", text: $chatInput)
                                     .textFieldStyle(.plain)
                                     .font(.system(size: 9))
-                                    .foregroundColor(theme.textPrimary)
+                                    .foregroundColor(.primary)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 4)
                                     .background(
                                         RoundedRectangle(cornerRadius: 4)
-                                            .fill(theme.glass.opacity(0.5))
+                                            .fill(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.5))
                                     )
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 4)
-                                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                                            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
                                     )
                                     .onSubmit {
                                         sendChatMessage(taskID: task.id)
@@ -1764,7 +1735,7 @@ struct LogsPipelineView: View {
                                 } label: {
                                     Image(systemName: "arrow.up.circle.fill")
                                         .font(.system(size: 14))
-                                        .foregroundColor(chatInput.isEmpty ? theme.textTertiary : theme.accent)
+                                        .foregroundColor(chatInput.isEmpty ? Color(NSColor.tertiaryLabelColor) : .accentColor)
                                 }
                                 .buttonStyle(.plain)
                                 .disabled(chatInput.isEmpty)
@@ -1774,7 +1745,7 @@ struct LogsPipelineView: View {
 
                         // Follow-on actions for completed tasks
                         if task.status == .completed {
-                            followOnActions(task: task, group: group, theme: theme)
+                            followOnActions(task: task, group: group)
                         }
                     }
                 }
@@ -1790,15 +1761,14 @@ struct LogsPipelineView: View {
     // MARK: - Follow-On Actions
 
     @ViewBuilder
-    private func followOnActions(task: PipelineTask, group: PipelineGroup, theme: ThemePalette) -> some View {
+    private func followOnActions(task: PipelineTask, group: PipelineGroup) -> some View {
         HStack(spacing: 6) {
             // "Update Build & Relaunch" — only for autoclawd project
             if isAutoClawdTask(task: task) {
                 actionButton(
                     icon: "hammer.fill",
                     label: "Rebuild & Relaunch",
-                    color: theme.accent,
-                    theme: theme
+                    color: .accentColor
                 ) {
                     triggerSelfRebuild(task: task)
                 }
@@ -1808,8 +1778,7 @@ struct LogsPipelineView: View {
             actionButton(
                 icon: "arrow.triangle.branch",
                 label: "Raise PR",
-                color: theme.secondary,
-                theme: theme
+                color: .purple
             ) {
                 triggerRaisePR(task: task)
             }
@@ -1818,8 +1787,7 @@ struct LogsPipelineView: View {
             actionButton(
                 icon: "checkmark.circle.fill",
                 label: "Commit",
-                color: theme.warning,
-                theme: theme
+                color: .orange
             ) {
                 triggerCommit(task: task)
             }
@@ -1828,7 +1796,7 @@ struct LogsPipelineView: View {
     }
 
     private func actionButton(
-        icon: String, label: String, color: Color, theme: ThemePalette,
+        icon: String, label: String, color: Color,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -1882,22 +1850,22 @@ struct LogsPipelineView: View {
 
     // MARK: - Step Color Helpers
 
-    private func stepColor(step: String, theme: ThemePalette) -> Color {
-        if step.hasPrefix("Using ") { return theme.warning.opacity(0.70) }
-        if step.hasPrefix("Running ") { return theme.warning.opacity(0.70) }
-        if step.hasPrefix("Error:") || step.contains("failed") { return theme.error.opacity(0.70) }
-        if step.hasPrefix("You:") { return theme.secondary.opacity(0.70) }
-        if step.contains("completed successfully") { return theme.accent }
-        if step.contains("thinking") || step.contains("responding") { return theme.tertiary.opacity(0.70) }
-        return theme.accent.opacity(0.60)
+    private func stepColor(step: String) -> Color {
+        if step.hasPrefix("Using ") { return Color.orange.opacity(0.70) }
+        if step.hasPrefix("Running ") { return Color.orange.opacity(0.70) }
+        if step.hasPrefix("Error:") || step.contains("failed") { return Color.red.opacity(0.70) }
+        if step.hasPrefix("You:") { return Color.purple.opacity(0.70) }
+        if step.contains("completed successfully") { return .accentColor }
+        if step.contains("thinking") || step.contains("responding") { return Color.cyan.opacity(0.70) }
+        return Color.accentColor.opacity(0.60)
     }
 
-    private func stepTextColor(step: String, theme: ThemePalette) -> Color {
-        if step.hasPrefix("Using ") || step.hasPrefix("Running ") { return theme.warning }
-        if step.hasPrefix("Error:") || step.contains("failed") { return theme.error }
-        if step.hasPrefix("You:") { return theme.secondary }
-        if step.contains("thinking") || step.contains("responding") { return theme.tertiary }
-        return theme.textSecondary
+    private func stepTextColor(step: String) -> Color {
+        if step.hasPrefix("Using ") || step.hasPrefix("Running ") { return .orange }
+        if step.hasPrefix("Error:") || step.contains("failed") { return .red }
+        if step.hasPrefix("You:") { return .purple }
+        if step.contains("thinking") || step.contains("responding") { return .cyan }
+        return .secondary
     }
 
     // MARK: - Chat Helpers
@@ -1912,7 +1880,6 @@ struct LogsPipelineView: View {
     // MARK: - Chat Modal
 
     private func chatModalView(taskID: String) -> some View {
-        let theme = ThemeManager.shared.current
         let steps = appState.pipelineStore.fetchSteps(taskID: taskID)
         let task = appState.pipelineTasks.first { $0.id == taskID }
         let isActive = appState.taskHasActiveSession(id: taskID)
@@ -1923,21 +1890,21 @@ struct LogsPipelineView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(task?.title ?? taskID)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(theme.textPrimary)
+                        .foregroundColor(.primary)
                     HStack(spacing: 6) {
                         StatusDot(status: task?.status.rawValue ?? "ongoing")
                         Text(task?.status.rawValue ?? "ongoing")
                             .font(.system(size: 9))
-                            .foregroundColor(theme.textTertiary)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         if isActive {
                             Text("Session active")
                                 .font(.system(size: 8, weight: .semibold))
-                                .foregroundColor(theme.accent)
+                                .foregroundColor(.accentColor)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
                                 .background(
                                     RoundedRectangle(cornerRadius: 3)
-                                        .fill(theme.accent.opacity(0.15))
+                                        .fill(Color.accentColor.opacity(0.15))
                                 )
                         }
                     }
@@ -1949,12 +1916,12 @@ struct LogsPipelineView: View {
                     } label: {
                         Text("Stop")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(theme.error)
+                            .foregroundColor(.red)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(
                                 RoundedRectangle(cornerRadius: 4)
-                                    .fill(theme.error.opacity(0.12))
+                                    .fill(Color.red.opacity(0.12))
                             )
                     }
                     .buttonStyle(.plain)
@@ -1962,22 +1929,22 @@ struct LogsPipelineView: View {
                 Button { showChatModal = false } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 14))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(theme.glass.opacity(0.5))
+            .background(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.5))
 
-            Divider().background(theme.glassBorder)
+            Divider().background(Color(NSColor.separatorColor))
 
             // Message list
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
                         ForEach(steps.sorted(by: { $0.stepIndex < $1.stepIndex })) { step in
-                            chatBubble(step: step, theme: theme)
+                            chatBubble(step: step)
                                 .id(step.id)
                         }
                     }
@@ -1992,33 +1959,33 @@ struct LogsPipelineView: View {
 
             // Input area
             if isActive {
-                Divider().background(theme.glassBorder)
+                Divider().background(Color(NSColor.separatorColor))
                 HStack(spacing: 8) {
                     TextField("Send a message to Claude...", text: $chatInput)
                         .textFieldStyle(.plain)
                         .font(.system(size: 11))
-                        .foregroundColor(theme.textPrimary)
+                        .foregroundColor(.primary)
                         .onSubmit { sendChatMessage(taskID: taskID) }
                     Button {
                         sendChatMessage(taskID: taskID)
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 18))
-                            .foregroundColor(chatInput.isEmpty ? theme.textTertiary : theme.accent)
+                            .foregroundColor(chatInput.isEmpty ? Color(NSColor.tertiaryLabelColor) : .accentColor)
                     }
                     .buttonStyle(.plain)
                     .disabled(chatInput.isEmpty)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(theme.glass.opacity(0.3))
+                .background(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.3))
             }
         }
         .frame(minWidth: 500, minHeight: 400)
-        .background(theme.surface)
+        .background(Color(NSColor.controlBackgroundColor))
     }
 
-    private func chatBubble(step: TaskExecutionStep, theme: ThemePalette) -> some View {
+    private func chatBubble(step: TaskExecutionStep) -> some View {
         let isUser = step.description.hasPrefix("You:")
         let isTool = step.description.hasPrefix("Using ")
         let isToolDone = step.description.contains(" done")
@@ -2026,18 +1993,18 @@ struct LogsPipelineView: View {
         let isResult = step.description.contains("completed successfully")
 
         let bgColor: Color = {
-            if isUser { return theme.secondary.opacity(0.12) }
-            if isTool { return theme.warning.opacity(0.08) }
-            if isError { return theme.error.opacity(0.08) }
-            if isResult { return theme.accent.opacity(0.12) }
-            return theme.glass.opacity(0.4)
+            if isUser { return Color.purple.opacity(0.12) }
+            if isTool { return Color.orange.opacity(0.08) }
+            if isError { return Color.red.opacity(0.08) }
+            if isResult { return Color.accentColor.opacity(0.12) }
+            return Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.4)
         }()
 
         let textColor: Color = {
-            if isUser { return theme.secondary }
-            if isTool { return theme.warning }
-            if isError { return theme.error }
-            return theme.textPrimary
+            if isUser { return .purple }
+            if isTool { return .orange }
+            if isError { return .red }
+            return .primary
         }()
 
         return HStack {
@@ -2047,7 +2014,7 @@ struct LogsPipelineView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "wrench.fill")
                             .font(.system(size: 7))
-                            .foregroundColor(theme.warning.opacity(0.6))
+                            .foregroundColor(Color.orange.opacity(0.6))
                         Text(step.description)
                             .font(.system(size: 9, design: .monospaced))
                             .foregroundColor(textColor)
@@ -2070,4 +2037,3 @@ struct LogsPipelineView: View {
         }
     }
 }
-

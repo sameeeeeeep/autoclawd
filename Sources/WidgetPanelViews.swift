@@ -2,53 +2,17 @@ import SwiftUI
 
 // MARK: - Shared Widget Panel Background
 
-/// Reusable glassmorphic background for all widget panels below the pill.
-/// Matches the pill's visual language: glass material + color gradient + border.
 struct WidgetGlassBackground: View {
     var cornerRadius: CGFloat = 16
     var isActive: Bool = true
 
-    private var theme: ThemePalette { ThemeManager.shared.current }
-
     var body: some View {
         ZStack {
-            // Glass material
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(.ultraThinMaterial)
 
-            // Color gradient tint
-            LinearGradient(
-                colors: [
-                    theme.glow1.opacity(isActive ? 0.06 : 0.02),
-                    Color.clear,
-                    theme.glow2.opacity(isActive ? 0.04 : 0.01)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            // Top specular highlight
-            LinearGradient(
-                colors: [Color.white.opacity(0.10), Color.clear],
-                startPoint: .top,
-                endPoint: .center
-            )
-
-            // Border
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.22),
-                            Color.white.opacity(0.08),
-                            theme.accent.opacity(isActive ? 0.14 : 0.04),
-                            Color.white.opacity(0.14)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
+                .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
@@ -56,14 +20,10 @@ struct WidgetGlassBackground: View {
 
 // MARK: - Transcription Widget
 
-/// Shows live transcription text as it gets recognised, plus an "Apply" button
-/// to paste into the active text field.
 struct TranscriptionWidgetView: View {
     let latestText: String
     let isListening: Bool
     let onApply: () -> Void
-
-    private var theme: ThemePalette { ThemeManager.shared.current }
 
     private let widgetWidth: CGFloat = 220
     private let widgetHeight: CGFloat = 140
@@ -73,40 +33,34 @@ struct TranscriptionWidgetView: View {
             WidgetGlassBackground(isActive: isListening)
 
             VStack(alignment: .leading, spacing: 8) {
-                // Header
                 HStack(spacing: 5) {
                     Image(systemName: "text.cursor")
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(theme.accent)
+                        .foregroundColor(.accentColor)
 
                     Text("TRANSCRIBING")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundColor(theme.accent.opacity(0.8))
+                        .foregroundColor(.accentColor.opacity(0.8))
 
                     Spacer()
 
-                    // Live indicator dot
                     if isListening {
                         Circle()
-                            .fill(theme.accent)
+                            .fill(Color.green)
                             .frame(width: 5, height: 5)
                             .modifier(PulsingDot())
                     }
                 }
 
-                // Transcript text area
                 ScrollView(.vertical, showsIndicators: false) {
                     Text(latestText.isEmpty ? "Listening..." : latestText)
                         .font(.system(size: 11, weight: .regular, design: .monospaced))
-                        .foregroundColor(latestText.isEmpty
-                            ? Color.white.opacity(0.25)
-                            : Color.white.opacity(0.82))
+                        .foregroundColor(latestText.isEmpty ? .secondary : .primary)
                         .lineSpacing(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: .infinity)
 
-                // Apply button
                 if !latestText.isEmpty {
                     Button(action: onApply) {
                         HStack(spacing: 4) {
@@ -115,13 +69,10 @@ struct TranscriptionWidgetView: View {
                             Text("Apply to Field")
                                 .font(.system(size: 10, weight: .semibold))
                         }
-                        .foregroundColor(theme.isDark ? .black : .white)
+                        .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
-                        .background(
-                            Capsule()
-                                .fill(theme.accent)
-                        )
+                        .background(Color.accentColor, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -136,12 +87,9 @@ struct TranscriptionWidgetView: View {
 
 // MARK: - QA Widget
 
-/// Shows the latest question and answer from AI Search mode as they get recognised.
 struct QAWidgetView: View {
     let latestItem: QAItem?
     let isListening: Bool
-
-    private var theme: ThemePalette { ThemeManager.shared.current }
 
     private let widgetWidth: CGFloat = 220
     private let widgetHeight: CGFloat = 150
@@ -151,67 +99,60 @@ struct QAWidgetView: View {
             WidgetGlassBackground(isActive: isListening)
 
             VStack(alignment: .leading, spacing: 8) {
-                // Header
                 HStack(spacing: 5) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(theme.accent)
+                        .foregroundColor(.accentColor)
 
                     Text("AI SEARCH")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundColor(theme.accent.opacity(0.8))
+                        .foregroundColor(.accentColor.opacity(0.8))
 
                     Spacer()
 
                     if isListening {
                         Circle()
-                            .fill(theme.accent)
+                            .fill(Color.green)
                             .frame(width: 5, height: 5)
                             .modifier(PulsingDot())
                     }
                 }
 
                 if let item = latestItem {
-                    // Question
                     HStack(alignment: .top, spacing: 4) {
                         Text("Q")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundColor(theme.secondary.opacity(0.9))
+                            .foregroundColor(.purple)
                         Text(item.question)
                             .font(.system(size: 10, weight: .regular, design: .monospaced))
-                            .foregroundColor(Color.white.opacity(0.55))
+                            .foregroundColor(.secondary)
                             .lineLimit(2)
                     }
 
-                    // Divider
-                    Rectangle()
-                        .fill(Color.white.opacity(0.08))
-                        .frame(height: 1)
+                    Divider()
 
-                    // Answer
                     ScrollView(.vertical, showsIndicators: false) {
                         HStack(alignment: .top, spacing: 4) {
                             Text("A")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundColor(theme.accent.opacity(0.9))
+                                .foregroundColor(.accentColor)
                             Text(item.answer)
                                 .font(.system(size: 10, weight: .regular, design: .monospaced))
-                                .foregroundColor(Color.white.opacity(0.82))
+                                .foregroundColor(.primary)
                                 .lineSpacing(2)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxHeight: .infinity)
                 } else {
-                    // Empty state
                     Spacer()
                     VStack(spacing: 4) {
                         Image(systemName: "mic.circle")
                             .font(.system(size: 20, weight: .thin))
-                            .foregroundColor(Color.white.opacity(0.15))
+                            .foregroundColor(.secondary.opacity(0.3))
                         Text("Ask a question...")
                             .font(.system(size: 10, weight: .regular, design: .monospaced))
-                            .foregroundColor(Color.white.opacity(0.20))
+                            .foregroundColor(.secondary.opacity(0.4))
                     }
                     .frame(maxWidth: .infinity)
                     Spacer()
@@ -225,7 +166,6 @@ struct QAWidgetView: View {
 
 // MARK: - Pulsing Dot Modifier
 
-/// Subtle pulsing animation for live indicator dots.
 struct PulsingDot: ViewModifier {
     @State private var isPulsing = false
 

@@ -12,7 +12,7 @@ struct WorldModelGraphView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider().background(AppTheme.border)
+            Divider().background(Color(NSColor.separatorColor))
             if showRawEditor {
                 rawEditor
             } else {
@@ -28,7 +28,7 @@ struct WorldModelGraphView: View {
         HStack {
             Text("WORLD MODEL")
                 .font(AppTheme.heading)
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
             Spacer()
             Button(showRawEditor ? "SHOW GRAPH" : "EDIT RAW") {
                 if showRawEditor {
@@ -81,7 +81,7 @@ struct WorldModelGraphView: View {
 
             if let nodeID = selectedNodeID,
                let node = model.nodes.first(where: { $0.id == nodeID }) {
-                Divider().background(AppTheme.border)
+                Divider().background(Color(NSColor.separatorColor))
                 WorldModelDetailPanel(node: node)
                     .frame(height: 60)
             }
@@ -133,7 +133,7 @@ struct WorldModelCanvasView: View {
                 path.addLine(to: toNode.position)
 
                 let color: Color = edge.kind == .crossReference
-                    ? AppTheme.green
+                    ? Color.green
                     : Color.white.opacity(0.20)
                 ctx.stroke(path, with: .color(color), lineWidth: 1)
             }
@@ -141,7 +141,7 @@ struct WorldModelCanvasView: View {
             // Draw nodes
             for node in model.nodes {
                 let isSelected = node.id == selectedNodeID
-                let nodeColor: Color = isSelected ? AppTheme.green : Color.white.opacity(0.70)
+                let nodeColor: Color = isSelected ? Color.green : Color.white.opacity(0.70)
                 let borderWidth: CGFloat = isSelected ? 2 : 1
 
                 // Rectangle fill (black) + border
@@ -184,15 +184,15 @@ struct WorldModelDetailPanel: View {
             // Kind badge
             Text(node.kind == .section ? "[SECTION]" : "[FACT]")
                 .font(AppTheme.body)
-                .foregroundColor(AppTheme.green)
+                .foregroundColor(Color.green)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
-                .overlay(Rectangle().stroke(AppTheme.green, lineWidth: 1))
+                .overlay(Rectangle().stroke(Color.green, lineWidth: 1))
 
             // Full label
             Text(node.label)
                 .font(AppTheme.body)
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer()

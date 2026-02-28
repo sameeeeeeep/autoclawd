@@ -2,7 +2,6 @@ import SwiftUI
 
 // MARK: - SkillsView
 
-/// View for managing AutoClawd skills (editable JSON files in ~/.autoclawd/skills/).
 struct SkillsView: View {
     @ObservedObject var appState: AppState
 
@@ -15,132 +14,85 @@ struct SkillsView: View {
     }
 
     var body: some View {
-        let theme = ThemeManager.shared.current
-        HSplitView {
+        NavigationSplitView {
             skillList
-                .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 280)
+        } detail: {
             skillEditor
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(theme.isDark ? Color.black.opacity(0.05) : Color.black.opacity(0.01))
         .onAppear { appState.refreshSkills() }
     }
 
     // MARK: - Skill List
 
     private var skillList: some View {
-        let theme = ThemeManager.shared.current
         let grouped = Dictionary(grouping: appState.skills, by: \.category)
         let sortedCategories = grouped.keys.sorted { $0.rawValue < $1.rawValue }
 
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("SKILLS")
-                    .font(.system(size: 9, weight: .semibold))
-                    .tracking(1.5)
-                    .foregroundColor(theme.textTertiary)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
-
-                ForEach(sortedCategories, id: \.self) { category in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(category.rawValue.uppercased())
-                            .font(.system(size: 7, weight: .semibold))
-                            .tracking(1)
-                            .foregroundColor(theme.textTertiary)
-                            .padding(.horizontal, 12)
-                            .padding(.top, 6)
-
-                        ForEach(grouped[category] ?? [], id: \.id) { skill in
-                            skillRow(skill: skill)
+        return List(selection: $selectedSkillID) {
+            ForEach(sortedCategories, id: \.self) { category in
+                Section(category.rawValue.capitalized) {
+                    ForEach(grouped[category] ?? [], id: \.id) { skill in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(skill.name)
+                                    .font(.body)
+                                if skill.isBuiltin {
+                                    Text("Built-in")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            Spacer()
+                            if let wf = skill.workflowID {
+                                Text(wf)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
                         }
+                        .tag(skill.id)
                     }
                 }
             }
-            .padding(.bottom, 10)
         }
-        .background(theme.isDark ? Color.black.opacity(0.08) : Color.black.opacity(0.02))
-    }
-
-    private func skillRow(skill: Skill) -> some View {
-        let theme = ThemeManager.shared.current
-        let isSelected = selectedSkillID == skill.id
-
-        return Button {
-            selectSkill(skill)
-        } label: {
-            HStack(spacing: 6) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(skill.name)
-                        .font(.system(size: 10, weight: isSelected ? .semibold : .regular))
-                        .foregroundColor(isSelected ? theme.accent : theme.textPrimary)
-                        .lineLimit(1)
-                    if skill.isBuiltin {
-                        Text("Built-in")
-                            .font(.system(size: 7))
-                            .foregroundColor(theme.textTertiary)
-                    }
-                }
-                Spacer()
-                if let wf = skill.workflowID {
-                    Text(wf)
-                        .font(.system(size: 7, design: .monospaced))
-                        .foregroundColor(theme.textTertiary)
-                        .lineLimit(1)
-                }
+        .listStyle(.sidebar)
+        .onChange(of: selectedSkillID) { newValue in
+            if let id = newValue, let skill = appState.skills.first(where: { $0.id == id }) {
+                selectSkill(skill)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(isSelected ? theme.accent.opacity(0.12) : Color.clear)
-            )
         }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Skill Editor
 
     private var skillEditor: some View {
-        let theme = ThemeManager.shared.current
-
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             if let skill = selectedSkill {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        // Header
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(skill.name)
-                                    .font(.system(size: 14, weight: .bold))
-                                    .foregroundColor(theme.textPrimary)
+                                    .font(.title3.bold())
                                 Text(skill.id)
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundColor(theme.textTertiary)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .fontDesign(.monospaced)
                             }
                             Spacer()
                             if hasUnsavedChanges {
                                 Button("Save") {
                                     savePrompt(skill: skill)
                                 }
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(theme.accent)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 5)
-                                        .fill(theme.accent.opacity(0.18))
-                                )
-                                .buttonStyle(.plain)
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
                             }
                         }
 
-                        // Description
                         Text(skill.description)
-                            .font(.system(size: 10))
-                            .foregroundColor(theme.textSecondary)
+                            .font(.callout)
+                            .foregroundColor(.secondary)
 
-                        // Metadata
                         HStack(spacing: 8) {
                             TagView(type: .action, label: skill.category.rawValue, small: true)
                             if let wf = skill.workflowID {
@@ -151,60 +103,47 @@ struct SkillsView: View {
                             }
                         }
 
-                        // Prompt template editor
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("PROMPT TEMPLATE")
-                                .font(.system(size: 8, weight: .semibold))
-                                .tracking(1)
-                                .foregroundColor(theme.textTertiary)
+                            Text("Prompt Template")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
 
                             TextEditor(text: $editedPrompt)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(theme.textPrimary)
+                                .font(.system(size: 11, design: .monospaced))
                                 .scrollContentBackground(.hidden)
                                 .frame(minHeight: 200)
                                 .padding(8)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(theme.glass.opacity(0.5))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(theme.glassBorder, lineWidth: 0.5)
-                                )
+                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
                                 .onChange(of: editedPrompt) { newValue in
                                     hasUnsavedChanges = newValue != skill.promptTemplate
                                 }
 
                             Text("Placeholders: {{transcript}}, {{project_list}}, {{skill_list}}, {{workflow_list}}, etc.")
-                                .font(.system(size: 8))
-                                .foregroundColor(theme.textTertiary)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
                         }
 
-                        // File location
-                        HStack(spacing: 4) {
-                            Image(systemName: "doc.text")
-                                .font(.system(size: 8))
-                                .foregroundColor(theme.textTertiary)
-                            Text("~/.autoclawd/skills/\(skill.id).json")
-                                .font(.system(size: 8, design: .monospaced))
-                                .foregroundColor(theme.textTertiary)
-                                .textSelection(.enabled)
-                        }
+                        Label("~/.autoclawd/skills/\(skill.id).json", systemImage: "doc.text")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .fontDesign(.monospaced)
+                            .textSelection(.enabled)
                     }
                     .padding(16)
                 }
             } else {
-                Spacer()
-                VStack(spacing: 6) {
-                    Text("Select a skill to view and edit")
-                        .font(.system(size: 11))
-                        .foregroundColor(theme.textTertiary)
+                VStack(spacing: 8) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.system(size: 28))
+                        .foregroundColor(.secondary)
+                    Text("Select a Skill")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
                     Text("Skills are stored as JSON files in ~/.autoclawd/skills/")
-                        .font(.system(size: 9))
-                        .foregroundColor(theme.textTertiary)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                Spacer()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
