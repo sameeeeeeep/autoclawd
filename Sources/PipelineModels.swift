@@ -59,6 +59,7 @@ struct PipelineTaskRecord: Identifiable {
     let workflowSteps: [String]
     let missingConnection: String?
     let pendingQuestion: String?
+    let attachmentPaths: [String]     // file paths to context captures (screenshots, images)
     let createdAt: Date
     var startedAt: Date?
     var completedAt: Date?

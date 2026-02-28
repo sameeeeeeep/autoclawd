@@ -512,9 +512,9 @@ final class AppState: ObservableObject {
         refreshPipeline()
     }
 
-    /// Send a follow-up message to an active Claude session for a task.
-    func sendMessageToTask(id: String, message: String) {
-        taskExecutionService.sendMessage(taskID: id, message: message)
+    /// Send a follow-up message to an active Claude session for a task (with optional attachments).
+    func sendMessageToTask(id: String, message: String, attachments: [Attachment] = []) {
+        taskExecutionService.sendMessage(taskID: id, message: message, attachments: attachments)
     }
 
     /// Check if a task has an active Claude session.

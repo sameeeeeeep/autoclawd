@@ -42,6 +42,8 @@ struct LogsPipelineView: View {
     @State private var chatInput: String = ""
     @State private var showChatModal: Bool = false
     @State private var chatTaskID: String? = nil
+    @State private var pendingAttachments: [Attachment] = []
+    @State private var showFilePicker: Bool = false
 
     // Inline editing state
     @State private var editingAnalysisID: String? = nil
@@ -1712,33 +1714,42 @@ struct LogsPipelineView: View {
 
                         // Inline chat input for active sessions
                         if task.status == .ongoing && appState.taskHasActiveSession(id: task.id) {
-                            HStack(spacing: 4) {
-                                TextField("Reply to Claude...", text: $chatInput)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.primary)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 4)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .fill(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.5))
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
-                                    )
-                                    .onSubmit {
-                                        sendChatMessage(taskID: task.id)
-                                    }
-                                Button {
-                                    sendChatMessage(taskID: task.id)
-                                } label: {
-                                    Image(systemName: "arrow.up.circle.fill")
-                                        .font(.system(size: 14))
-                                        .foregroundColor(chatInput.isEmpty ? Color(NSColor.tertiaryLabelColor) : .accentColor)
+                            VStack(spacing: 3) {
+                                // Pending attachment chips
+                                if !pendingAttachments.isEmpty {
+                                    attachmentChips(compact: true)
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(chatInput.isEmpty)
+                                HStack(spacing: 4) {
+                                    // Attachment buttons
+                                    attachmentMenu(compact: true)
+
+                                    TextField("Reply to Claude...", text: $chatInput)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 9))
+                                        .foregroundColor(.primary)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 4)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 4)
+                                                .fill(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.5))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 4)
+                                                .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+                                        )
+                                        .onSubmit {
+                                            sendChatMessage(taskID: task.id)
+                                        }
+                                    Button {
+                                        sendChatMessage(taskID: task.id)
+                                    } label: {
+                                        Image(systemName: "arrow.up.circle.fill")
+                                            .font(.system(size: 14))
+                                            .foregroundColor(chatInput.isEmpty && pendingAttachments.isEmpty ? Color(NSColor.tertiaryLabelColor) : .accentColor)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(chatInput.isEmpty && pendingAttachments.isEmpty)
+                                }
                             }
                             .padding(.top, 4)
                         }
@@ -1872,9 +1883,10 @@ struct LogsPipelineView: View {
 
     private func sendChatMessage(taskID: String) {
         let msg = chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !msg.isEmpty else { return }
-        appState.sendMessageToTask(id: taskID, message: msg)
+        guard !msg.isEmpty || !pendingAttachments.isEmpty else { return }
+        appState.sendMessageToTask(id: taskID, message: msg, attachments: pendingAttachments)
         chatInput = ""
+        pendingAttachments = []
     }
 
     // MARK: - Chat Modal
@@ -1960,24 +1972,35 @@ struct LogsPipelineView: View {
             // Input area
             if isActive {
                 Divider().background(Color(NSColor.separatorColor))
-                HStack(spacing: 8) {
-                    TextField("Send a message to Claude...", text: $chatInput)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11))
-                        .foregroundColor(.primary)
-                        .onSubmit { sendChatMessage(taskID: taskID) }
-                    Button {
-                        sendChatMessage(taskID: taskID)
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(chatInput.isEmpty ? Color(NSColor.tertiaryLabelColor) : .accentColor)
+                VStack(spacing: 6) {
+                    // Pending attachment chips
+                    if !pendingAttachments.isEmpty {
+                        attachmentChips(compact: false)
+                            .padding(.horizontal, 14)
+                            .padding(.top, 6)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(chatInput.isEmpty)
+                    HStack(spacing: 8) {
+                        // Attachment buttons
+                        attachmentMenu(compact: false)
+
+                        TextField("Send a message to Claude...", text: $chatInput)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundColor(.primary)
+                            .onSubmit { sendChatMessage(taskID: taskID) }
+                        Button {
+                            sendChatMessage(taskID: taskID)
+                        } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 18))
+                                .foregroundColor(chatInput.isEmpty && pendingAttachments.isEmpty ? Color(NSColor.tertiaryLabelColor) : .accentColor)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(chatInput.isEmpty && pendingAttachments.isEmpty)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
                 .background(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.3))
             }
         }
@@ -2024,16 +2047,169 @@ struct LogsPipelineView: View {
                     .padding(.vertical, 4)
                     .background(RoundedRectangle(cornerRadius: 6).fill(bgColor))
                 } else {
-                    Text(isUser ? String(step.description.dropFirst(4)).trimmingCharacters(in: .whitespaces) : step.description)
-                        .font(.system(size: 10))
-                        .foregroundColor(textColor)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(bgColor))
+                    let displayText = isUser ? String(step.description.dropFirst(4)).trimmingCharacters(in: .whitespaces) : step.description
+                    let hasAttachment = isUser && displayText.contains("[") && displayText.hasSuffix("]")
+                    VStack(alignment: isUser ? .trailing : .leading, spacing: 2) {
+                        // Show attachment indicator if present
+                        if hasAttachment, let bracketRange = displayText.range(of: " [", options: .backwards) {
+                            let textPart = String(displayText[displayText.startIndex..<bracketRange.lowerBound])
+                            let attachPart = String(displayText[bracketRange.upperBound..<displayText.index(before: displayText.endIndex)])
+                            if !textPart.isEmpty {
+                                Text(textPart)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(textColor)
+                                    .textSelection(.enabled)
+                            }
+                            HStack(spacing: 3) {
+                                Image(systemName: "paperclip")
+                                    .font(.system(size: 7))
+                                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                                Text(attachPart)
+                                    .font(.system(size: 8))
+                                    .foregroundColor(Color(NSColor.secondaryLabelColor))
+                                    .lineLimit(1)
+                            }
+                        } else {
+                            Text(displayText)
+                                .font(.system(size: 10))
+                                .foregroundColor(textColor)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(bgColor))
                 }
             }
             if !isUser { Spacer(minLength: 40) }
+        }
+    }
+
+    // MARK: - Attachment UI Components
+
+    /// Menu button with screenshot, file, and paste options.
+    @ViewBuilder
+    private func attachmentMenu(compact: Bool) -> some View {
+        let iconSize: CGFloat = compact ? 12 : 14
+
+        Menu {
+            Button {
+                captureScreenshot()
+            } label: {
+                Label("Take Screenshot", systemImage: "camera.viewfinder")
+            }
+
+            Button {
+                showFilePicker = true
+            } label: {
+                Label("Attach File...", systemImage: "doc.badge.plus")
+            }
+
+            if NSPasteboard.general.data(forType: .png) != nil ||
+               NSPasteboard.general.data(forType: .tiff) != nil {
+                Button {
+                    pasteImage()
+                } label: {
+                    Label("Paste Image", systemImage: "doc.on.clipboard")
+                }
+            }
+        } label: {
+            Image(systemName: "plus.circle")
+                .font(.system(size: iconSize))
+                .foregroundColor(Color(NSColor.secondaryLabelColor))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: iconSize + 4, height: iconSize + 4)
+        .help("Attach image, screenshot, or file")
+        .fileImporter(
+            isPresented: $showFilePicker,
+            allowedContentTypes: Attachment.supportedUTTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            handleFileImport(result)
+        }
+    }
+
+    /// Display pending attachment chips with remove buttons.
+    @ViewBuilder
+    private func attachmentChips(compact: Bool) -> some View {
+        let chipFont: CGFloat = compact ? 8 : 9
+        let thumbSize: CGFloat = compact ? 20 : 28
+
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(pendingAttachments) { attachment in
+                    HStack(spacing: 3) {
+                        // Thumbnail or icon
+                        if let thumb = attachment.thumbnail {
+                            Image(nsImage: thumb)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: thumbSize, height: thumbSize)
+                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                        } else {
+                            Image(systemName: attachment.iconName)
+                                .font(.system(size: chipFont + 1))
+                                .foregroundColor(.accentColor)
+                        }
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(attachment.fileName)
+                                .font(.system(size: chipFont))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text(attachment.sizeLabel)
+                                .font(.system(size: chipFont - 1))
+                                .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                        }
+                        Button {
+                            pendingAttachments.removeAll { $0.id == attachment.id }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: chipFont + 2))
+                                .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Color.accentColor.opacity(0.08)))
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.accentColor.opacity(0.2), lineWidth: 0.5))
+                }
+            }
+        }
+    }
+
+    // MARK: - Attachment Actions
+
+    private func captureScreenshot() {
+        guard let image = ScreenshotService.captureAndResize(maxDimension: 1920) else {
+            Log.warn(.system, "Failed to capture screenshot")
+            return
+        }
+        if let attachment = Attachment.fromScreenshot(image) {
+            pendingAttachments.append(attachment)
+        }
+    }
+
+    private func pasteImage() {
+        if let attachment = Attachment.fromPasteboardImage() {
+            pendingAttachments.append(attachment)
+        }
+    }
+
+    private func handleFileImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            for url in urls {
+                guard url.startAccessingSecurityScopedResource() else { continue }
+                defer { url.stopAccessingSecurityScopedResource() }
+                if let attachment = Attachment.fromFile(url: url) {
+                    pendingAttachments.append(attachment)
+                }
+            }
+        case .failure(let error):
+            Log.warn(.system, "File import failed: \(error.localizedDescription)")
         }
     }
 }

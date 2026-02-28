@@ -61,8 +61,16 @@ final class PipelineOrchestrator: @unchecked Sendable {
 
         await notifyUpdate()
 
-        // Stage 3: Create tasks
-        let tasks = await taskCreationService.createTasks(from: analysis)
+        // Grab any context captures (screenshots, clipboard images) from this session
+        let captures = ContextCaptureStore.shared.recentUnattached(sessionID: sessionID)
+        let capturePaths = captures.map(\.filePath).filter { !$0.isEmpty }
+        if !captures.isEmpty {
+            Log.info(.pipeline, "Pipeline: found \(captures.count) context capture(s) for session")
+            ContextCaptureStore.shared.markAttached(ids: captures.map(\.id))
+        }
+
+        // Stage 3: Create tasks (with attached context captures)
+        let tasks = await taskCreationService.createTasks(from: analysis, attachmentPaths: capturePaths)
 
         await notifyUpdate()
 
@@ -71,7 +79,8 @@ final class PipelineOrchestrator: @unchecked Sendable {
             return
         }
 
-        Log.info(.pipeline, "Pipeline: \(tasks.count) task(s) created")
+        Log.info(.pipeline, "Pipeline: \(tasks.count) task(s) created" +
+                 (capturePaths.isEmpty ? "" : " with \(capturePaths.count) attachment(s)"))
 
         // Stage 4: Execute auto tasks
         for task in tasks where task.mode == .auto {

@@ -23,7 +23,7 @@ final class TaskCreationService: @unchecked Sendable {
 
     // MARK: - Public API
 
-    func createTasks(from analysis: TranscriptAnalysis) async -> [PipelineTaskRecord] {
+    func createTasks(from analysis: TranscriptAnalysis, attachmentPaths: [String] = []) async -> [PipelineTaskRecord] {
         guard !analysis.taskDescriptions.isEmpty else {
             Log.info(.taskCreate, "Stage 3: no task descriptions from analysis, skipping")
             return []
@@ -92,6 +92,7 @@ final class TaskCreationService: @unchecked Sendable {
                 workflowSteps: workflow?.steps ?? [],
                 missingConnection: missingConnection,
                 pendingQuestion: pendingQuestion,
+                attachmentPaths: attachmentPaths,
                 createdAt: Date(),
                 startedAt: nil,
                 completedAt: nil

@@ -102,12 +102,15 @@ final class ChunkManager: ObservableObject {
         // Begin a new session row
         let ssid = locationService.currentSSID
         currentSessionID = sessionStore.beginSession(wifiSSID: ssid)
+        // Tell ClipboardMonitor about our session so captures get tagged
+        ClipboardMonitor.shared.currentSessionID = currentSessionID
     }
 
     func stopListening() {
         chunkTimer?.cancel()
         chunkTimer = nil
         _ = audioRecorder.stopRecording()
+        ClipboardMonitor.shared.currentSessionID = nil
         // End the session
         if let sid = currentSessionID {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
