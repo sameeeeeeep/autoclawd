@@ -17,16 +17,14 @@ struct ToastView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
 
-            Spacer(minLength: 4)
-
             // Component tag
             Text("[\(entry.component.rawValue)]")
                 .font(AppTheme.caption)
                 .foregroundColor(AppTheme.textSecondary)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 0)
-        .frame(height: 36)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(height: 40)
         .background(glassBackground)
         .overlay(
             Rectangle()
