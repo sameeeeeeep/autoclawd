@@ -50,6 +50,7 @@ final class ChunkManager: ObservableObject {
     private var chunkTimer: Task<Void, Never>?
     private var transcriptionService: (any Transcribable)?
     private var extractionService: ExtractionService?
+    private var pipelineOrchestrator: PipelineOrchestrator?
     private var transcriptStore: TranscriptStore?
     private var chunkStartTime: Date?
 
@@ -68,17 +69,19 @@ final class ChunkManager: ObservableObject {
     func configure(
         transcriptionService: any Transcribable,
         extractionService: ExtractionService,
+        pipelineOrchestrator: PipelineOrchestrator,
         transcriptStore: TranscriptStore,
         pasteService: TranscriptionPasteService,
         qaService: QAService,
         qaStore: QAStore
     ) {
-        self.transcriptionService = transcriptionService
-        self.extractionService    = extractionService
-        self.transcriptStore      = transcriptStore
-        self.pasteService         = pasteService
-        self.qaService            = qaService
-        self.qaStore              = qaStore
+        self.transcriptionService  = transcriptionService
+        self.extractionService     = extractionService
+        self.pipelineOrchestrator  = pipelineOrchestrator
+        self.transcriptStore       = transcriptStore
+        self.pasteService          = pasteService
+        self.qaService             = qaService
+        self.qaStore               = qaStore
     }
 
     /// Forwards raw PCM buffers from the mic to an external handler (e.g. ShazamKitService).
@@ -167,6 +170,7 @@ final class ChunkManager: ObservableObject {
 
         let capturedTS = transcriptionService
         let capturedES = extractionService
+        let capturedPO = pipelineOrchestrator
         let capturedStore = transcriptStore
         let capturedPillMode     = pillMode
         let capturedPasteService = pasteService
@@ -182,6 +186,7 @@ final class ChunkManager: ObservableObject {
                 duration: max(duration, 1),
                 transcriptionService: capturedTS,
                 extractionService: capturedES,
+                pipelineOrchestrator: capturedPO,
                 transcriptStore: capturedStore,
                 pillMode: capturedPillMode,
                 pasteService: capturedPasteService,
@@ -292,6 +297,7 @@ final class ChunkManager: ObservableObject {
 
         let capturedTranscriptionService = transcriptionService
         let capturedExtractionService = extractionService
+        let capturedPipelineOrchestrator = pipelineOrchestrator
         let capturedTranscriptStore = transcriptStore
         let capturedPillMode = pillMode
         let capturedPasteService = pasteService
@@ -307,6 +313,7 @@ final class ChunkManager: ObservableObject {
                 duration: max(duration, 1),
                 transcriptionService: capturedTranscriptionService,
                 extractionService: capturedExtractionService,
+                pipelineOrchestrator: capturedPipelineOrchestrator,
                 transcriptStore: capturedTranscriptStore,
                 pillMode: capturedPillMode,
                 pasteService: capturedPasteService,
@@ -330,6 +337,7 @@ final class ChunkManager: ObservableObject {
         duration: Int,
         transcriptionService: (any Transcribable)?,
         extractionService: ExtractionService?,
+        pipelineOrchestrator: PipelineOrchestrator?,
         transcriptStore: TranscriptStore?,
         pillMode: PillMode,
         pasteService: TranscriptionPasteService?,
@@ -387,8 +395,8 @@ final class ChunkManager: ObservableObject {
             SessionStore.shared.updateSessionPlace(id: sid, placeID: pid)
         }
 
-        // Save transcript with session linking
-        transcriptStore?.save(
+        // Save transcript with session linking (sync to get row ID for pipeline)
+        let transcriptID = transcriptStore?.saveSync(
             text: transcript,
             durationSeconds: duration,
             audioFilePath: audioURL.path,
@@ -412,18 +420,30 @@ final class ChunkManager: ObservableObject {
 
         switch pillMode {
         case .ambientIntelligence:
-            guard let extractionService else {
-                Log.warn(.extract, "No extraction service configured")
-                break
+            // New multi-stage pipeline (preferred)
+            if let pipelineOrchestrator, let tid = transcriptID {
+                Log.info(.pipeline, "Chunk \(index) [sess:\(label)]: entering pipeline")
+                await pipelineOrchestrator.processTranscript(
+                    text: transcript,
+                    transcriptID: tid,
+                    sessionID: currentSID,
+                    sessionChunkSeq: sessionChunkSeq,
+                    durationSeconds: duration,
+                    speakerName: speakerName
+                )
+            } else if let extractionService {
+                // Legacy fallback
+                Log.info(.extract, "Chunk \(index) [sess:\(label)]: starting extraction (Pass 1)")
+                let items = await extractionService.classifyChunk(
+                    transcript: transcript,
+                    chunkIndex: index,
+                    sessionChunkSeq: sessionChunkSeq,
+                    previousChunkTrail: previousChunkTrail
+                )
+                await MainActor.run { self.onItemsClassified?(items) }
+            } else {
+                Log.warn(.extract, "No extraction or pipeline service configured")
             }
-            Log.info(.extract, "Chunk \(index) [sess:\(label)]: starting extraction (Pass 1)")
-            let items = await extractionService.classifyChunk(
-                transcript: transcript,
-                chunkIndex: index,
-                sessionChunkSeq: sessionChunkSeq,
-                previousChunkTrail: previousChunkTrail
-            )
-            await MainActor.run { self.onItemsClassified?(items) }
 
         case .transcription:
             guard let pasteService else { break }

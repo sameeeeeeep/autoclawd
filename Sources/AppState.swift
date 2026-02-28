@@ -98,6 +98,12 @@ final class AppState: ObservableObject {
     @Published var projects: [Project] = []
     @Published var structuredTodos: [StructuredTodo] = []
 
+    // Pipeline v2 published state
+    @Published var cleanedTranscripts: [CleanedTranscript] = []
+    @Published var transcriptAnalyses: [TranscriptAnalysis] = []
+    @Published var pipelineTasks: [PipelineTaskRecord] = []
+    @Published var skills: [Skill] = []
+
     // MARK: - Services
 
     private let storage = FileStorageManager.shared
@@ -120,6 +126,11 @@ final class AppState: ObservableObject {
     private let qaService: QAService
     let qaStore: QAStore
     let claudeCodeRunner = ClaudeCodeRunner()
+
+    // Pipeline v2 services
+    let pipelineStore: PipelineStore
+    let skillStore: SkillStore
+    private let pipelineOrchestrator: PipelineOrchestrator
 
     // MARK: - Derived Content (refreshed on demand)
 
@@ -172,6 +183,38 @@ final class AppState: ObservableObject {
         qaService    = QAService(ollama: OllamaService())
         qaStore      = QAStore()
         chunkManager = ChunkManager()
+
+        // Pipeline v2 services
+        let pStore = PipelineStore(url: FileStorageManager.shared.pipelineDatabaseURL)
+        pipelineStore = pStore
+        let sStore = SkillStore(directory: FileStorageManager.shared.skillsDirectory)
+        skillStore = sStore
+        skills = sStore.all()
+
+        let pipelineOllama = OllamaService()
+        let cleaningSvc = TranscriptCleaningService(
+            ollama: pipelineOllama, transcriptStore: transcriptStore,
+            pipelineStore: pStore, skillStore: sStore
+        )
+        let analysisSvc = TranscriptAnalysisService(
+            ollama: pipelineOllama, projectStore: projectStore,
+            pipelineStore: pStore, skillStore: sStore
+        )
+        let taskCreationSvc = TaskCreationService(
+            ollama: pipelineOllama, pipelineStore: pStore,
+            skillStore: sStore, workflowRegistry: WorkflowRegistry.shared,
+            projectStore: projectStore
+        )
+        let taskExecSvc = TaskExecutionService(
+            pipelineStore: pStore, claudeCodeRunner: claudeCodeRunner,
+            projectStore: projectStore
+        )
+        pipelineOrchestrator = PipelineOrchestrator(
+            cleaningService: cleaningSvc,
+            analysisService: analysisSvc,
+            taskCreationService: taskCreationSvc,
+            taskExecutionService: taskExecSvc
+        )
 
         setupLogger()
         buildTranscriptionService()
@@ -274,6 +317,7 @@ final class AppState: ObservableObject {
         }
 
         refreshExtractionItems()
+        refreshPipeline()
     }
 
     // MARK: - Listening Control
@@ -370,6 +414,33 @@ final class AppState: ObservableObject {
     func setExtractionBucket(id: String, bucket: ExtractionBucket) {
         extractionStore.setBucket(id: id, bucket: bucket)
         refreshExtractionItems()
+    }
+
+    // MARK: - Pipeline v2 Access
+
+    func refreshPipeline() {
+        cleanedTranscripts = pipelineStore.fetchRecentCleaned()
+        transcriptAnalyses = pipelineStore.fetchRecentAnalyses()
+        pipelineTasks      = pipelineStore.fetchRecentTasks()
+    }
+
+    func refreshSkills() {
+        skills = skillStore.all()
+    }
+
+    func acceptTask(id: String) {
+        pipelineStore.updateTaskStatus(id: id, status: .ongoing)
+        refreshPipeline()
+    }
+
+    func dismissTask(id: String) {
+        pipelineStore.updateTaskStatus(id: id, status: .filtered)
+        refreshPipeline()
+    }
+
+    func setTaskMode(id: String, mode: TaskMode) {
+        pipelineStore.updateTaskMode(id: id, mode: mode)
+        refreshPipeline()
     }
 
     // MARK: - File Write-through
@@ -551,6 +622,10 @@ final class AppState: ObservableObject {
             }
         }
 
+        pipelineOrchestrator.onPipelineUpdated = { [weak self] in
+            self?.refreshPipeline()
+        }
+
         // Observe audio level changes
         chunkManager.$chunkIndex
             .sink { [weak self] _ in
@@ -564,6 +639,7 @@ final class AppState: ObservableObject {
         chunkManager.configure(
             transcriptionService: ts,
             extractionService: extractionService,
+            pipelineOrchestrator: pipelineOrchestrator,
             transcriptStore: transcriptStore,
             pasteService: pasteService,
             qaService: qaService,

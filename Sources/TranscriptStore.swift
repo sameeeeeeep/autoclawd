@@ -47,6 +47,21 @@ final class TranscriptStore: @unchecked Sendable {
         }
     }
 
+    /// Synchronous save that returns the new transcript's row ID.
+    func saveSync(text: String, durationSeconds: Int, audioFilePath: String,
+                  sessionID: String? = nil, sessionChunkSeq: Int = 0,
+                  projectID: UUID? = nil, timestamp: Date? = nil,
+                  speakerName: String? = nil) -> Int64? {
+        queue.sync {
+            insertTranscript(text: text, duration: durationSeconds, path: audioFilePath,
+                             sessionID: sessionID, sessionChunkSeq: sessionChunkSeq,
+                             projectID: projectID, timestamp: timestamp,
+                             speakerName: speakerName)
+            guard let db else { return nil }
+            return sqlite3_last_insert_rowid(db)
+        }
+    }
+
     // MARK: - Read
 
     /// Full-text search using FTS5.

@@ -28,7 +28,12 @@ enum LogComponent: String {
     case ui        = "UI"
     case paste     = "PASTE"
     case qa        = "QA"
-    case cleanup   = "CLEANUP"
+    case cleanup    = "CLEANUP"
+    case cleaning   = "CLEANING"
+    case analysis   = "ANALYSIS"
+    case taskCreate = "TASKCREATE"
+    case taskExec   = "TASKEXEC"
+    case pipeline   = "PIPELINE"
 }
 
 // MARK: - Log Entry

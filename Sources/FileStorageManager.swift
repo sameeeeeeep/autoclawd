@@ -17,12 +17,17 @@ final class FileStorageManager: @unchecked Sendable {
     let worldModelURL: URL
     let todosURL: URL
     let configURL: URL
+    let skillsDirectory: URL
+    var pipelineDatabaseURL: URL {
+        rootDirectory.appendingPathComponent("pipeline.db")
+    }
 
     private init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
         rootDirectory = home.appendingPathComponent(".autoclawd")
         audioDirectory = rootDirectory.appendingPathComponent("audio")
         logsDirectory = rootDirectory.appendingPathComponent("logs")
+        skillsDirectory = rootDirectory.appendingPathComponent("skills")
         transcriptsDatabaseURL = rootDirectory.appendingPathComponent("transcripts.db")
         worldModelURL = rootDirectory.appendingPathComponent("world-model.md")
         todosURL = rootDirectory.appendingPathComponent("todos.md")
@@ -59,7 +64,7 @@ final class FileStorageManager: @unchecked Sendable {
     // MARK: - Private
 
     private func createDirectories() {
-        for dir in [rootDirectory, audioDirectory, logsDirectory] {
+        for dir in [rootDirectory, audioDirectory, logsDirectory, skillsDirectory] {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
     }

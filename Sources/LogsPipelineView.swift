@@ -42,84 +42,166 @@ struct LogsPipelineView: View {
 
     // MARK: - Derived Data
 
-    /// Build pipeline groups from real extraction items, paired with transcripts.
+    /// Build pipeline groups from pipeline v2 data, with legacy extraction fallback.
     private var pipelineGroups: [PipelineGroup] {
+        let cleaned = appState.cleanedTranscripts
+        let analyses = appState.transcriptAnalyses
+        let tasks = appState.pipelineTasks
+
+        // If pipeline v2 has data, use it
+        if !cleaned.isEmpty {
+            return buildPipelineV2Groups(cleaned: cleaned, analyses: analyses, tasks: tasks)
+        }
+
+        // Fallback: build from legacy extraction items
+        return buildLegacyGroups()
+    }
+
+    /// Build groups from the new multi-stage pipeline data.
+    private func buildPipelineV2Groups(
+        cleaned: [CleanedTranscript],
+        analyses: [TranscriptAnalysis],
+        tasks: [PipelineTaskRecord]
+    ) -> [PipelineGroup] {
+        // Index analyses and tasks for fast lookup
+        let analysisByCleanedID = Dictionary(grouping: analyses, by: \.cleanedTranscriptID)
+        let tasksByAnalysisID = Dictionary(grouping: tasks, by: \.analysisID)
+        let executionSteps = { (taskID: String) -> [TaskExecutionStep] in
+            self.appState.pipelineStore.fetchSteps(taskID: taskID)
+        }
+
+        return cleaned.map { ct -> PipelineGroup in
+            let timeStr = Self.timeFormatter.string(from: ct.timestamp)
+            let timeSeconds = Calendar.current.component(.hour, from: ct.timestamp) * 3600
+                + Calendar.current.component(.minute, from: ct.timestamp) * 60
+
+            // Raw chunks from source transcript IDs
+            let rawChunks: [RawChunk] = ct.sourceTranscriptIDs.enumerated().map { idx, tid in
+                let tr = transcripts.first(where: { $0.id == tid })
+                let label = tr?.sessionID.map { "\($0.prefix(6))" } ?? "t\(tid)"
+                let dur = tr.map { $0.durationSeconds > 0 ? "\($0.durationSeconds)s" : "" } ?? ""
+                let text = tr?.text ?? "(transcript \(tid))"
+                return RawChunk(id: label, duration: dur, text: text)
+            }
+
+            // Cleaning tags
+            var cleaningTags: [String] = []
+            if ct.isContinued { cleaningTags.append("Continued transcript") }
+            if ct.sourceChunkCount > 1 { cleaningTags.append("\(ct.sourceChunkCount) chunks merged") }
+            if ct.sourceChunkCount == 1 { cleaningTags.append("Single chunk") }
+
+            // Analysis
+            let matchedAnalyses = analysisByCleanedID[ct.id] ?? []
+            let analysis = matchedAnalyses.first
+
+            let analysisTags = analysis?.tags ?? []
+            let analysisProject = analysis?.projectName
+            let analysisText = analysis?.summary
+
+            // Tasks
+            let pipelineTasks: [PipelineTask] = matchedAnalyses.flatMap { a -> [PipelineTask] in
+                let matched = tasksByAnalysisID[a.id] ?? []
+                return matched.map { t -> PipelineTask in
+                    let steps = executionSteps(t.id)
+                    let resultSteps = steps.map { "\($0.description)" }
+                    let finalStatus: String = {
+                        switch t.status {
+                        case .completed: return "Completed"
+                        case .ongoing: return "In progress"
+                        case .pending_approval: return "Pending approval"
+                        case .needs_input: return t.pendingQuestion ?? "Needs input"
+                        case .upcoming: return "Upcoming"
+                        case .filtered: return "Dismissed"
+                        }
+                    }()
+
+                    let skillName = t.skillID.flatMap { sid in
+                        self.appState.skills.first(where: { $0.id == sid })?.name
+                    }
+                    let workflowName = t.workflowID.flatMap { wid in
+                        WorkflowRegistry.shared.workflow(for: wid)?.name
+                    }
+
+                    return PipelineTask(
+                        id: t.id,
+                        title: t.title,
+                        prompt: t.prompt,
+                        project: t.projectName ?? analysisProject ?? "unknown",
+                        mode: t.mode,
+                        status: t.status,
+                        skill: skillName ?? t.skillID,
+                        workflow: workflowName,
+                        workflowSteps: t.workflowSteps,
+                        missingConnection: t.missingConnection,
+                        pendingQuestion: t.pendingQuestion,
+                        result: TaskResult(
+                            steps: resultSteps.isEmpty ? ["Processing..."] : resultSteps,
+                            finalStatus: finalStatus,
+                            duration: formatDuration(from: t.createdAt, to: t.completedAt)
+                        )
+                    )
+                }
+            }
+
+            return PipelineGroup(
+                id: ct.id,
+                rawChunks: rawChunks,
+                cleaningTags: cleaningTags,
+                cleanedText: ct.cleanedText,
+                analysisTags: analysisTags,
+                analysisProject: analysisProject,
+                analysisText: analysisText,
+                tasks: pipelineTasks,
+                placeTag: nil,
+                personTag: ct.speakerName,
+                time: timeStr,
+                timeSeconds: timeSeconds
+            )
+        }
+    }
+
+    /// Fallback: build from legacy extraction items.
+    private func buildLegacyGroups() -> [PipelineGroup] {
         let items = appState.extractionItems
         guard !items.isEmpty else { return [] }
 
-        // Group extraction items by chunkIndex
         let grouped = Dictionary(grouping: items, by: \.chunkIndex)
         let sortedChunks = grouped.keys.sorted(by: >)
 
         return sortedChunks.compactMap { chunkIdx -> PipelineGroup? in
             guard let chunkItems = grouped[chunkIdx], !chunkItems.isEmpty else { return nil }
-
-            // Use the first item's timestamp as representative
             let representative = chunkItems.first!
             let timeStr = Self.timeFormatter.string(from: representative.timestamp)
             let timeSeconds = Calendar.current.component(.hour, from: representative.timestamp) * 3600
                 + Calendar.current.component(.minute, from: representative.timestamp) * 60
 
-            // Find matching transcript by timestamp proximity (within 60 seconds)
             let matchingTranscripts = transcripts.filter { tr in
                 abs(tr.timestamp.timeIntervalSince(representative.timestamp)) < 60
             }
 
-            // Build raw chunks from matching transcripts
-            let rawChunks: [RawChunk]
-            if matchingTranscripts.isEmpty {
-                // Use the source phrase from the extraction item as a fallback
-                rawChunks = [
-                    RawChunk(
-                        id: "chunk-\(chunkIdx)",
-                        duration: "",
-                        text: representative.sourcePhrase
-                    )
-                ]
-            } else {
-                rawChunks = matchingTranscripts.map { tr in
+            let rawChunks: [RawChunk] = matchingTranscripts.isEmpty
+                ? [RawChunk(id: "chunk-\(chunkIdx)", duration: "", text: representative.sourcePhrase)]
+                : matchingTranscripts.map { tr in
                     let label = tr.sessionID.map { "\($0.prefix(6))" } ?? "t\(tr.id)"
                     let dur = tr.durationSeconds > 0 ? "\(tr.durationSeconds)s" : ""
                     return RawChunk(id: label, duration: dur, text: tr.text)
                 }
-            }
 
-            // Derive cleaning info from extraction items
-            let cleaningTags: [String] = {
-                var tags: [String] = []
-                if rawChunks.count > 1 {
-                    tags.append("\(rawChunks.count) chunks merged")
-                }
-                let dismissed = chunkItems.filter { $0.isDismissed }
-                if !dismissed.isEmpty {
-                    tags.append("\(dismissed.count) filtered")
-                }
-                let accepted = chunkItems.filter { $0.isAccepted }
-                if !accepted.isEmpty {
-                    tags.append("\(accepted.count) accepted")
-                }
-                return tags
-            }()
+            var cleaningTags: [String] = []
+            if rawChunks.count > 1 { cleaningTags.append("\(rawChunks.count) chunks merged") }
+            let dismissed = chunkItems.filter { $0.isDismissed }
+            if !dismissed.isEmpty { cleaningTags.append("\(dismissed.count) filtered") }
+            let accepted = chunkItems.filter { $0.isAccepted }
+            if !accepted.isEmpty { cleaningTags.append("\(accepted.count) accepted") }
 
-            // Cleaned text: combine accepted item contents
             let acceptedItems = chunkItems.filter { $0.isAccepted }
-            let cleanedText = acceptedItems.isEmpty
-                ? nil
-                : acceptedItems.map(\.content).joined(separator: " ")
+            let cleanedText = acceptedItems.isEmpty ? nil : acceptedItems.map(\.content).joined(separator: " ")
 
-            // Analysis info from extraction items
-            let analysisTags: [String] = {
-                var tags: [String] = []
-                let types = Set(chunkItems.map(\.type))
-                for t in types { tags.append(t.rawValue) }
-                let buckets = Set(chunkItems.map(\.bucket))
-                for b in buckets { tags.append(b.displayName) }
-                return tags
-            }()
+            var analysisTags: [String] = []
+            for t in Set(chunkItems.map(\.type)) { analysisTags.append(t.rawValue) }
+            for b in Set(chunkItems.map(\.bucket)) { analysisTags.append(b.displayName) }
 
-            // Try to find a project for this group
             let analysisProject: String? = {
-                // Check if any matching transcript has a projectID
                 if let pid = matchingTranscripts.first(where: { $0.projectID != nil })?.projectID {
                     return appState.projects.first(where: { $0.id == pid.uuidString })?.name
                 }
@@ -130,7 +212,6 @@ struct LogsPipelineView: View {
                 ? nil
                 : "\(acceptedItems.count) extraction(s): " + acceptedItems.map(\.content).prefix(2).joined(separator: "; ")
 
-            // Build pipeline tasks from extraction items
             let tasks: [PipelineTask] = chunkItems.map { item in
                 let taskStatus: TaskStatus = {
                     switch item.effectiveState {
@@ -143,22 +224,13 @@ struct LogsPipelineView: View {
                     }
                 }()
 
-                let resultSteps: [String] = {
-                    var steps: [String] = []
-                    steps.append("Source: \"\(String(item.sourcePhrase.prefix(60)))\"")
-                    steps.append("Type: \(item.type.rawValue), Bucket: \(item.bucket.displayName)")
-                    if let priority = item.priority {
-                        steps.append("Priority: \(priority)")
-                    }
-                    steps.append("Model decision: \(item.modelDecision)")
-                    if let override = item.userOverride {
-                        steps.append("User override: \(override)")
-                    }
-                    if item.applied {
-                        steps.append("Applied to world model/todos")
-                    }
-                    return steps
-                }()
+                var resultSteps: [String] = []
+                resultSteps.append("Source: \"\(String(item.sourcePhrase.prefix(60)))\"")
+                resultSteps.append("Type: \(item.type.rawValue), Bucket: \(item.bucket.displayName)")
+                if let priority = item.priority { resultSteps.append("Priority: \(priority)") }
+                resultSteps.append("Model decision: \(item.modelDecision)")
+                if let override = item.userOverride { resultSteps.append("User override: \(override)") }
+                if item.applied { resultSteps.append("Applied to world model/todos") }
 
                 return PipelineTask(
                     id: String(item.id.prefix(10)),
@@ -167,16 +239,9 @@ struct LogsPipelineView: View {
                     project: analysisProject ?? item.bucket.displayName,
                     mode: item.userOverride != nil ? .user : .auto,
                     status: taskStatus,
-                    skill: nil,
-                    workflow: nil,
-                    workflowSteps: [],
-                    missingConnection: nil,
-                    pendingQuestion: nil,
-                    result: TaskResult(
-                        steps: resultSteps,
-                        finalStatus: item.effectiveState,
-                        duration: item.priorityLabel
-                    )
+                    skill: nil, workflow: nil, workflowSteps: [],
+                    missingConnection: nil, pendingQuestion: nil,
+                    result: TaskResult(steps: resultSteps, finalStatus: item.effectiveState, duration: item.priorityLabel)
                 )
             }
 
@@ -194,6 +259,21 @@ struct LogsPipelineView: View {
                 time: timeStr,
                 timeSeconds: timeSeconds
             )
+        }
+    }
+
+    private func formatDuration(from start: Date, to end: Date?) -> String {
+        guard let end else { return "" }
+        let seconds = Int(end.timeIntervalSince(start))
+        if seconds < 60 { return "\(seconds)s" }
+        return "\(seconds / 60)m \(seconds % 60)s"
+    }
+
+    private func modeBadgeMode(_ mode: TaskMode) -> ModeBadge.Mode {
+        switch mode {
+        case .auto: return .auto
+        case .ask: return .ask
+        case .user: return .user
         }
     }
 
@@ -264,6 +344,7 @@ struct LogsPipelineView: View {
 
     private func loadData() {
         appState.refreshExtractionItems()
+        appState.refreshPipeline()
         transcripts = appState.recentTranscripts()
         logEntries = AutoClawdLogger.shared.snapshot(limit: 500).reversed()
     }
@@ -838,20 +919,17 @@ struct LogsPipelineView: View {
 
     private func taskMiniCard(task: PipelineTask, groupID: String) -> some View {
         let theme = ThemeManager.shared.current
-
-        // Extract the real extraction item ID from task ID
-        let extractionID: String? = {
-            // task.id is the first 10 chars of the extraction item ID
-            // find the real ID from appState
-            appState.extractionItems.first(where: { $0.id.hasPrefix(task.id) })?.id
-        }()
+        let isPipelineTask = task.id.hasPrefix("T-")
 
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
                 Text(task.id)
                     .font(.system(size: 7, design: .monospaced))
                     .foregroundColor(theme.textTertiary)
-                TagView(type: .status, label: task.mode == .user ? "user" : "auto", small: true)
+                ModeBadge(mode: modeBadgeMode(task.mode))
+                if let skill = task.skill {
+                    TagView(type: .action, label: skill, small: true)
+                }
             }
             Text(String(task.title.prefix(50)))
                 .font(.system(size: 9, weight: .semibold))
@@ -859,10 +937,12 @@ struct LogsPipelineView: View {
                 .lineLimit(2)
 
             // Accept / Dismiss for pending tasks
-            if task.status == .pending_approval || task.status == .ongoing {
+            if task.status == .pending_approval || task.status == .needs_input {
                 HStack(spacing: 4) {
                     Button {
-                        if let eid = extractionID {
+                        if isPipelineTask {
+                            appState.acceptTask(id: task.id)
+                        } else if let eid = appState.extractionItems.first(where: { $0.id.hasPrefix(task.id) })?.id {
                             appState.toggleExtraction(id: eid)
                         }
                     } label: {
@@ -883,7 +963,9 @@ struct LogsPipelineView: View {
                     .buttonStyle(.plain)
 
                     Button {
-                        if let eid = extractionID {
+                        if isPipelineTask {
+                            appState.dismissTask(id: task.id)
+                        } else if let eid = appState.extractionItems.first(where: { $0.id.hasPrefix(task.id) })?.id {
                             appState.toggleExtraction(id: eid)
                         }
                     } label: {
@@ -985,7 +1067,7 @@ struct LogsPipelineView: View {
                         detailStageSection(
                             stage: "task",
                             emoji: "",
-                            name: "EXTRACTION",
+                            name: "TASKS",
                             color: theme.warning,
                             group: group
                         )
@@ -1242,9 +1324,7 @@ struct LogsPipelineView: View {
 
     private func expandedTaskCard(task: PipelineTask) -> some View {
         let theme = ThemeManager.shared.current
-
-        // Find the real extraction item for bucket picker
-        let extractionItem = appState.extractionItems.first(where: { $0.id.hasPrefix(task.id) })
+        let isPipelineTask = task.id.hasPrefix("T-")
 
         return VStack(alignment: .leading, spacing: 6) {
             // ID + project + mode
@@ -1253,16 +1333,16 @@ struct LogsPipelineView: View {
                     .font(.system(size: 7, design: .monospaced))
                     .foregroundColor(theme.textTertiary)
                 TagView(type: .project, label: task.project, small: true)
-                TagView(type: .status, label: task.mode == .user ? "user" : "auto", small: true)
+                ModeBadge(mode: modeBadgeMode(task.mode))
             }
 
-            // Title (content)
+            // Title
             Text(task.title)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(theme.warning)
                 .textSelection(.enabled)
 
-            // Source phrase (prompt)
+            // Prompt
             Text(task.prompt)
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(theme.textSecondary)
@@ -1274,38 +1354,87 @@ struct LogsPipelineView: View {
                         .fill(theme.glass.opacity(0.5))
                 )
 
-            // Bucket picker
-            if let item = extractionItem {
-                HStack(spacing: 6) {
-                    Text("Bucket:")
-                        .font(.system(size: 8))
-                        .foregroundColor(theme.textTertiary)
-                    ForEach(ExtractionBucket.allCases, id: \.self) { bucket in
-                        Button {
-                            appState.setExtractionBucket(id: item.id, bucket: bucket)
-                        } label: {
-                            HStack(spacing: 2) {
-                                Image(systemName: bucket.icon)
-                                    .font(.system(size: 7))
-                                Text(bucket.displayName)
-                                    .font(.system(size: 8))
-                            }
-                            .foregroundColor(item.bucket == bucket ? theme.accent : theme.textTertiary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(item.bucket == bucket ? theme.accent.opacity(0.15) : Color.clear)
-                            )
-                        }
-                        .buttonStyle(.plain)
+            // Skill & workflow info
+            if task.skill != nil || task.workflow != nil {
+                HStack(spacing: 4) {
+                    if let skill = task.skill {
+                        TagView(type: .action, label: "Skill: \(skill)", small: true)
+                    }
+                    if let wf = task.workflow {
+                        TagView(type: .status, label: wf, small: true)
                     }
                 }
             }
 
+            // Missing connection warning
+            if let missing = task.missingConnection {
+                HStack(spacing: 3) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 8))
+                        .foregroundColor(theme.warning)
+                    Text("Missing: \(missing)")
+                        .font(.system(size: 8))
+                        .foregroundColor(theme.warning)
+                }
+            }
+
+            // Pending question
+            if let question = task.pendingQuestion {
+                Text(question)
+                    .font(.system(size: 9))
+                    .foregroundColor(theme.secondary)
+                    .italic()
+                    .padding(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(theme.secondary.opacity(0.08))
+                    )
+            }
+
             // Accept / Dismiss actions
-            if let item = extractionItem {
-                HStack(spacing: 6) {
+            HStack(spacing: 6) {
+                if isPipelineTask {
+                    if task.status == .pending_approval || task.status == .needs_input {
+                        Button {
+                            appState.acceptTask(id: task.id)
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 8))
+                                Text("Accept")
+                                    .font(.system(size: 8, weight: .semibold))
+                            }
+                            .foregroundColor(theme.accent)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(theme.accent.opacity(0.18))
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            appState.dismissTask(id: task.id)
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 8))
+                                Text("Dismiss")
+                                    .font(.system(size: 8, weight: .semibold))
+                            }
+                            .foregroundColor(theme.error)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(theme.error.opacity(0.12))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } else if let item = appState.extractionItems.first(where: { $0.id.hasPrefix(task.id) }) {
                     Button {
                         appState.toggleExtraction(id: item.id)
                     } label: {
@@ -1320,24 +1449,18 @@ struct LogsPipelineView: View {
                         .padding(.vertical, 4)
                         .background(
                             RoundedRectangle(cornerRadius: 5)
-                                .fill(item.isAccepted
-                                      ? theme.error.opacity(0.12)
-                                      : theme.accent.opacity(0.18))
+                                .fill(item.isAccepted ? theme.error.opacity(0.12) : theme.accent.opacity(0.18))
                         )
                     }
                     .buttonStyle(.plain)
+                }
 
-                    // Status indicator
-                    HStack(spacing: 3) {
-                        StatusDot(status: task.status.rawValue)
-                        Text(item.effectiveState)
-                            .font(.system(size: 8))
-                            .foregroundColor(statusColor(item.effectiveState, theme: theme))
-                    }
-
-                    if item.applied {
-                        TagView(type: .status, label: "Applied", small: true)
-                    }
+                // Status indicator
+                HStack(spacing: 3) {
+                    StatusDot(status: task.status.rawValue)
+                    Text(task.result.finalStatus)
+                        .font(.system(size: 8))
+                        .foregroundColor(statusColor(task.status.rawValue, theme: theme))
                 }
             }
         }
