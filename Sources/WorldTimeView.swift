@@ -13,6 +13,10 @@ struct WorldTimeView: View {
     @State private var episodes: [Episode] = []
     @State private var transcriptRecords: [TranscriptRecord] = []
 
+    // Responsive panel state
+    @State private var showEpisodes = false
+    @State private var showTranscript = false
+
     // Drag state for map dots
     @State private var dragStarts: [UUID: CGPoint] = [:]
 
@@ -40,10 +44,41 @@ struct WorldTimeView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            episodeListPanel
-            centerPlayerPanel
-            transcriptPanel
+        GeometryReader { geo in
+            let width = geo.size.width
+            // Breakpoints: <500 = compact (no side panels), 500-750 = medium (episodes only), 750+ = full
+            let showEpisodeInline = width >= 500
+            let showTranscriptInline = width >= 750
+
+            ZStack(alignment: .leading) {
+                HStack(spacing: 0) {
+                    if showEpisodeInline {
+                        episodeListPanel
+                    }
+                    centerPlayerPanel(
+                        showEpisodeToggle: !showEpisodeInline,
+                        showTranscriptToggle: !showTranscriptInline
+                    )
+                    if showTranscriptInline {
+                        transcriptPanel
+                    }
+                }
+
+                // Overlay panels for compact modes
+                if !showEpisodeInline && showEpisodes {
+                    overlayPanel(alignment: .leading) {
+                        episodeListPanel
+                            .frame(width: min(280, width * 0.75))
+                    }
+                }
+
+                if !showTranscriptInline && showTranscript {
+                    overlayPanel(alignment: .trailing) {
+                        transcriptPanel
+                            .frame(width: min(280, width * 0.75))
+                    }
+                }
+            }
         }
         .onAppear {
             loadEpisodes()
@@ -55,6 +90,29 @@ struct WorldTimeView: View {
             loadTranscriptsForSelectedEpisode()
             updateViewMode()
         }
+    }
+
+    // MARK: - Overlay Panel Wrapper
+
+    private func overlayPanel<Content: View>(alignment: Alignment, @ViewBuilder content: () -> Content) -> some View {
+        let theme = ThemeManager.shared.current
+        return ZStack(alignment: alignment) {
+            // Scrim
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showEpisodes = false
+                        showTranscript = false
+                    }
+                }
+
+            content()
+                .background(theme.surface)
+                .shadow(color: .black.opacity(0.2), radius: 12)
+                .transition(.move(edge: alignment == .leading ? .leading : .trailing))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Data Loading
@@ -257,7 +315,7 @@ struct WorldTimeView: View {
                 }
             }
         }
-        .frame(minWidth: 200, idealWidth: 280, maxWidth: 320)
+        .frame(minWidth: 160, idealWidth: 220, maxWidth: 280)
         .overlay(
             Rectangle()
                 .fill(theme.glassBorder)
@@ -358,8 +416,12 @@ struct WorldTimeView: View {
 
     // MARK: - Center Panel: Player Area
 
-    private var centerPlayerPanel: some View {
+    private func centerPlayerPanel(showEpisodeToggle: Bool, showTranscriptToggle: Bool) -> some View {
         VStack(spacing: 10) {
+            // Compact toggle bar (shown when panels are collapsed)
+            if showEpisodeToggle || showTranscriptToggle {
+                compactToggleBar(showEpisodeToggle: showEpisodeToggle, showTranscriptToggle: showTranscriptToggle)
+            }
             playerHeaderBar
             squareMap
             tagsRow
@@ -368,6 +430,84 @@ struct WorldTimeView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func compactToggleBar(showEpisodeToggle: Bool, showTranscriptToggle: Bool) -> some View {
+        let theme = ThemeManager.shared.current
+        return HStack(spacing: 8) {
+            if showEpisodeToggle {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showEpisodes.toggle()
+                        showTranscript = false
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "list.bullet")
+                            .font(.system(size: 10))
+                        Text("Episodes")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(showEpisodes ? theme.accent : theme.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(showEpisodes ? theme.accent.opacity(0.12) : theme.glass)
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Episode info when collapsed
+            if showEpisodeToggle {
+                Text(selectedEpisode.episodeCode)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(theme.textSecondary)
+            }
+
+            Spacer()
+
+            if showTranscriptToggle {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showTranscript.toggle()
+                        showEpisodes = false
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "text.alignleft")
+                            .font(.system(size: 10))
+                        Text("Transcripts")
+                            .font(.system(size: 10, weight: .medium))
+                        if !transcriptRecords.isEmpty {
+                            Text("\(transcriptRecords.count)")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundColor(theme.accent)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Capsule().fill(theme.accent.opacity(0.15)))
+                        }
+                    }
+                    .foregroundColor(showTranscript ? theme.accent : theme.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(showTranscript ? theme.accent.opacity(0.12) : theme.glass)
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     // MARK: - Player Header Bar
@@ -763,7 +903,7 @@ struct WorldTimeView: View {
                 }
             }
         }
-        .frame(minWidth: 180, idealWidth: 250, maxWidth: 300)
+        .frame(minWidth: 160, idealWidth: 220, maxWidth: 260)
         .overlay(
             Rectangle()
                 .fill(theme.glassBorder)

@@ -52,7 +52,7 @@ struct MainPanelView: View {
                 .background(.ultraThinMaterial)
                 .overlay(ambientGlowOverlays)
         }
-        .frame(minWidth: 600, minHeight: 400)
+        .frame(minWidth: 420, minHeight: 360)
         .background(theme.bgGradientStops.first ?? theme.surface)
     }
 
@@ -316,7 +316,7 @@ struct ExecutionOutputView: View {
             }
             .padding()
         }
-        .frame(minWidth: 560, minHeight: 440)
+        .frame(minWidth: 380, idealWidth: 540, minHeight: 360, idealHeight: 440)
         .onAppear { startExecution() }
     }
 
@@ -398,7 +398,7 @@ struct AddProjectSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 420)
+        .frame(minWidth: 300, idealWidth: 400, maxWidth: 480)
     }
 }
 

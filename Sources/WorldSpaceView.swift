@@ -8,6 +8,7 @@ struct WorldSpaceView: View {
     @State private var selectedPlaceID: String = ""
     @State private var viewMode: String = "overview" // "overview" or "byday"
     @State private var selectedDayOffset: Int = 0
+    @State private var showPlacesList = false
 
     // Real data loaded on appear
     @State private var places: [PlaceDetail] = []
@@ -85,22 +86,110 @@ struct WorldSpaceView: View {
             if places.isEmpty {
                 emptyPlacesState
             } else {
-                HStack(spacing: 0) {
-                    placeListPanel
-                        .frame(minWidth: 160, idealWidth: 210, maxWidth: 260)
-                        .overlay(
-                            Rectangle()
-                                .fill(theme.glassBorder)
-                                .frame(width: 0.5),
-                            alignment: .trailing
-                        )
+                GeometryReader { geo in
+                    let showSidebarInline = geo.size.width >= 500
 
-                    placeDetailPanel
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ZStack(alignment: .leading) {
+                        HStack(spacing: 0) {
+                            if showSidebarInline {
+                                placeListPanel
+                                    .frame(minWidth: 140, idealWidth: 190, maxWidth: 240)
+                                    .overlay(
+                                        Rectangle()
+                                            .fill(theme.glassBorder)
+                                            .frame(width: 0.5),
+                                        alignment: .trailing
+                                    )
+                            }
+
+                            VStack(spacing: 0) {
+                                if !showSidebarInline {
+                                    compactPlaceSelector
+                                }
+                                placeDetailPanel
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            }
+                        }
+
+                        // Overlay sidebar for compact mode
+                        if !showSidebarInline && showPlacesList {
+                            ZStack(alignment: .leading) {
+                                Color.black.opacity(0.3)
+                                    .ignoresSafeArea()
+                                    .onTapGesture {
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            showPlacesList = false
+                                        }
+                                    }
+
+                                placeListPanel
+                                    .frame(width: min(260, geo.size.width * 0.75))
+                                    .background(theme.surface)
+                                    .shadow(color: .black.opacity(0.2), radius: 12)
+                                    .transition(.move(edge: .leading))
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
                 }
             }
         }
         .onAppear { loadData() }
+    }
+
+    // MARK: - Compact Place Selector (shown when sidebar is collapsed)
+
+    private var compactPlaceSelector: some View {
+        let theme = ThemeManager.shared.current
+        let place = selectedPlace
+
+        return HStack(spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showPlacesList.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 10))
+                    Text("Places")
+                        .font(.system(size: 10, weight: .medium))
+                }
+                .foregroundColor(showPlacesList ? theme.accent : theme.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule()
+                        .fill(showPlacesList ? theme.accent.opacity(0.12) : theme.glass)
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(theme.glassBorder, lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(.plain)
+
+            // Current place indicator
+            HStack(spacing: 4) {
+                Text(place.icon)
+                    .font(.system(size: 12))
+                Text(place.name)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(theme.textPrimary)
+            }
+
+            Spacer()
+
+            viewModeToggle
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .overlay(
+            Rectangle()
+                .fill(theme.glassBorder)
+                .frame(height: 0.5),
+            alignment: .bottom
+        )
     }
 
     // MARK: - Data Loading
@@ -318,6 +407,9 @@ struct WorldSpaceView: View {
             // Reset view mode when switching places
             viewMode = "overview"
             selectedDayOffset = 0
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showPlacesList = false
+            }
         } label: {
             HStack(alignment: .top, spacing: 8) {
                 Text(place.icon)

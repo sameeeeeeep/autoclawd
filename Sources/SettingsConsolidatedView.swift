@@ -92,41 +92,52 @@ struct SettingsConsolidatedView: View {
         let theme = themeManager.current
         let isDark = theme.isDark
 
-        HStack(spacing: 0) {
-            // MARK: Left Nav
-            VStack(alignment: .leading, spacing: 1) {
-                ForEach(SettingsSection.allCases) { section in
-                    let isActive = selectedSection == section
-                    Button {
-                        selectedSection = section
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text(section.icon)
-                                .font(.system(size: 11))
-                            Text(section.label)
-                                .font(.system(size: 11, weight: isActive ? .semibold : .regular))
-                                .foregroundColor(isActive ? theme.textPrimary : theme.textSecondary)
-                        }
-                        .padding(.vertical, 7)
-                        .padding(.horizontal, 9)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7)
-                                .fill(isActive ? theme.accent.opacity(0.08) : Color.clear)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-                Spacer()
-            }
-            .frame(minWidth: 120, idealWidth: 160, maxWidth: 200)
-            .padding(.top, 12)
-            .padding(.horizontal, 8)
+        GeometryReader { geo in
+            let showSidebarInline = geo.size.width >= 450
 
-            // Divider
-            Rectangle()
-                .fill(theme.glassBorder)
-                .frame(width: 0.5)
+            VStack(spacing: 0) {
+                // Compact mode: horizontal scrollable picker at top
+                if !showSidebarInline {
+                    compactSettingsNav
+                }
+
+                HStack(spacing: 0) {
+                    // MARK: Left Nav (shown inline when wide enough)
+                    if showSidebarInline {
+                        VStack(alignment: .leading, spacing: 1) {
+                            ForEach(SettingsSection.allCases) { section in
+                                let isActive = selectedSection == section
+                                Button {
+                                    selectedSection = section
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Text(section.icon)
+                                            .font(.system(size: 11))
+                                        Text(section.label)
+                                            .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+                                            .foregroundColor(isActive ? theme.textPrimary : theme.textSecondary)
+                                    }
+                                    .padding(.vertical, 7)
+                                    .padding(.horizontal, 9)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 7)
+                                            .fill(isActive ? theme.accent.opacity(0.08) : Color.clear)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            Spacer()
+                        }
+                        .frame(minWidth: 110, idealWidth: 150, maxWidth: 190)
+                        .padding(.top, 12)
+                        .padding(.horizontal, 8)
+
+                        // Divider
+                        Rectangle()
+                            .fill(theme.glassBorder)
+                            .frame(width: 0.5)
+                    }
 
             // MARK: Content Area
             ScrollView {
@@ -145,7 +156,9 @@ struct SettingsConsolidatedView: View {
                 .padding(20)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+                } // end HStack
+            } // end VStack
+        } // end GeometryReader
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showAddProject) {
             AddProjectSheet(isPresented: $showAddProject) { name, path in
@@ -168,6 +181,49 @@ struct SettingsConsolidatedView: View {
             refreshAudioDevices()
             checkClaudeCodeCLI()
         }
+    }
+
+    // MARK: - Compact Settings Nav (horizontal scrollable picker)
+
+    private var compactSettingsNav: some View {
+        let theme = themeManager.current
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(SettingsSection.allCases) { section in
+                    let isActive = selectedSection == section
+                    Button {
+                        selectedSection = section
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(section.icon)
+                                .font(.system(size: 10))
+                            Text(section.label)
+                                .font(.system(size: 10, weight: isActive ? .semibold : .regular))
+                                .foregroundColor(isActive ? theme.accent : theme.textSecondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(isActive ? theme.accent.opacity(0.12) : Color.clear)
+                        )
+                        .overlay(
+                            Capsule()
+                                .stroke(isActive ? theme.accent.opacity(0.3) : theme.glassBorder, lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+        .overlay(
+            Rectangle()
+                .fill(theme.glassBorder)
+                .frame(height: 0.5),
+            alignment: .bottom
+        )
     }
 
     // MARK: - General Section
