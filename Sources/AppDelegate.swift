@@ -148,7 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Toast
 
     private func showToast(_ entry: LogEntry) {
-        guard appState.showAmbientWidget else { return }
+        guard appState.showToasts else { return }
         // Cancel any pending dismiss
         toastDismissWork?.cancel()
 
@@ -159,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let toast = toastWindow, let pill = pillWindow else { return }
 
         // Update content
-        toast.setContent(ToastView(entry: entry))
+        toast.updateEntry(entry)
 
         // Position 8pt below pill
         let pillFrame = pill.frame

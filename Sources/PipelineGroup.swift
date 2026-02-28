@@ -53,6 +53,8 @@ struct PipelineGroup: Identifiable {
     let analysisTags: [String]
     let analysisProject: String?
     let analysisText: String?
+    let analysisID: String?
+    let analysisPriority: String?
     let tasks: [PipelineTask]
     let placeTag: String?
     let personTag: String?
@@ -83,6 +85,8 @@ struct PipelineGroup: Identifiable {
             analysisTags: ["dot p0"],
             analysisProject: "autoclawd",
             analysisText: "New feature request: dynamic widget component with three layout variants.",
+            analysisID: nil,
+            analysisPriority: "p0",
             tasks: [
                 PipelineTask(
                     id: "T-AC-048",
@@ -137,6 +141,7 @@ struct PipelineGroup: Identifiable {
             analysisTags: ["dot p1", "schedule change"],
             analysisProject: "trippy",
             analysisText: "Two action items: feedback synthesis and sprint rescheduling.",
+            analysisID: nil, analysisPriority: "p1",
             tasks: [
                 PipelineTask(
                     id: "T-TR-031",
@@ -212,6 +217,7 @@ struct PipelineGroup: Identifiable {
             analysisTags: ["bug", "dot p0"],
             analysisProject: "autoclawd",
             analysisText: "Bug report: speaker diarization failing to identify primary user.",
+            analysisID: nil, analysisPriority: "p0",
             tasks: [
                 PipelineTask(
                     id: "T-AC-047",
@@ -259,6 +265,7 @@ struct PipelineGroup: Identifiable {
             analysisTags: ["personal", "travel"],
             analysisProject: "personal",
             analysisText: "Personal travel booking request.",
+            analysisID: nil, analysisPriority: nil,
             tasks: [
                 PipelineTask(
                     id: "T-PS-012",
@@ -305,6 +312,7 @@ struct PipelineGroup: Identifiable {
             analysisTags: [],
             analysisProject: nil,
             analysisText: nil,
+            analysisID: nil, analysisPriority: nil,
             tasks: [],
             placeTag: "cafe",
             personTag: "priya",
@@ -327,6 +335,7 @@ struct PipelineGroup: Identifiable {
             analysisTags: ["feature", "dot p1"],
             analysisProject: "autoclawd",
             analysisText: "Feature request: sustained live transcript mode for the widget.",
+            analysisID: nil, analysisPriority: "p1",
             tasks: [
                 PipelineTask(
                     id: "T-AC-049",
@@ -372,6 +381,7 @@ struct PipelineGroup: Identifiable {
             analysisTags: ["feature", "dot p2"],
             analysisProject: "autoclawd",
             analysisText: "Feature request: monotone/greyscale theme option.",
+            analysisID: nil, analysisPriority: "p2",
             tasks: [
                 PipelineTask(
                     id: "T-AC-050",

@@ -325,6 +325,43 @@ final class PipelineStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - Inline Editing
+
+    func updateAnalysis(id: String, projectName: String?, projectID: String?, priority: String?, tags: [String], summary: String) {
+        queue.async { [self] in
+            let sql = "UPDATE transcript_analyses SET project_name = ?, project_id = ?, priority = ?, tags = ?, summary = ? WHERE id = ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            bindOptionalText(stmt, 1, projectName)
+            bindOptionalText(stmt, 2, projectID)
+            bindOptionalText(stmt, 3, priority)
+            sqlite3_bind_text(stmt, 4, tags.joined(separator: ","), -1, SQLITE_TRANSIENT_PS)
+            sqlite3_bind_text(stmt, 5, summary, -1, SQLITE_TRANSIENT_PS)
+            sqlite3_bind_text(stmt, 6, id, -1, SQLITE_TRANSIENT_PS)
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                Log.error(.pipeline, "PipelineStore updateAnalysis failed for \(id)")
+            }
+        }
+    }
+
+    func updateTaskDetails(id: String, title: String, prompt: String, projectName: String?, projectID: String?) {
+        queue.async { [self] in
+            let sql = "UPDATE pipeline_tasks SET title = ?, prompt = ?, project_name = ?, project_id = ? WHERE id = ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, title, -1, SQLITE_TRANSIENT_PS)
+            sqlite3_bind_text(stmt, 2, prompt, -1, SQLITE_TRANSIENT_PS)
+            bindOptionalText(stmt, 3, projectName)
+            bindOptionalText(stmt, 4, projectID)
+            sqlite3_bind_text(stmt, 5, id, -1, SQLITE_TRANSIENT_PS)
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                Log.error(.pipeline, "PipelineStore updateTaskDetails failed for \(id)")
+            }
+        }
+    }
+
     func fetchRecentTasks(limit: Int = 100) -> [PipelineTaskRecord] {
         queue.sync { _fetchRecentTasks(limit: limit) }
     }

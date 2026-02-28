@@ -31,12 +31,12 @@ struct AnalysisTaskDesc {
 struct TranscriptAnalysis: Identifiable {
     let id: String
     let cleanedTranscriptID: String
-    let priority: String?
-    let projectName: String?
-    let projectID: String?
+    var priority: String?
+    var projectName: String?
+    var projectID: String?
     let personNames: [String]
-    let tags: [String]
-    let summary: String
+    var tags: [String]
+    var summary: String
     let taskDescriptions: [AnalysisTaskDesc]
     let timestamp: Date
 }
@@ -48,10 +48,10 @@ struct TranscriptAnalysis: Identifiable {
 struct PipelineTaskRecord: Identifiable {
     let id: String                    // e.g. "T-AC-048"
     let analysisID: String
-    let title: String
-    let prompt: String
-    let projectID: String?
-    let projectName: String?
+    var title: String
+    var prompt: String
+    var projectID: String?
+    var projectName: String?
     var mode: TaskMode
     var status: TaskStatus
     let skillID: String?

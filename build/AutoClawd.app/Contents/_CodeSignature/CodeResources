@@ -11,6 +11,15 @@
 	</dict>
 	<key>files2</key>
 	<dict>
+		<key>MacOS/autoclawd-mcp</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			1wH8t460hObLum8vTOfaLSFgFLk=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"d701fcb78eb484e6cbba6f2f4ce7da2d216014b9"</string>
+		</dict>
 		<key>Resources/AppIcon.icns</key>
 		<dict>
 			<key>hash2</key>

@@ -39,7 +39,15 @@
       "Bash(\"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/ChunkManager.swift\":*)",
       "Bash(\"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/QAView.swift\":*)",
       "Bash(\"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/AppState.swift\":*)",
-      "Bash(\"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/PillView.swift\":*)"
+      "Bash(\"/Users/sameeprehlan/Documents/Claude Code/autoclawd/Sources/PillView.swift\":*)",
+      "Bash(git -C \"/Users/sameeprehlan/Documents/Claude Code/autoclawd\" remote -v)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:artemnovichkov.com)",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/qwibitai/nanoclaw/main/src/container-runner.ts\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/qwibitai/nanoclaw/main/container/agent-runner/src/index.ts\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/qwibitai/nanoclaw/main/src/env.ts\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/qwibitai/nanoclaw/main/container/Dockerfile\")"
     ]
   }
 }

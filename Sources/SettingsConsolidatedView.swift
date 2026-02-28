@@ -52,7 +52,7 @@ struct SettingsConsolidatedView: View {
 
     // General mock state (items not yet backed by real persistence)
     @State private var autoStart = true
-    @State private var notificationsEnabled = true
+    // notificationsEnabled is now backed by appState.showToasts
 
     // Hot words local state (synced to SettingsManager)
     @State private var localHotWordConfigs: [HotWordConfig] = SettingsManager.shared.hotWordConfigs
@@ -351,7 +351,7 @@ struct SettingsConsolidatedView: View {
             }
         }
         settingsRow(theme: theme, isDark: isDark, label: "Notifications", showBorder: false) {
-            settingsToggle(isOn: $notificationsEnabled, theme: theme)
+            settingsToggle(isOn: $appState.showToasts, theme: theme)
         }
 
         // Data management

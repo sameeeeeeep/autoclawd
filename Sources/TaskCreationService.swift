@@ -40,8 +40,8 @@ final class TaskCreationService: @unchecked Sendable {
 
             // Resolve skill and workflow
             let skill = skillStore.load(id: plan.skillID)
-            let workflowID = skill?.workflowID
-            let workflow = workflowID.flatMap { workflowRegistry.workflow(for: $0) }
+            let workflowID = skill?.workflowID ?? "autoclawd-claude-code"
+            let workflow = workflowRegistry.workflow(for: workflowID)
             let missingConnection = workflow.flatMap { workflowRegistry.checkConnections(for: $0) }
 
             // Determine mode based on certainty and connections

@@ -82,6 +82,13 @@ final class PipelineOrchestrator: @unchecked Sendable {
         Log.info(.pipeline, "Pipeline: complete")
     }
 
+    /// Execute a task that was manually accepted by the user.
+    func executeAcceptedTask(_ task: PipelineTaskRecord) async {
+        Log.info(.pipeline, "Pipeline: executing accepted task \(task.id)")
+        await taskExecutionService.execute(task: task)
+        await notifyUpdate()
+    }
+
     // MARK: - Private
 
     @MainActor

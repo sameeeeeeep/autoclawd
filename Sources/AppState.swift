@@ -66,6 +66,10 @@ final class AppState: ObservableObject {
         didSet { SettingsManager.shared.showAmbientWidget = showAmbientWidget }
     }
 
+    @Published var showToasts: Bool {
+        didSet { SettingsManager.shared.showToasts = showToasts }
+    }
+
     @Published var appearanceMode: AppearanceMode {
         didSet { SettingsManager.shared.appearanceMode = appearanceMode }
     }
@@ -138,6 +142,7 @@ final class AppState: ObservableObject {
     let pipelineStore: PipelineStore
     let skillStore: SkillStore
     private let pipelineOrchestrator: PipelineOrchestrator
+    private let taskExecutionService: TaskExecutionService
 
     // MARK: - Derived Content (refreshed on demand)
 
@@ -155,6 +160,7 @@ final class AppState: ObservableObject {
         groqAPIKey          = settings.groqAPIKey
         synthesizeThreshold = settings.synthesizeThreshold
         showAmbientWidget    = settings.showAmbientWidget
+        showToasts           = settings.showToasts
         appearanceMode      = settings.appearanceMode
         self.people       = AppState.init_loadPeople()
         self.locationName = UserDefaults.standard.string(forKey: "autoclawd.locationName") ?? "My Room"
@@ -216,12 +222,19 @@ final class AppState: ObservableObject {
             pipelineStore: pStore, claudeCodeRunner: claudeCodeRunner,
             projectStore: projectStore
         )
+        taskExecutionService = taskExecSvc
         pipelineOrchestrator = PipelineOrchestrator(
             cleaningService: cleaningSvc,
             analysisService: analysisSvc,
             taskCreationService: taskCreationSvc,
             taskExecutionService: taskExecSvc
         )
+        // Wire up UI refresh when execution steps change
+        taskExecSvc.onStepUpdated = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.refreshPipeline()
+            }
+        }
 
         setupLogger()
         buildTranscriptionService()
@@ -475,8 +488,23 @@ final class AppState: ObservableObject {
     }
 
     func acceptTask(id: String) {
-        pipelineStore.updateTaskStatus(id: id, status: .ongoing)
+        pipelineStore.updateTaskStatus(id: id, status: .ongoing, startedAt: Date())
         refreshPipeline()
+        // Trigger execution in background
+        if let task = pipelineTasks.first(where: { $0.id == id }) {
+            Task { [pipelineOrchestrator] in
+                await pipelineOrchestrator.executeAcceptedTask(task)
+            }
+        }
+    }
+
+    func executeTask(id: String) {
+        // Re-trigger execution for an already-ongoing task (e.g. stuck/retry)
+        if let task = pipelineTasks.first(where: { $0.id == id }) {
+            Task { [pipelineOrchestrator] in
+                await pipelineOrchestrator.executeAcceptedTask(task)
+            }
+        }
     }
 
     func dismissTask(id: String) {
@@ -484,8 +512,36 @@ final class AppState: ObservableObject {
         refreshPipeline()
     }
 
+    /// Send a follow-up message to an active Claude session for a task.
+    func sendMessageToTask(id: String, message: String) {
+        taskExecutionService.sendMessage(taskID: id, message: message)
+    }
+
+    /// Check if a task has an active Claude session.
+    func taskHasActiveSession(id: String) -> Bool {
+        taskExecutionService.hasActiveSession(taskID: id)
+    }
+
+    /// Stop an active Claude session for a task.
+    func stopTaskSession(id: String) {
+        taskExecutionService.stopSession(taskID: id)
+        refreshPipeline()
+    }
+
     func setTaskMode(id: String, mode: TaskMode) {
         pipelineStore.updateTaskMode(id: id, mode: mode)
+        refreshPipeline()
+    }
+
+    // MARK: - Inline Editing
+
+    func updateAnalysis(id: String, projectName: String?, projectID: String?, priority: String?, tags: [String], summary: String) {
+        pipelineStore.updateAnalysis(id: id, projectName: projectName, projectID: projectID, priority: priority, tags: tags, summary: summary)
+        refreshPipeline()
+    }
+
+    func updateTaskDetails(id: String, title: String, prompt: String, projectName: String?, projectID: String?) {
+        pipelineStore.updateTaskDetails(id: id, title: title, prompt: prompt, projectName: projectName, projectID: projectID)
         refreshPipeline()
     }
 

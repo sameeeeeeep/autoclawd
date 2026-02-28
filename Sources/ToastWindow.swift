@@ -20,7 +20,7 @@ final class ToastWindow: NSPanel {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 40),
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 40),
             styleMask: [.borderless, .nonactivatingPanel, .utilityWindow],
             backing: .buffered,
             defer: false
@@ -39,7 +39,6 @@ final class ToastWindow: NSPanel {
     func updateEntry(_ entry: LogEntry) {
         if let model = model {
             model.entry = entry
-            DispatchQueue.main.async { self.sizeToFit() }
         } else {
             let m = ToastModel(entry)
             self.model = m
@@ -47,17 +46,7 @@ final class ToastWindow: NSPanel {
             hosting.frame = contentView?.bounds ?? .zero
             hosting.autoresizingMask = [.width, .height]
             contentView = hosting
-            sizeToFit()
         }
-    }
-
-    private func sizeToFit() {
-        guard let hosting = contentView else { return }
-        hosting.layout()
-        let ideal = hosting.fittingSize
-        guard ideal.width > 0 else { return }
-        let width = min(max(ideal.width, 180), 420)
-        setContentSize(NSSize(width: width, height: 40))
     }
 
     override var canBecomeKey: Bool  { false }

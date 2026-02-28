@@ -21,15 +21,13 @@ enum AudioRetention: Int, CaseIterable {
     var displayName: String { "\(rawValue) days" }
 }
 enum AppearanceMode: String, CaseIterable {
-    case frosted     = "frosted"
-    case transparent = "transparent"
-    case dynamic     = "dynamic"
+    case frosted = "frosted"
+    case solid   = "solid"
 
     var displayName: String {
         switch self {
-        case .frosted:     return "Frosted"
-        case .transparent: return "Transparent"
-        case .dynamic:     return "Dynamic"
+        case .frosted: return "Frosted"
+        case .solid:   return "Solid"
         }
     }
 }
@@ -73,6 +71,7 @@ final class SettingsManager: @unchecked Sendable {
     private let kAppearanceMode = "appearance_mode"
     private let kHotWordConfigs = "hotWordConfigs"
     private let kColorScheme    = "color_scheme_setting"
+    private let kShowToasts     = "show_toasts"
     private let kWhatsAppEnabled = "whatsapp_enabled"
     private let kWhatsAppNotifyTasks = "whatsapp_notify_tasks"
     private let kWhatsAppNotifySummaries = "whatsapp_notify_summaries"
@@ -140,6 +139,11 @@ final class SettingsManager: @unchecked Sendable {
     var showAmbientWidget: Bool {
         get { defaults.object(forKey: kShowAmbientWidget) as? Bool ?? true }
         set { defaults.set(newValue, forKey: kShowAmbientWidget) }
+    }
+
+    var showToasts: Bool {
+        get { defaults.object(forKey: kShowToasts) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: kShowToasts) }
     }
 
     var appearanceMode: AppearanceMode {

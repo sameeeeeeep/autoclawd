@@ -39,6 +39,20 @@ struct LogsPipelineView: View {
     @State private var expandedStage: String? = nil
     @State private var logEntries: [LogEntry] = []
     @State private var transcripts: [TranscriptRecord] = []
+    @State private var chatInput: String = ""
+    @State private var showChatModal: Bool = false
+    @State private var chatTaskID: String? = nil
+
+    // Inline editing state
+    @State private var editingAnalysisID: String? = nil
+    @State private var editProject: String = ""
+    @State private var editTags: String = ""
+    @State private var editPriority: String = ""
+    @State private var editSummary: String = ""
+    @State private var editingTaskID: String? = nil
+    @State private var editTaskTitle: String = ""
+    @State private var editTaskPrompt: String = ""
+    @State private var editTaskProject: String = ""
 
     // MARK: - Derived Data
 
@@ -97,6 +111,8 @@ struct LogsPipelineView: View {
             let analysisTags = analysis?.tags ?? []
             let analysisProject = analysis?.projectName
             let analysisText = analysis?.summary
+            let analysisID = analysis?.id
+            let analysisPriority = analysis?.priority
 
             // Tasks
             let pipelineTasks: [PipelineTask] = matchedAnalyses.flatMap { a -> [PipelineTask] in
@@ -151,6 +167,8 @@ struct LogsPipelineView: View {
                 analysisTags: analysisTags,
                 analysisProject: analysisProject,
                 analysisText: analysisText,
+                analysisID: analysisID,
+                analysisPriority: analysisPriority,
                 tasks: pipelineTasks,
                 placeTag: nil,
                 personTag: ct.speakerName,
@@ -253,6 +271,8 @@ struct LogsPipelineView: View {
                 analysisTags: analysisTags,
                 analysisProject: analysisProject,
                 analysisText: analysisText,
+                analysisID: nil,
+                analysisPriority: nil,
                 tasks: tasks,
                 placeTag: nil,
                 personTag: matchingTranscripts.first?.speakerName,
@@ -404,9 +424,9 @@ struct LogsPipelineView: View {
 
                 Spacer(minLength: 4)
 
-                // Extraction actions
+                // Pipeline status
                 if viewMode == .pipeline {
-                    extractionActions
+                    pipelineStatusBar
                 }
             }
 
@@ -493,57 +513,40 @@ struct LogsPipelineView: View {
         )
     }
 
-    // MARK: - Extraction Actions
+    // MARK: - Pipeline Status Bar
 
-    private var extractionActions: some View {
+    private var pipelineStatusBar: some View {
         let theme = ThemeManager.shared.current
-        return HStack(spacing: 6) {
-            Text(appState.pendingExtractionCount == 0
-                 ? "No pending"
-                 : "\(appState.pendingExtractionCount) pending")
-                .font(.system(size: 9))
-                .foregroundColor(theme.textSecondary)
+        let pendingTasks = appState.pipelineTasks.filter {
+            $0.status == .pending_approval || $0.status == .needs_input
+        }.count
+        let activeTasks = appState.pipelineTasks.filter { $0.status == .ongoing }.count
 
-            Picker("", selection: $appState.synthesizeThreshold) {
-                Text("Manual").tag(0)
-                Text("Auto: 5").tag(5)
-                Text("Auto: 10").tag(10)
-                Text("Auto: 20").tag(20)
+        return HStack(spacing: 8) {
+            if appState.isListening {
+                LiveBadge()
             }
-            .pickerStyle(.menu)
-            .frame(width: 80)
-
-            Button {
-                Task { await appState.synthesizeNow() }
-            } label: {
-                Text("Synthesize")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(theme.accent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5)
-                            .fill(theme.accent.opacity(0.18))
-                    )
+            if activeTasks > 0 {
+                HStack(spacing: 3) {
+                    StatusDot(status: "ongoing")
+                    Text("\(activeTasks) running")
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.warning)
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(appState.pendingExtractionCount == 0)
-
-            Button {
-                Task { await appState.cleanupNow() }
-            } label: {
-                Text(appState.isCleaningUp ? "Cleaning..." : "Clean Up")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(theme.tertiary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5)
-                            .fill(theme.tertiary.opacity(0.12))
-                    )
+            if pendingTasks > 0 {
+                HStack(spacing: 3) {
+                    StatusDot(status: "pending_approval")
+                    Text("\(pendingTasks) awaiting")
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.secondary)
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(appState.isCleaningUp)
+            if activeTasks == 0 && pendingTasks == 0 && !appState.pipelineTasks.isEmpty {
+                Text("All clear")
+                    .font(.system(size: 9))
+                    .foregroundColor(theme.textTertiary)
+            }
         }
     }
 
@@ -726,30 +729,21 @@ struct LogsPipelineView: View {
 
     private var columnHeaderRow: some View {
         let theme = ThemeManager.shared.current
-        return GeometryReader { geo in
-            let available = max(0, geo.size.width - 60 - 30) // 60 for TIME, 30 for padding
-            let transcriptW = available * 0.22
-            let cleaningW = available * 0.18
-            let analysisW = available * 0.18
-            let taskW = available * 0.24
-            let resultW = available * 0.18
-
-            HStack(spacing: 0) {
-                columnHeader("TIME", color: theme.textTertiary)
-                    .frame(width: 60, alignment: .leading)
-                columnHeader("TRANSCRIPT", color: theme.textSecondary)
-                    .frame(width: transcriptW, alignment: .leading)
-                columnHeader("CLEANING", color: theme.tertiary)
-                    .frame(width: cleaningW, alignment: .leading)
-                columnHeader("ANALYSIS", color: theme.secondary)
-                    .frame(width: analysisW, alignment: .leading)
-                columnHeader("TASK", color: theme.warning)
-                    .frame(width: taskW, alignment: .leading)
-                columnHeader("RESULT", color: theme.accent)
-                    .frame(width: resultW, alignment: .leading)
-            }
-            .padding(.horizontal, 16)
+        return HStack(spacing: 0) {
+            columnHeader("TIME", color: theme.textTertiary)
+                .frame(width: 56, alignment: .leading)
+            columnHeader("TRANSCRIPT", color: theme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            columnHeader("CLEANING", color: theme.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            columnHeader("ANALYSIS", color: theme.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            columnHeader("TASK", color: theme.warning)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            columnHeader("RESULT", color: theme.accent)
+                .frame(width: 90, alignment: .leading)
         }
+        .padding(.horizontal, 14)
         .frame(height: 28)
         .overlay(
             Rectangle()
@@ -771,7 +765,6 @@ struct LogsPipelineView: View {
     private func pipelineRow(group: PipelineGroup) -> some View {
         let theme = ThemeManager.shared.current
         let isSelected = selectedRowID == group.id
-        let isMerged = group.rawChunks.count > 1
 
         return Button {
             withAnimation(.easeInOut(duration: 0.2)) {
@@ -785,56 +778,28 @@ struct LogsPipelineView: View {
                     .fill(isSelected ? theme.accent : Color.clear)
                     .frame(width: 2)
 
-                GeometryReader { geo in
-                    let available = max(0, geo.size.width - 60 - 30) // 60 for TIME, 30 for padding
-                    let transcriptW = available * 0.22
-                    let cleaningW = available * 0.18
-                    let analysisW = available * 0.18
-                    let taskW = available * 0.24
-                    let resultW = available * 0.18
+                HStack(alignment: .top, spacing: 0) {
+                    timeColumn(group: group)
+                        .frame(width: 56, alignment: .leading)
 
-                    HStack(spacing: 0) {
-                        // Time column
-                        timeColumn(group: group)
-                            .frame(width: 60, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .clipped()
+                    transcriptColumn(group: group)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                        // Transcript column
-                        transcriptColumn(group: group)
-                            .frame(width: transcriptW, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .clipped()
+                    cleaningColumn(group: group)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                        // Cleaning column
-                        cleaningColumn(group: group)
-                            .frame(width: cleaningW, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .clipped()
+                    analysisColumn(group: group)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                        // Analysis column
-                        analysisColumn(group: group)
-                            .frame(width: analysisW, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .clipped()
+                    taskColumn(group: group)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                        // Task column
-                        taskColumn(group: group)
-                            .frame(width: taskW, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .clipped()
-
-                        // Result column
-                        resultColumn(group: group)
-                            .frame(width: resultW, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .clipped()
-                    }
-                    .padding(.horizontal, 16)
+                    resultColumn(group: group)
+                        .frame(width: 90, alignment: .leading)
                 }
+                .padding(.horizontal, 14)
                 .padding(.vertical, 8)
             }
-            .frame(minHeight: isMerged ? 70 : 48)
             .background(isSelected ? theme.accent.opacity(0.06) : Color.clear)
             .overlay(
                 Rectangle()
@@ -970,11 +935,36 @@ struct LogsPipelineView: View {
                 if let skill = task.skill {
                     TagView(type: .action, label: skill, small: true)
                 }
+                if let wf = task.workflow {
+                    TagView(type: .status, label: wf, small: true)
+                }
             }
             Text(String(task.title.prefix(50)))
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundColor(theme.warning)
                 .lineLimit(2)
+
+            // Run button for stuck ongoing tasks
+            if isPipelineTask && task.status == .ongoing && task.result.steps == ["Processing..."] {
+                Button {
+                    appState.executeTask(id: task.id)
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 7))
+                        Text("Run")
+                            .font(.system(size: 8))
+                    }
+                    .foregroundColor(theme.accent)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(theme.accent.opacity(0.18))
+                    )
+                }
+                .buttonStyle(.plain)
+            }
 
             // Accept / Dismiss for pending tasks
             if task.status == .pending_approval || task.status == .needs_input {
@@ -1319,27 +1309,112 @@ struct LogsPipelineView: View {
 
     private func expandedAnalysis(group: PipelineGroup) -> some View {
         let theme = ThemeManager.shared.current
+        let isEditing = editingAnalysisID == group.analysisID && group.analysisID != nil
         return VStack(alignment: .leading, spacing: 6) {
-            if !group.analysisTags.isEmpty {
+            if isEditing {
+                // Editable mode
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Text("Project").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                        Picker("", selection: $editProject) {
+                            Text("none").tag("")
+                            ForEach(appState.projects, id: \.id) { p in
+                                Text(p.name).tag(p.name)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 100)
+                    }
+                    HStack(spacing: 4) {
+                        Text("Priority").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                        Picker("", selection: $editPriority) {
+                            Text("none").tag("")
+                            Text("p0").tag("p0")
+                            Text("p1").tag("p1")
+                            Text("p2").tag("p2")
+                            Text("p3").tag("p3")
+                        }
+                        .labelsHidden()
+                        .frame(width: 70)
+                    }
+                    HStack(spacing: 4) {
+                        Text("Tags").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                        TextField("comma-separated", text: $editTags)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 9))
+                            .foregroundColor(theme.textPrimary)
+                            .padding(3)
+                            .background(RoundedRectangle(cornerRadius: 3).fill(theme.glass.opacity(0.5)))
+                    }
+                    HStack(spacing: 4) {
+                        Text("Summary").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                    }
+                    TextField("Summary", text: $editSummary)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.textPrimary)
+                        .padding(3)
+                        .background(RoundedRectangle(cornerRadius: 3).fill(theme.glass.opacity(0.5)))
+                    HStack(spacing: 6) {
+                        Button("Save") {
+                            if let aid = group.analysisID {
+                                let proj = editProject.isEmpty ? nil : editProject
+                                let projID = appState.projects.first(where: { $0.name == editProject })?.id
+                                let pri = editPriority.isEmpty ? nil : editPriority
+                                let tags = editTags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                                appState.updateAnalysis(id: aid, projectName: proj, projectID: projID, priority: pri, tags: tags, summary: editSummary)
+                            }
+                            editingAnalysisID = nil
+                        }
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(theme.accent)
+                        .buttonStyle(.plain)
+
+                        Button("Cancel") { editingAnalysisID = nil }
+                        .font(.system(size: 8))
+                        .foregroundColor(theme.textTertiary)
+                        .buttonStyle(.plain)
+                    }
+                }
+            } else {
+                // Read-only mode with edit button
                 HStack(spacing: 3) {
+                    if let pri = group.analysisPriority {
+                        TagView(type: .status, label: pri, small: true)
+                    }
                     ForEach(group.analysisTags, id: \.self) { tag in
                         TagView(type: .action, label: tag, small: true)
                     }
                     if let proj = group.analysisProject {
                         TagView(type: .project, label: proj, small: true)
                     }
+                    if group.analysisID != nil {
+                        Spacer()
+                        Button {
+                            editProject = group.analysisProject ?? ""
+                            editPriority = group.analysisPriority ?? ""
+                            editTags = group.analysisTags.joined(separator: ", ")
+                            editSummary = group.analysisText ?? ""
+                            editingAnalysisID = group.analysisID
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 8))
+                                .foregroundColor(theme.textTertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-            }
-            if let text = group.analysisText {
-                Text(text)
-                    .font(.system(size: 9))
-                    .foregroundColor(theme.textPrimary)
-                    .textSelection(.enabled)
-            } else {
-                Text("No analysis generated")
-                    .font(.system(size: 9))
-                    .foregroundColor(theme.textTertiary)
-                    .italic()
+                if let text = group.analysisText {
+                    Text(text)
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.textPrimary)
+                        .textSelection(.enabled)
+                } else {
+                    Text("No analysis generated")
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.textTertiary)
+                        .italic()
+                }
             }
         }
     }
@@ -1365,71 +1440,137 @@ struct LogsPipelineView: View {
     private func expandedTaskCard(task: PipelineTask) -> some View {
         let theme = ThemeManager.shared.current
         let isPipelineTask = task.id.hasPrefix("T-")
+        let isEditing = editingTaskID == task.id && isPipelineTask
 
         return VStack(alignment: .leading, spacing: 6) {
-            // ID + project + mode
-            HStack(spacing: 4) {
-                Text(task.id)
-                    .font(.system(size: 7, design: .monospaced))
-                    .foregroundColor(theme.textTertiary)
-                TagView(type: .project, label: task.project, small: true)
-                ModeBadge(mode: modeBadgeMode(task.mode))
-            }
+            if isEditing {
+                // Editable mode
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Text(task.id)
+                            .font(.system(size: 7, design: .monospaced))
+                            .foregroundColor(theme.textTertiary)
+                        Picker("", selection: $editTaskProject) {
+                            Text("none").tag("")
+                            ForEach(appState.projects, id: \.id) { p in
+                                Text(p.name).tag(p.name)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 100)
+                    }
+                    Text("Title").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                    TextField("Task title", text: $editTaskTitle)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(theme.warning)
+                        .padding(4)
+                        .background(RoundedRectangle(cornerRadius: 3).fill(theme.glass.opacity(0.5)))
+                    Text("Prompt").font(.system(size: 7, weight: .medium)).foregroundColor(theme.textTertiary)
+                    TextEditor(text: $editTaskPrompt)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(theme.textSecondary)
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 60, maxHeight: 120)
+                        .padding(4)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(theme.glass.opacity(0.5)))
+                    HStack(spacing: 6) {
+                        Button("Save") {
+                            let proj = editTaskProject.isEmpty ? nil : editTaskProject
+                            let projID = appState.projects.first(where: { $0.name == editTaskProject })?.id
+                            appState.updateTaskDetails(id: task.id, title: editTaskTitle, prompt: editTaskPrompt, projectName: proj, projectID: projID)
+                            editingTaskID = nil
+                        }
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(theme.accent)
+                        .buttonStyle(.plain)
 
-            // Title
-            Text(task.title)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(theme.warning)
-                .textSelection(.enabled)
-
-            // Prompt
-            Text(task.prompt)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(theme.textSecondary)
-                .textSelection(.enabled)
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(theme.glass.opacity(0.5))
-                )
-
-            // Skill & workflow info
-            if task.skill != nil || task.workflow != nil {
+                        Button("Cancel") { editingTaskID = nil }
+                        .font(.system(size: 8))
+                        .foregroundColor(theme.textTertiary)
+                        .buttonStyle(.plain)
+                    }
+                }
+            } else {
+                // Read-only mode
+                // ID + project + mode + edit button
                 HStack(spacing: 4) {
-                    if let skill = task.skill {
-                        TagView(type: .action, label: "Skill: \(skill)", small: true)
-                    }
-                    if let wf = task.workflow {
-                        TagView(type: .status, label: wf, small: true)
+                    Text(task.id)
+                        .font(.system(size: 7, design: .monospaced))
+                        .foregroundColor(theme.textTertiary)
+                    TagView(type: .project, label: task.project, small: true)
+                    ModeBadge(mode: modeBadgeMode(task.mode))
+                    if isPipelineTask {
+                        Spacer()
+                        Button {
+                            editTaskTitle = task.title
+                            editTaskPrompt = task.prompt
+                            editTaskProject = task.project
+                            editingTaskID = task.id
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 8))
+                                .foregroundColor(theme.textTertiary)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
-            }
 
-            // Missing connection warning
-            if let missing = task.missingConnection {
-                HStack(spacing: 3) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 8))
-                        .foregroundColor(theme.warning)
-                    Text("Missing: \(missing)")
-                        .font(.system(size: 8))
-                        .foregroundColor(theme.warning)
-                }
-            }
+                // Title
+                Text(task.title)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(theme.warning)
+                    .textSelection(.enabled)
 
-            // Pending question
-            if let question = task.pendingQuestion {
-                Text(question)
-                    .font(.system(size: 9))
-                    .foregroundColor(theme.secondary)
-                    .italic()
-                    .padding(6)
+                // Prompt
+                Text(task.prompt)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(theme.textSecondary)
+                    .textSelection(.enabled)
+                    .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: 5)
-                            .fill(theme.secondary.opacity(0.08))
+                            .fill(theme.glass.opacity(0.5))
                     )
+
+                // Skill & workflow info
+                if task.skill != nil || task.workflow != nil {
+                    HStack(spacing: 4) {
+                        if let skill = task.skill {
+                            TagView(type: .action, label: "Skill: \(skill)", small: true)
+                        }
+                        if let wf = task.workflow {
+                            TagView(type: .status, label: wf, small: true)
+                        }
+                    }
+                }
+
+                // Missing connection warning
+                if let missing = task.missingConnection {
+                    HStack(spacing: 3) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 8))
+                            .foregroundColor(theme.warning)
+                        Text("Missing: \(missing)")
+                            .font(.system(size: 8))
+                            .foregroundColor(theme.warning)
+                    }
+                }
+
+                // Pending question
+                if let question = task.pendingQuestion {
+                    Text(question)
+                        .font(.system(size: 9))
+                        .foregroundColor(theme.secondary)
+                        .italic()
+                        .padding(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(theme.secondary.opacity(0.08))
+                        )
+                }
             }
 
             // Accept / Dismiss actions
@@ -1528,7 +1669,7 @@ struct LogsPipelineView: View {
             } else {
                 ForEach(group.tasks) { task in
                     VStack(alignment: .leading, spacing: 6) {
-                        // Status summary
+                        // Status summary + actions
                         HStack(spacing: 5) {
                             StatusDot(status: task.status.rawValue)
                             Text(task.result.finalStatus)
@@ -1540,17 +1681,50 @@ struct LogsPipelineView: View {
                                     .font(.system(size: 7))
                                     .foregroundColor(theme.textTertiary)
                             }
+                            // Chat button for active/completed sessions
+                            if task.status == .ongoing || task.status == .completed {
+                                Button {
+                                    chatTaskID = task.id
+                                    showChatModal = true
+                                } label: {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "bubble.left.and.bubble.right.fill")
+                                            .font(.system(size: 7))
+                                        Text("Chat")
+                                            .font(.system(size: 7, weight: .semibold))
+                                    }
+                                    .foregroundColor(theme.accent)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(theme.accent.opacity(0.12))
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
 
-                        // Step-by-step detail
+                        // Step-by-step detail (show last 8 steps + scrollable)
+                        let steps = task.result.steps
+                        let displaySteps = steps.count > 8 ? Array(steps.suffix(8)) : steps
+                        let offset = steps.count > 8 ? steps.count - 8 : 0
+
                         VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(task.result.steps.enumerated()), id: \.offset) { idx, step in
+                            if steps.count > 8 {
+                                Text("\(steps.count - 8) earlier steps hidden")
+                                    .font(.system(size: 7))
+                                    .foregroundColor(theme.textTertiary)
+                                    .italic()
+                            }
+                            ForEach(Array(displaySteps.enumerated()), id: \.offset) { idx, step in
                                 HStack(alignment: .top, spacing: 6) {
+                                    let stepNum = offset + idx + 1
                                     Circle()
-                                        .fill(theme.accent.opacity(0.60))
+                                        .fill(stepColor(step: step, theme: theme))
                                         .frame(width: 10, height: 10)
                                         .overlay(
-                                            Text("\(idx + 1)")
+                                            Text("\(stepNum)")
                                                 .font(.system(size: 6, weight: .bold))
                                                 .foregroundColor(
                                                     theme.isDark ? Color.black : Color.white
@@ -1558,14 +1732,342 @@ struct LogsPipelineView: View {
                                         )
                                     Text(step)
                                         .font(.system(size: 9))
-                                        .foregroundColor(theme.textSecondary)
+                                        .foregroundColor(stepTextColor(step: step, theme: theme))
                                         .textSelection(.enabled)
+                                        .lineLimit(3)
                                 }
                             }
+                        }
+
+                        // Inline chat input for active sessions
+                        if task.status == .ongoing && appState.taskHasActiveSession(id: task.id) {
+                            HStack(spacing: 4) {
+                                TextField("Reply to Claude...", text: $chatInput)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 9))
+                                    .foregroundColor(theme.textPrimary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(theme.glass.opacity(0.5))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                                    )
+                                    .onSubmit {
+                                        sendChatMessage(taskID: task.id)
+                                    }
+                                Button {
+                                    sendChatMessage(taskID: task.id)
+                                } label: {
+                                    Image(systemName: "arrow.up.circle.fill")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(chatInput.isEmpty ? theme.textTertiary : theme.accent)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(chatInput.isEmpty)
+                            }
+                            .padding(.top, 4)
+                        }
+
+                        // Follow-on actions for completed tasks
+                        if task.status == .completed {
+                            followOnActions(task: task, group: group, theme: theme)
                         }
                     }
                 }
             }
         }
+        .sheet(isPresented: $showChatModal) {
+            if let taskID = chatTaskID {
+                chatModalView(taskID: taskID)
+            }
+        }
+    }
+
+    // MARK: - Follow-On Actions
+
+    @ViewBuilder
+    private func followOnActions(task: PipelineTask, group: PipelineGroup, theme: ThemePalette) -> some View {
+        HStack(spacing: 6) {
+            // "Update Build & Relaunch" — only for autoclawd project
+            if isAutoClawdTask(task: task) {
+                actionButton(
+                    icon: "hammer.fill",
+                    label: "Rebuild & Relaunch",
+                    color: theme.accent,
+                    theme: theme
+                ) {
+                    triggerSelfRebuild(task: task)
+                }
+            }
+
+            // "Raise PR"
+            actionButton(
+                icon: "arrow.triangle.branch",
+                label: "Raise PR",
+                color: theme.secondary,
+                theme: theme
+            ) {
+                triggerRaisePR(task: task)
+            }
+
+            // "Commit Changes"
+            actionButton(
+                icon: "checkmark.circle.fill",
+                label: "Commit",
+                color: theme.warning,
+                theme: theme
+            ) {
+                triggerCommit(task: task)
+            }
+        }
+        .padding(.top, 6)
+    }
+
+    private func actionButton(
+        icon: String, label: String, color: Color, theme: ThemePalette,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 7))
+                Text(label)
+                    .font(.system(size: 7, weight: .semibold))
+            }
+            .foregroundColor(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(color.opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(color.opacity(0.25), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func isAutoClawdTask(task: PipelineTask) -> Bool {
+        task.project.lowercased().contains("autoclawd") || task.project.lowercased().contains("auto clawd")
+    }
+
+    private func triggerSelfRebuild(task: PipelineTask) {
+        // Find the autoclawd project path
+        guard let project = appState.projects.first(where: {
+            $0.name.lowercased().contains("autoclawd") || $0.name.lowercased().contains("auto clawd")
+        }) else {
+            Log.warn(.pipeline, "Self-rebuild: could not find AutoClawd project")
+            return
+        }
+        TaskExecutionService.openRebuildTerminal(projectPath: project.localPath, taskID: task.id)
+    }
+
+    private func triggerRaisePR(task: PipelineTask) {
+        // Send follow-up to Claude to create a PR
+        let message = "Create a pull request for the changes you just made. Use a descriptive title and summary."
+        appState.sendMessageToTask(id: task.id, message: message)
+    }
+
+    private func triggerCommit(task: PipelineTask) {
+        // Send follow-up to Claude to commit changes
+        let message = "Commit all the changes you just made with a clear, descriptive commit message."
+        appState.sendMessageToTask(id: task.id, message: message)
+    }
+
+    // MARK: - Step Color Helpers
+
+    private func stepColor(step: String, theme: ThemePalette) -> Color {
+        if step.hasPrefix("Using ") { return theme.warning.opacity(0.70) }
+        if step.hasPrefix("Running ") { return theme.warning.opacity(0.70) }
+        if step.hasPrefix("Error:") || step.contains("failed") { return theme.error.opacity(0.70) }
+        if step.hasPrefix("You:") { return theme.secondary.opacity(0.70) }
+        if step.contains("completed successfully") { return theme.accent }
+        if step.contains("thinking") || step.contains("responding") { return theme.tertiary.opacity(0.70) }
+        return theme.accent.opacity(0.60)
+    }
+
+    private func stepTextColor(step: String, theme: ThemePalette) -> Color {
+        if step.hasPrefix("Using ") || step.hasPrefix("Running ") { return theme.warning }
+        if step.hasPrefix("Error:") || step.contains("failed") { return theme.error }
+        if step.hasPrefix("You:") { return theme.secondary }
+        if step.contains("thinking") || step.contains("responding") { return theme.tertiary }
+        return theme.textSecondary
+    }
+
+    // MARK: - Chat Helpers
+
+    private func sendChatMessage(taskID: String) {
+        let msg = chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !msg.isEmpty else { return }
+        appState.sendMessageToTask(id: taskID, message: msg)
+        chatInput = ""
+    }
+
+    // MARK: - Chat Modal
+
+    private func chatModalView(taskID: String) -> some View {
+        let theme = ThemeManager.shared.current
+        let steps = appState.pipelineStore.fetchSteps(taskID: taskID)
+        let task = appState.pipelineTasks.first { $0.id == taskID }
+        let isActive = appState.taskHasActiveSession(id: taskID)
+
+        return VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(task?.title ?? taskID)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(theme.textPrimary)
+                    HStack(spacing: 6) {
+                        StatusDot(status: task?.status.rawValue ?? "ongoing")
+                        Text(task?.status.rawValue ?? "ongoing")
+                            .font(.system(size: 9))
+                            .foregroundColor(theme.textTertiary)
+                        if isActive {
+                            Text("Session active")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundColor(theme.accent)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(theme.accent.opacity(0.15))
+                                )
+                        }
+                    }
+                }
+                Spacer()
+                if isActive {
+                    Button {
+                        appState.stopTaskSession(id: taskID)
+                    } label: {
+                        Text("Stop")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(theme.error)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(theme.error.opacity(0.12))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button { showChatModal = false } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(theme.textTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(theme.glass.opacity(0.5))
+
+            Divider().background(theme.glassBorder)
+
+            // Message list
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(steps.sorted(by: { $0.stepIndex < $1.stepIndex })) { step in
+                            chatBubble(step: step, theme: theme)
+                                .id(step.id)
+                        }
+                    }
+                    .padding(12)
+                }
+                .onChange(of: steps.count) { _ in
+                    if let last = steps.sorted(by: { $0.stepIndex < $1.stepIndex }).last {
+                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+            }
+
+            // Input area
+            if isActive {
+                Divider().background(theme.glassBorder)
+                HStack(spacing: 8) {
+                    TextField("Send a message to Claude...", text: $chatInput)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.textPrimary)
+                        .onSubmit { sendChatMessage(taskID: taskID) }
+                    Button {
+                        sendChatMessage(taskID: taskID)
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(chatInput.isEmpty ? theme.textTertiary : theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(chatInput.isEmpty)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(theme.glass.opacity(0.3))
+            }
+        }
+        .frame(minWidth: 500, minHeight: 400)
+        .background(theme.surface)
+    }
+
+    private func chatBubble(step: TaskExecutionStep, theme: ThemePalette) -> some View {
+        let isUser = step.description.hasPrefix("You:")
+        let isTool = step.description.hasPrefix("Using ")
+        let isToolDone = step.description.contains(" done")
+        let isError = step.description.hasPrefix("Error:") || step.status == "failed"
+        let isResult = step.description.contains("completed successfully")
+
+        let bgColor: Color = {
+            if isUser { return theme.secondary.opacity(0.12) }
+            if isTool { return theme.warning.opacity(0.08) }
+            if isError { return theme.error.opacity(0.08) }
+            if isResult { return theme.accent.opacity(0.12) }
+            return theme.glass.opacity(0.4)
+        }()
+
+        let textColor: Color = {
+            if isUser { return theme.secondary }
+            if isTool { return theme.warning }
+            if isError { return theme.error }
+            return theme.textPrimary
+        }()
+
+        return HStack {
+            if isUser { Spacer(minLength: 40) }
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 2) {
+                if isTool || isToolDone {
+                    HStack(spacing: 4) {
+                        Image(systemName: "wrench.fill")
+                            .font(.system(size: 7))
+                            .foregroundColor(theme.warning.opacity(0.6))
+                        Text(step.description)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(textColor)
+                            .textSelection(.enabled)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(bgColor))
+                } else {
+                    Text(isUser ? String(step.description.dropFirst(4)).trimmingCharacters(in: .whitespaces) : step.description)
+                        .font(.system(size: 10))
+                        .foregroundColor(textColor)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(bgColor))
+                }
+            }
+            if !isUser { Spacer(minLength: 40) }
+        }
     }
 }
+

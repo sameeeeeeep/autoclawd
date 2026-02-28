@@ -231,19 +231,9 @@ struct PillView: View {
             case .frosted:
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .fill(.ultraThinMaterial)
-            case .transparent:
+            case .solid:
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Color.black.opacity(0.35))
-            case .dynamic:
-                ZStack {
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .opacity(isActiveState ? 1 : 0)
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(Color.black.opacity(0.35))
-                        .opacity(isActiveState ? 0 : 1)
-                }
-                .animation(.easeInOut(duration: 0.4), value: isActiveState)
+                    .fill(Color(NSColor.windowBackgroundColor))
             }
 
             // Layer 2: Color gradient tint (accent → secondary diagonal)
