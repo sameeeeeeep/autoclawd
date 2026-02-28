@@ -311,27 +311,52 @@ struct LogsPipelineView: View {
 
     var body: some View {
         let theme = ThemeManager.shared.current
-        VStack(spacing: 0) {
-            filterBar
-            HStack(spacing: 0) {
-                Group {
-                    switch viewMode {
-                    case .pipeline:
-                        pipelineContent
-                    case .rawLogs:
-                        rawLogsContent
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { geo in
+            let showDetailInline = geo.size.width >= 700
 
-                if selectedRowID != nil, viewMode == .pipeline {
-                    detailSidebar
-                        .frame(minWidth: 220, idealWidth: 300, maxWidth: 360)
-                        .transition(.move(edge: .trailing))
+            VStack(spacing: 0) {
+                filterBar
+                ZStack(alignment: .trailing) {
+                    HStack(spacing: 0) {
+                        Group {
+                            switch viewMode {
+                            case .pipeline:
+                                pipelineContent
+                            case .rawLogs:
+                                rawLogsContent
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        if selectedRowID != nil, viewMode == .pipeline, showDetailInline {
+                            detailSidebar
+                                .frame(minWidth: 200, idealWidth: 280, maxWidth: 340)
+                                .transition(.move(edge: .trailing))
+                        }
+                    }
+
+                    // Overlay detail sidebar on narrow windows
+                    if selectedRowID != nil, viewMode == .pipeline, !showDetailInline {
+                        ZStack(alignment: .trailing) {
+                            Color.black.opacity(0.3)
+                                .ignoresSafeArea()
+                                .onTapGesture {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        selectedRowID = nil
+                                    }
+                                }
+
+                            detailSidebar
+                                .frame(width: min(320, geo.size.width * 0.8))
+                                .background(theme.surface)
+                                .shadow(color: .black.opacity(0.2), radius: 12)
+                                .transition(.move(edge: .trailing))
+                        }
+                    }
                 }
             }
         }
-        .background(theme.isDark ? Color.black.opacity(0.05) : Color.black.opacity(0.01))
+        .background(ThemeManager.shared.current.isDark ? Color.black.opacity(0.05) : Color.black.opacity(0.01))
         .onAppear { loadData() }
         .task {
             // Auto-refresh every 2 seconds
@@ -354,11 +379,13 @@ struct LogsPipelineView: View {
     private var filterBar: some View {
         let theme = ThemeManager.shared.current
         return VStack(alignment: .leading, spacing: 8) {
-            // Title row
+            // Title row — wraps extraction actions below on narrow windows
             HStack(spacing: 8) {
                 Text("Pipeline Logs")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundColor(theme.textPrimary)
+                    .lineLimit(1)
+                    .layoutPriority(1)
 
                 // View mode picker
                 Picker("", selection: $viewMode) {
@@ -367,7 +394,7 @@ struct LogsPipelineView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 160)
+                .frame(minWidth: 120, maxWidth: 160)
 
                 if viewMode == .pipeline {
                     TagView(type: .status, label: "\(filteredGroups.count) groups", small: true)
@@ -375,7 +402,7 @@ struct LogsPipelineView: View {
                     TagView(type: .status, label: "\(logEntries.count) entries", small: true)
                 }
 
-                Spacer()
+                Spacer(minLength: 4)
 
                 // Extraction actions
                 if viewMode == .pipeline {
@@ -383,8 +410,9 @@ struct LogsPipelineView: View {
                 }
             }
 
-            // Filter row (only for pipeline mode)
+            // Filter row (only for pipeline mode) — scrollable so it works on narrow windows
             if viewMode == .pipeline {
+                ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     Text("Filter:")
                         .font(.system(size: 8, weight: .regular))
@@ -450,8 +478,8 @@ struct LogsPipelineView: View {
                         .buttonStyle(.plain)
                     }
 
-                    Spacer()
                 }
+                } // end ScrollView
             }
         }
         .padding(.horizontal, 12)
@@ -632,31 +660,43 @@ struct LogsPipelineView: View {
 
     private func logRow(_ entry: LogEntry) -> some View {
         let theme = ThemeManager.shared.current
-        return HStack(alignment: .top, spacing: 6) {
-            Text(Self.logTimeFormatter.string(from: entry.timestamp))
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(theme.textTertiary)
-                .frame(width: 60, alignment: .leading)
+        return GeometryReader { geo in
+            let isCompact = geo.size.width < 400
 
-            Text(entry.level.rawValue)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(logLevelColor(entry.level))
-                .frame(width: 36, alignment: .leading)
+            HStack(alignment: .top, spacing: isCompact ? 4 : 6) {
+                Text(Self.logTimeFormatter.string(from: entry.timestamp))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(theme.textTertiary)
+                    .frame(minWidth: 48, alignment: .leading)
+                    .layoutPriority(-1)
 
-            Text("[\(entry.component.rawValue)]")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(theme.textSecondary)
-                .frame(width: 80, alignment: .leading)
+                Text(entry.level.rawValue)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(logLevelColor(entry.level))
+                    .frame(minWidth: 28, alignment: .leading)
+                    .layoutPriority(-1)
 
-            Text(entry.message)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(theme.textPrimary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
+                if !isCompact {
+                    Text("[\(entry.component.rawValue)]")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(theme.textSecondary)
+                        .frame(minWidth: 50, alignment: .leading)
+                        .lineLimit(1)
+                        .layoutPriority(-1)
+                }
+
+                Text(entry.message)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(theme.textPrimary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+            }
+            .padding(.vertical, 3)
+            .padding(.horizontal, 6)
         }
-        .padding(.vertical, 3)
-        .padding(.horizontal, 6)
+        .frame(minHeight: 20)
         .background(
             entry.level == .error
                 ? ThemeManager.shared.current.error.opacity(0.06)

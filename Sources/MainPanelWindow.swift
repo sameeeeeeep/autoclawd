@@ -35,7 +35,7 @@ final class MainPanelWindow: NSWindow {
         title = "AutoClawd"
         titlebarAppearsTransparent = false
         isReleasedWhenClosed = false
-        minSize = NSSize(width: 700, height: 480)
+        minSize = NSSize(width: 500, height: 400)
         center()
 
         contentView = NSHostingView(rootView: AppearanceWrapper(appState: appState))
