@@ -801,7 +801,7 @@ window.receiveEvent = function(type, data) {
 
     case 'transcript':
       pipeline.transcript = true;
-      waBot.say('Transcript in! 📥', 220);
+      waBot.say('Transcript in! [IN]', 220);
       waBot.flash('#38BDF8');
       waBot.work();
       focusOn(waBot);
@@ -873,7 +873,7 @@ window.receiveEvent = function(type, data) {
 
     case 'task_done':
       pipeline.executing = false;
-      clawd.say('Done! 🎉', 200);
+      clawd.say('Done! [OK]', 200);
       clawd.flash('#4ADE80');
       // Deliver result back through door
       clawd.walkTo(20, 10, () => {
@@ -890,7 +890,7 @@ window.receiveEvent = function(type, data) {
       break;
 
     case 'whatsapp':
-      waBot.say('WA message! 📱', 200);
+      waBot.say('WA message! [WA]', 200);
       waBot.flash('#25D366');
       focusOn(waBot);
       break;
@@ -994,8 +994,8 @@ function loop() {
 targetCX = 0; targetCY = 2 * T;
 camX = 0; camY = 2 * T;
 
-setTimeout(() => dot.say('Welcome to AutoClawd HQ! 👻', 260), 600);
-setTimeout(() => clawd.say('Ready to execute! 🦀', 220), 2400);
+setTimeout(() => dot.say('Welcome to AutoClawd HQ!', 260), 600);
+setTimeout(() => clawd.say('Ready to execute!', 220), 2400);
 
 requestAnimationFrame(loop);
 
