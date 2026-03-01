@@ -201,6 +201,18 @@ struct PixelWorldView: View {
                 bridge.coordinator.sendEvent(.transcript)
             }
         }
+        .onReceive(appState.$locationName.dropFirst()) { name in
+            let safe = name.replacingOccurrences(of: "\"", with: "\\\"")
+            bridge.coordinator.send("setLocation(\"\(safe)\")")
+        }
+        .onAppear {
+            // Send initial location once the web view is ready (slight delay for page load)
+            let name = appState.locationName
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                let safe = name.replacingOccurrences(of: "\"", with: "\\\"")
+                bridge.coordinator.send("setLocation(\"\(safe)\")")
+            }
+        }
     }
 
     // MARK: - Control Bar
@@ -234,29 +246,6 @@ struct PixelWorldView: View {
             .buttonStyle(.bordered)
             .controlSize(.mini)
 
-            Divider().frame(height: 16)
-
-            // Demo event buttons (for testing without live pipeline)
-            Button {
-                bridge.coordinator.sendEvent(.transcript)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    bridge.coordinator.sendEvent(.cleaning(duration: 3))
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    bridge.coordinator.sendEvent(.analysis(duration: 4))
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) {
-                    bridge.coordinator.sendEvent(.taskCreated(title: "Demo task", mode: "auto"))
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 7) {
-                    bridge.coordinator.sendEvent(.taskDone)
-                }
-            } label: {
-                Label("Demo", systemImage: "play.circle")
-                    .font(.system(size: 10, weight: .medium))
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.mini)
         }
         .padding(6)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
