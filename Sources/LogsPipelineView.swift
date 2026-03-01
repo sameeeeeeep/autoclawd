@@ -916,12 +916,27 @@ struct LogsPipelineView: View {
                 Text(task.id)
                     .font(.system(size: 7, design: .monospaced))
                     .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                    .fixedSize()
                 ModeBadge(mode: modeBadgeMode(task.mode))
-                if let skill = task.skill {
-                    TagView(type: .action, label: skill, small: true)
-                }
-                if let wf = task.workflow {
-                    TagView(type: .status, label: wf, small: true)
+                    .fixedSize()
+                ViewThatFits(in: .horizontal) {
+                    // All tags
+                    HStack(spacing: 4) {
+                        if let skill = task.skill {
+                            TagView(type: .action, label: skill, small: true)
+                        }
+                        if let wf = task.workflow {
+                            TagView(type: .status, label: wf, small: true)
+                        }
+                    }
+                    // Skill only (drop workflow when narrow)
+                    HStack(spacing: 4) {
+                        if let skill = task.skill {
+                            TagView(type: .action, label: skill, small: true)
+                        }
+                    }
+                    // Nothing (very narrow)
+                    EmptyView()
                 }
             }
             Text(String(task.title.prefix(50)))

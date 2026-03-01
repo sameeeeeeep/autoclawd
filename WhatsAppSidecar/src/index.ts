@@ -77,6 +77,9 @@ let messageBuffer: BufferedMessage[] = [];
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let isShuttingDown = false;
 
+// Track message IDs sent by the bot (via POST /send) so we can exclude them from polls
+const botSentMessageIDs: Set<string> = new Set();
+
 // ─── WhatsApp Connection ─────────────────────────────────────────────────────
 
 async function connectWhatsApp(): Promise<void> {
@@ -172,6 +175,12 @@ async function connectWhatsApp(): Promise<void> {
       if (!msg.message) continue;
       const rawJid = msg.key.remoteJid;
       if (!rawJid || rawJid === 'status@broadcast') continue;
+
+      // Skip messages sent by the bot itself (via POST /send)
+      if (msg.key.id && botSentMessageIDs.has(msg.key.id)) {
+        botSentMessageIDs.delete(msg.key.id); // clean up
+        continue;
+      }
 
       const timestamp = Number(msg.messageTimestamp) || Math.floor(Date.now() / 1000);
       const sender = msg.key.participant || msg.key.remoteJid || '';
@@ -294,7 +303,16 @@ app.post('/send', async (req, res) => {
     return;
   }
   try {
-    await sock.sendMessage(jid, { text });
+    const sentMsg = await sock.sendMessage(jid, { text });
+    // Track this message ID so we don't pick it up as a new incoming message
+    if (sentMsg?.key?.id) {
+      botSentMessageIDs.add(sentMsg.key.id);
+      // Cap the set size
+      if (botSentMessageIDs.size > 200) {
+        const entries = [...botSentMessageIDs];
+        entries.slice(0, 100).forEach((id) => botSentMessageIDs.delete(id));
+      }
+    }
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

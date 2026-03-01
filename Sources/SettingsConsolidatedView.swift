@@ -667,7 +667,7 @@ struct WhatsAppConnectionCard: View {
 
         if !WhatsAppSidecar.shared.running {
             WhatsAppSidecar.shared.start()
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
 
         do {
@@ -705,7 +705,7 @@ struct WhatsAppConnectionCard: View {
     }
 
     private func pollStatus() async {
-        let status = await WhatsAppService.shared.checkHealth()
+        let (status, phoneNumber) = await WhatsAppService.shared.checkHealth()
         appState.whatsAppStatus = status
 
         switch status {
@@ -718,6 +718,9 @@ struct WhatsAppConnectionCard: View {
             pollTimer = nil
             qrImage = nil
             SettingsManager.shared.whatsAppEnabled = true
+            if let phone = phoneNumber, !phone.isEmpty {
+                SettingsManager.shared.whatsAppMyJID = phone
+            }
             appState.startWhatsApp()
         case .disconnected:
             qrImage = nil

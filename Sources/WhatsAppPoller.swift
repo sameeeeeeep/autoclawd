@@ -3,8 +3,8 @@ import Foundation
 // MARK: - WhatsAppPoller
 
 /// Polls the WhatsApp sidecar for new messages every 2 seconds.
-/// Routes voice notes through Groq transcription, then processes all messages
-/// through the existing pipeline.
+/// Routes voice notes through the app's selected transcription engine,
+/// then processes all messages through the existing pipeline.
 @MainActor
 final class WhatsAppPoller: ObservableObject {
 
@@ -15,6 +15,11 @@ final class WhatsAppPoller: ObservableObject {
     private var pollTimer: Timer?
     private var lastMessageTimestamp: TimeInterval = 0
     private weak var appState: AppState?
+
+    /// IDs of messages we've already processed (prevents double-processing and bot reply loops).
+    private var processedMessageIDs: Set<String> = []
+    /// Prevents concurrent polls (QA can take >2s, overlapping polls cause loops).
+    private var isPollInProgress = false
 
     /// Maximum messages to keep in the recent buffer.
     private let maxRecentMessages = 100
@@ -31,6 +36,11 @@ final class WhatsAppPoller: ObservableObject {
         // Set cursor to now so we don't replay old messages
         lastMessageTimestamp = Date().timeIntervalSince1970
 
+        // Ensure myJID is set — fetch from health if needed
+        Task { @MainActor in
+            await ensureMyJID()
+        }
+
         pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 await self?.poll()
@@ -38,6 +48,25 @@ final class WhatsAppPoller: ObservableObject {
         }
 
         Log.info(.system, "[WhatsApp] Poller started")
+    }
+
+    /// Make sure whatsAppMyJID is populated — fetch from sidecar health if not.
+    private func ensureMyJID() async {
+        let existing = SettingsManager.shared.whatsAppMyJID
+        if !existing.isEmpty { return }
+
+        // Poll health up to 10 times until we get the phone number
+        for _ in 1...10 {
+            let (status, phone) = await service.checkHealth()
+            if let phone, !phone.isEmpty {
+                SettingsManager.shared.whatsAppMyJID = phone
+                Log.info(.system, "[WhatsApp] myJID set to \(phone)")
+                return
+            }
+            if status == .connected { break } // connected but no phone? shouldn't happen
+            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s
+        }
+        Log.warn(.system, "[WhatsApp] Could not determine phone number for self-chat filtering")
     }
 
     func stop() {
@@ -50,6 +79,11 @@ final class WhatsAppPoller: ObservableObject {
     // MARK: - Polling
 
     private func poll() async {
+        // Prevent re-entrant polls — QA reply can take >2s, timer keeps firing
+        guard !isPollInProgress else { return }
+        isPollInProgress = true
+        defer { isPollInProgress = false }
+
         let messages = await service.getMessages(since: lastMessageTimestamp)
         guard !messages.isEmpty else { return }
 
@@ -58,13 +92,33 @@ final class WhatsAppPoller: ObservableObject {
             lastMessageTimestamp = latest
         }
 
+        // Only accept messages from "Message Yourself" chat (self-chat).
+        // All other conversations are ignored until we build out full messaging.
+        let myJID = SettingsManager.shared.whatsAppMyJID
+        guard !myJID.isEmpty else {
+            Log.warn(.system, "[WhatsApp] whatsAppMyJID not set — can't filter self-chat messages")
+            return
+        }
+
+        // Exact self-chat JID: must be a personal chat (@s.whatsapp.net) with our number
+        let selfChatJID = "\(myJID)@s.whatsapp.net"
+
         for msg in messages {
-            // Skip our own messages
-            if msg.isFromMe { continue }
+            // Only process messages in the self-chat conversation (exact match)
+            guard msg.jid == selfChatJID else { continue }
+
+            // Skip already-processed messages (prevents bot reply infinite loops)
+            guard !processedMessageIDs.contains(msg.id) else { continue }
+            processedMessageIDs.insert(msg.id)
+
+            // Cap the processed IDs set so it doesn't grow forever
+            if processedMessageIDs.count > 500 {
+                processedMessageIDs = Set(processedMessageIDs.suffix(250))
+            }
 
             var processedText = msg.text
 
-            // Transcribe voice notes via Groq
+            // Transcribe voice notes using the app's selected transcription engine
             if msg.isVoiceNote, let mediaPath = msg.mediaPath {
                 if let transcript = await transcribeVoiceNote(at: mediaPath) {
                     processedText = transcript
@@ -97,92 +151,187 @@ final class WhatsAppPoller: ObservableObject {
             // Log the message
             Log.info(.system, "[WhatsApp] \(msg.senderName): \(processedText.prefix(100))")
 
-            // Route through pipeline if we have an appState
-            // The message text gets treated like a transcript chunk
+            // Process via QA assistant (reply) + pipeline (task creation) in parallel
             if let appState {
-                await routeToPipeline(text: processedText, from: msg.senderName, appState: appState)
+                let jid = msg.jid
+                await handleMessage(text: processedText, from: msg.senderName, jid: jid, appState: appState)
             }
         }
     }
 
     // MARK: - Voice Note Transcription
 
-    /// Transcribe an OGG voice note file using the existing Groq Whisper API.
+    /// Transcribe a voice note file using whatever transcription engine is selected in Settings
+    /// (Groq Whisper or Local SFSpeechRecognizer).
+    /// WhatsApp voice notes arrive as OGG — Groq handles this natively, but Local mode
+    /// (SFSpeechRecognizer) needs conversion to WAV first.
     private func transcribeVoiceNote(at path: String) async -> String? {
-        let url = URL(fileURLWithPath: path)
+        let fileURL = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: path) else {
             Log.warn(.system, "[WhatsApp] Voice note file not found: \(path)")
             return nil
         }
 
-        let apiKey = SettingsManager.shared.groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !apiKey.isEmpty else {
-            Log.warn(.system, "[WhatsApp] No Groq API key — cannot transcribe voice note")
+        guard let transcriber = appState?.transcriptionService else {
+            Log.warn(.system, "[WhatsApp] No transcription service available — check transcription settings")
             return nil
         }
 
-        // Use Groq Whisper API directly for OGG transcription
+        Log.info(.system, "[WhatsApp] Transcribing voice note with \(transcriber.modelName)...")
+
+        // For local SFSpeechRecognizer, OGG isn't supported — convert to WAV first
+        let isLocal = transcriber.modelName.contains("local") || transcriber.modelName.contains("SFSpeech")
+        var transcribeURL = fileURL
+        var tempWAV: URL? = nil
+
+        if isLocal {
+            if let wav = convertOGGtoWAV(oggURL: fileURL) {
+                transcribeURL = wav
+                tempWAV = wav
+            } else {
+                Log.warn(.system, "[WhatsApp] Failed to convert OGG to WAV for local transcription")
+                return nil
+            }
+        }
+
         do {
-            let transcript = try await transcribeWithGroq(fileURL: url, apiKey: apiKey)
-            // Clean up the voice note file after successful transcription
-            try? FileManager.default.removeItem(at: url)
+            let transcript = try await transcriber.transcribe(fileURL: transcribeURL)
+            // Clean up voice note + temp WAV after successful transcription
+            try? FileManager.default.removeItem(at: fileURL)
+            if let wav = tempWAV { try? FileManager.default.removeItem(at: wav) }
             return transcript
         } catch {
-            Log.warn(.system, "[WhatsApp] Transcription failed: \(error)")
+            Log.warn(.system, "[WhatsApp] Transcription failed (\(transcriber.modelName)): \(error)")
+            if let wav = tempWAV { try? FileManager.default.removeItem(at: wav) }
             return nil
         }
     }
 
-    /// Direct Groq Whisper API call for audio file transcription.
-    private func transcribeWithGroq(fileURL: URL, apiKey: String) async throws -> String {
-        let boundary = UUID().uuidString
-        var request = URLRequest(url: URL(string: "https://api.groq.com/openai/v1/audio/transcriptions")!)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+    /// Convert OGG voice note to WAV using macOS `afconvert` (available on all Macs).
+    private func convertOGGtoWAV(oggURL: URL) -> URL? {
+        let wavURL = oggURL.deletingPathExtension().appendingPathExtension("wav")
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/afconvert")
+        proc.arguments = [
+            "-f", "WAVE",   // output format
+            "-d", "LEI16",  // 16-bit PCM
+            oggURL.path,
+            wavURL.path,
+        ]
+        proc.standardOutput = Pipe()
+        proc.standardError = Pipe()
 
-        let audioData = try Data(contentsOf: fileURL)
-        let filename = fileURL.lastPathComponent
-
-        var body = Data()
-        // File field
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: audio/ogg\r\n\r\n".data(using: .utf8)!)
-        body.append(audioData)
-        body.append("\r\n".data(using: .utf8)!)
-        // Model field
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"model\"\r\n\r\n".data(using: .utf8)!)
-        body.append("whisper-large-v3-turbo\r\n".data(using: .utf8)!)
-        // Response format
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"response_format\"\r\n\r\n".data(using: .utf8)!)
-        body.append("text\r\n".data(using: .utf8)!)
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-
-        request.httpBody = body
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            let errMsg = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw WhatsAppError.serverError((response as? HTTPURLResponse)?.statusCode ?? 0, errMsg)
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            if proc.terminationStatus == 0 {
+                return wavURL
+            }
+            // afconvert may not handle OGG — try ffmpeg as fallback
+            return convertOGGtoWAVWithFFmpeg(oggURL: oggURL, wavURL: wavURL)
+        } catch {
+            return convertOGGtoWAVWithFFmpeg(oggURL: oggURL, wavURL: wavURL)
         }
-
-        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    // MARK: - Pipeline Integration
+    /// Fallback: use ffmpeg if available.
+    private func convertOGGtoWAVWithFFmpeg(oggURL: URL, wavURL: URL) -> URL? {
+        // Check common ffmpeg locations
+        let ffmpegPaths = ["/usr/local/bin/ffmpeg", "/opt/homebrew/bin/ffmpeg"]
+        guard let ffmpeg = ffmpegPaths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            Log.warn(.system, "[WhatsApp] Neither afconvert nor ffmpeg can convert OGG — install ffmpeg or use Groq transcription")
+            return nil
+        }
 
-    /// Route a WhatsApp message through the existing pipeline.
-    private func routeToPipeline(text: String, from sender: String, appState: AppState) async {
-        // Format as a labeled transcript for the pipeline
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: ffmpeg)
+        proc.arguments = ["-i", oggURL.path, "-y", wavURL.path]
+        proc.standardOutput = Pipe()
+        proc.standardError = Pipe()
+
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            return proc.terminationStatus == 0 ? wavURL : nil
+        } catch {
+            return nil
+        }
+    }
+
+    // MARK: - Message Handling (QA Reply + Pipeline)
+
+    /// Handle a WhatsApp message: reply via QA assistant and feed into pipeline.
+    private func handleMessage(text: String, from sender: String, jid: String, appState: AppState) async {
+        // 1. Reply via QA assistant
+        await replyViaQA(text: text, jid: jid, appState: appState)
+
+        // 2. Feed into pipeline for task creation (background)
+        await feedPipeline(text: text, from: sender, appState: appState)
+    }
+
+    /// Use QAService to generate an answer and send it back via WhatsApp.
+    private func replyViaQA(text: String, jid: String, appState: AppState) async {
+        do {
+            let context = await appState.buildQAContext()
+            let answer = try await appState.qaService.answer(question: text, context: context, speak: false)
+
+            guard !answer.isEmpty else {
+                Log.warn(.system, "[WhatsApp → QA] Empty answer")
+                return
+            }
+
+            Log.info(.system, "[WhatsApp → QA] Reply: \(answer.prefix(100))...")
+
+            // Send reply back via WhatsApp with "Dot:" prefix
+            try await WhatsAppService.shared.sendMessage(jid: jid, text: "Dot: \(answer)")
+            // Bump cursor to skip the bot's own reply in the next poll
+            lastMessageTimestamp = Date().timeIntervalSince1970
+            Log.info(.system, "[WhatsApp] Reply sent to \(jid)")
+
+            // Store in QA history
+            await MainActor.run {
+                appState.qaStore.append(question: text, answer: answer)
+            }
+        } catch {
+            Log.warn(.system, "[WhatsApp → QA] Failed: \(error)")
+            // Send error message back so user knows something went wrong
+            try? await WhatsAppService.shared.sendMessage(
+                jid: jid,
+                text: "Dot: ⚠️ Sorry, I couldn't process that. Error: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    /// Save transcript and feed through pipeline for task creation.
+    private func feedPipeline(text: String, from sender: String, appState: AppState) async {
         let formatted = "[\(sender) via WhatsApp]: \(text)"
         Log.info(.system, "[WhatsApp → Pipeline] \(formatted.prefix(100))")
 
-        // The pipeline orchestrator expects transcript text.
-        // We feed WhatsApp messages as "cleaned transcripts" so they flow through
-        // analysis → task creation → execution.
-        // For now, log and let the existing ambient processing pick up context.
+        let transcriptID = appState.transcriptStore.saveSync(
+            text: formatted,
+            durationSeconds: 0,
+            audioFilePath: "",
+            sessionID: "whatsapp-\(Date().timeIntervalSince1970)",
+            sessionChunkSeq: 0,
+            speakerName: sender
+        )
+
+        guard let tid = transcriptID else {
+            Log.warn(.system, "[WhatsApp → Pipeline] Failed to save transcript")
+            return
+        }
+
+        await appState.pipelineOrchestrator.processTranscript(
+            text: formatted,
+            transcriptID: tid,
+            sessionID: "whatsapp",
+            sessionChunkSeq: 0,
+            durationSeconds: 0,
+            speakerName: sender
+        )
+
+        await MainActor.run {
+            appState.refreshPipeline()
+        }
     }
 }

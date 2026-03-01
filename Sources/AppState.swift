@@ -138,6 +138,8 @@ final class AppState: ObservableObject {
     @Published var codeSkipPermissions: Bool = true
     private(set) var codeSession: ClaudeSession? = nil
     private var codeStreamTask: Task<Void, Never>? = nil
+    private var codeTaskID: String?
+    private var codeStepIndex: Int = 0
 
     // WhatsApp state
     @Published var whatsAppStatus: WhatsAppStatus = .disconnected
@@ -156,26 +158,62 @@ final class AppState: ObservableObject {
     private lazy var todoFramingService = TodoFramingService(ollama: ollama)
     private let worldModelService = WorldModelService()
     private let todoService = TodoService()
-    private var transcriptionService: (any Transcribable)?
-    private let transcriptStore: TranscriptStore
+    private(set) var transcriptionService: (any Transcribable)?
+    let transcriptStore: TranscriptStore
     let extractionStore: ExtractionStore
     private let extractionService: ExtractionService
     private let cleanupService: CleanupService
     private let pasteService: TranscriptionPasteService
-    private let qaService: QAService
+    private(set) var qaService: QAService
     let qaStore: QAStore
     let claudeCodeRunner = ClaudeCodeRunner()
 
     // Pipeline v2 services
     let pipelineStore: PipelineStore
     let skillStore: SkillStore
-    private let pipelineOrchestrator: PipelineOrchestrator
+    private(set) var pipelineOrchestrator: PipelineOrchestrator
     private let taskExecutionService: TaskExecutionService
 
     // MARK: - Derived Content (refreshed on demand)
 
     var todosContent: String { todoService.read() }
     var worldModelContent: String { worldModelService.read() }
+
+    /// Build rich context for QA assistant from all data sources.
+    func buildQAContext() async -> QAContext {
+        let sessionCtx = SessionStore.shared.buildContextBlock(
+            currentSSID: LocationService.shared.currentSSID
+        )
+        let world = worldModelService.read()
+        let projects = projectStore.all().map { (name: $0.name, tags: $0.tagsString) }
+        let analyses = pipelineStore.fetchRecentAnalyses(limit: 5).map { a in
+            (summary: a.summary,
+             people: a.personNames.joined(separator: ", "),
+             project: a.projectName)
+        }
+        let tasks = pipelineStore.fetchRecentTasks(limit: 10).map { t in
+            (title: t.title, status: t.status.rawValue, project: t.projectName)
+        }
+        let todos = todoService.read()
+        let sTodos = structuredTodoStore.all().map { t in
+            (content: t.content, priority: t.priority, done: t.isExecuted)
+        }
+        let facts = extractionStore.all()
+            .filter { $0.isAccepted }
+            .suffix(50)
+            .map { (content: $0.content, bucket: $0.bucket.rawValue) }
+
+        return QAContext(
+            sessionContext: sessionCtx,
+            worldModel: world,
+            projects: projects,
+            recentAnalyses: analyses,
+            recentTasks: tasks,
+            todos: todos,
+            structuredTodos: sTodos,
+            extractionFacts: facts
+        )
+    }
 
     // MARK: - Init
 
@@ -436,6 +474,33 @@ final class AppState: ObservableObject {
         codeIsStreaming = true
         codeWidgetStep = .copilot
 
+        // Register a pipeline task record so code sessions appear in monitoring/timeline
+        let taskID = pipelineStore.nextTaskID(prefix: "CC")
+        codeTaskID = taskID
+        codeStepIndex = 0
+        let record = PipelineTaskRecord(
+            id: taskID,
+            analysisID: "code-\(taskID)",
+            title: "Code session: \(project.name)",
+            prompt: "Interactive co-pilot session for \(project.name)",
+            projectID: project.id,
+            projectName: project.name,
+            mode: .user,
+            status: .ongoing,
+            skillID: nil,
+            workflowID: "autoclawd-claude-code",
+            workflowSteps: ["Voice → Co-pilot → Claude Code CLI"],
+            missingConnection: nil,
+            pendingQuestion: nil,
+            attachmentPaths: [],
+            createdAt: Date(),
+            startedAt: Date(),
+            completedAt: nil
+        )
+        pipelineStore.insertTask(record)
+        logCodeStep("Code session started")
+        refreshPipeline()
+
         let initialPrompt = "You are a co-pilot for this project. Listen for instructions and execute them. Start by briefly describing what this project is (1-2 sentences)."
 
         guard let (session, stream) = claudeCodeRunner.startSession(
@@ -460,8 +525,25 @@ final class AppState: ObservableObject {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         codeSessionMessages.append(CodeMessage(role: .user, text: trimmed))
+        logCodeStep("You: \(trimmed)")
         session.sendMessage(trimmed)
         codeIsStreaming = true
+    }
+
+    /// Log a step for the active code pipeline task.
+    private func logCodeStep(_ description: String, status: String = "completed") {
+        guard let taskID = codeTaskID else { return }
+        let step = TaskExecutionStep(
+            id: UUID().uuidString,
+            taskID: taskID,
+            stepIndex: codeStepIndex,
+            description: description,
+            status: status,
+            timestamp: Date(),
+            output: nil
+        )
+        codeStepIndex += 1
+        pipelineStore.insertStep(step)
     }
 
     func stopCodeSession() {
@@ -471,6 +553,13 @@ final class AppState: ObservableObject {
         codeSession = nil
         codeIsStreaming = false
         codeCurrentToolName = nil
+        if let taskID = codeTaskID {
+            logCodeStep("Code session ended")
+            pipelineStore.updateTaskStatus(id: taskID, status: .completed, completedAt: Date())
+            codeTaskID = nil
+            codeStepIndex = 0
+            refreshPipeline()
+        }
     }
 
     func resetCodeWidget() {
@@ -481,6 +570,7 @@ final class AppState: ObservableObject {
 
     private func processCodeStream(_ stream: AsyncThrowingStream<ClaudeEvent, Error>) async {
         var accumulatedText = ""
+        var lastTextFlushTime = Date()
         do {
             for try await event in stream {
                 switch event {
@@ -492,29 +582,52 @@ final class AppState: ObservableObject {
                     } else {
                         codeSessionMessages.append(CodeMessage(role: .assistant, text: accumulatedText))
                     }
+                    // Flush to pipeline periodically (every 2s or at newlines)
+                    let now = Date()
+                    if now.timeIntervalSince(lastTextFlushTime) > 2.0 || accumulatedText.contains("\n") {
+                        let trimmed = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty { logCodeStep(trimmed) }
+                        accumulatedText = ""
+                        lastTextFlushTime = now
+                    }
 
                 case .toolUse(let name, _):
-                    if !accumulatedText.isEmpty { accumulatedText = "" }
+                    // Flush any pending text before logging tool use
+                    if !accumulatedText.isEmpty {
+                        let trimmed = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty { logCodeStep(trimmed) }
+                        accumulatedText = ""
+                    }
                     codeCurrentToolName = name
                     codeSessionMessages.append(CodeMessage(role: .tool, text: "Using \(name)…"))
+                    logCodeStep("Using \(name)...", status: "running")
 
                 case .toolResult(let name, let output):
                     codeCurrentToolName = nil
                     let summary = output.isEmpty ? "\(name) done" : "\(name): \(String(output.prefix(120)))"
                     codeSessionMessages.append(CodeMessage(role: .tool, text: summary))
+                    logCodeStep(summary)
 
                 case .result(let text):
-                    if !accumulatedText.isEmpty { accumulatedText = "" }
+                    // Flush remaining accumulated text
+                    if !accumulatedText.isEmpty {
+                        let trimmed = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty { logCodeStep(trimmed) }
+                        accumulatedText = ""
+                    }
                     if !text.isEmpty {
                         codeSessionMessages.append(CodeMessage(role: .assistant, text: text))
+                        logCodeStep(text)
                     }
                     codeIsStreaming = false
 
                 case .status(let msg):
                     codeSessionMessages.append(CodeMessage(role: .status, text: msg))
+                    logCodeStep(msg, status: "running")
 
                 case .error(let msg):
                     codeSessionMessages.append(CodeMessage(role: .error, text: msg))
+                    logCodeStep("Error: \(msg)", status: "failed")
 
                 case .sessionInit:
                     break
@@ -524,6 +637,7 @@ final class AppState: ObservableObject {
             codeSessionMessages.append(
                 CodeMessage(role: .error, text: error.localizedDescription)
             )
+            logCodeStep("Session error: \(error.localizedDescription)", status: "failed")
         }
         codeIsStreaming = false
     }
@@ -534,8 +648,33 @@ final class AppState: ObservableObject {
     func startWhatsApp() {
         guard SettingsManager.shared.whatsAppEnabled else { return }
         WhatsAppSidecar.shared.start()
-        whatsAppPoller.start(appState: self)
-        Log.info(.system, "WhatsApp integration started")
+        Log.info(.system, "[WhatsApp] Sidecar starting, will poll once ready...")
+
+        // Wait for sidecar to be reachable before starting the poller
+        Task { @MainActor in
+            var ready = false
+            for attempt in 1...15 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1s
+                let (status, phone) = await WhatsAppService.shared.checkHealth()
+                if status != .disconnected || attempt > 5 {
+                    // Either connected/waitingForQR, or after 5s assume sidecar is up
+                    // (disconnected is a valid sidecar response too)
+                    ready = true
+                    self.whatsAppStatus = status
+                    // Persist phone number for self-chat filtering
+                    if let phone, !phone.isEmpty {
+                        SettingsManager.shared.whatsAppMyJID = phone
+                    }
+                    break
+                }
+            }
+            if ready {
+                self.whatsAppPoller.start(appState: self)
+                Log.info(.system, "[WhatsApp] Integration started — poller active")
+            } else {
+                Log.warn(.system, "[WhatsApp] Sidecar not reachable after 15s — poller not started")
+            }
+        }
     }
 
     /// Stop WhatsApp sidecar + poller.

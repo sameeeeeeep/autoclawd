@@ -56,21 +56,21 @@ struct SessionCard: View {
                 }
                 Spacer()
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(.secondary)
                     .font(.system(size: 10))
             }
 
             if !session.transcriptSnippet.isEmpty {
                 Text(session.transcriptSnippet)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(.primary.opacity(0.7))
                     .lineLimit(isExpanded ? nil : 2)
             }
         }
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color.white.opacity(0.04))
+                .fill(Color(NSColor.controlBackgroundColor))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(Color.green.opacity(0.15), lineWidth: 1)

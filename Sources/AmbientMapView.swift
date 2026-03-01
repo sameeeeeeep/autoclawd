@@ -59,21 +59,21 @@ struct AmbientMapView: View {
                     var p = Path()
                     p.move(to: CGPoint(x: x, y: 0))
                     p.addLine(to: CGPoint(x: x, y: size.height))
-                    ctx.stroke(p, with: .color(.white.opacity(0.06)), lineWidth: 0.5)
+                    ctx.stroke(p, with: .color(.primary.opacity(0.06)), lineWidth: 0.5)
                 }
                 for i in 1..<5 {
                     let y = size.height / 5.0 * CGFloat(i)
                     var p = Path()
                     p.move(to: CGPoint(x: 0, y: y))
                     p.addLine(to: CGPoint(x: size.width, y: y))
-                    ctx.stroke(p, with: .color(.white.opacity(0.06)), lineWidth: 0.5)
+                    ctx.stroke(p, with: .color(.primary.opacity(0.06)), lineWidth: 0.5)
                 }
             }
 
             // Room name
             Text(appState.locationName.uppercased())
                 .font(AppTheme.caption)
-                .foregroundColor(.white.opacity(0.35))
+                .foregroundColor(.secondary)
                 .padding(.top, 8)
                 .padding(.leading, 10)
 
@@ -81,9 +81,9 @@ struct AmbientMapView: View {
             Button { showEditor.toggle() } label: {
                 Image(systemName: "pencil")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.white.opacity(0.35))
+                    .foregroundColor(.secondary)
                     .frame(width: 22, height: 22)
-                    .background(Color.white.opacity(0.07))
+                    .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
                     .clipShape(RoundedRectangle(cornerRadius: 5))
             }
             .buttonStyle(.plain)
@@ -175,7 +175,7 @@ struct VoiceDotView: View {
                 .fill(dot.color)
                 .frame(width: dotSize, height: dotSize)
                 .overlay(
-                    Circle().stroke(Color.white.opacity(dot.isMe ? 0.6 : 0.28), lineWidth: 1)
+                    Circle().stroke(Color.primary.opacity(dot.isMe ? 0.3 : 0.15), lineWidth: 1)
                 )
 
             // Speech bubble above dot
@@ -188,14 +188,14 @@ struct VoiceDotView: View {
             // Name label below dot
             Text(dot.name)
                 .font(.system(size: 8, weight: .medium, design: .monospaced))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(.primary.opacity(0.6))
                 .offset(y: dotSize / 2 + 9)
 
             // Song subtitle (music person only)
             if let sub = subtitle {
                 Text(sub)
                     .font(.system(size: 7, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.45))
+                    .foregroundColor(.secondary)
                     .lineLimit(1)
                     .frame(maxWidth: 60)
                     .offset(y: dotSize / 2 + 22)
@@ -215,7 +215,7 @@ struct SpeechBubbleView: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color.black.opacity(0.82))
+                .fill(Color(NSColor.controlBackgroundColor))
                 .overlay(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .stroke(color.opacity(0.55), lineWidth: 0.75)

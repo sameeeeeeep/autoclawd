@@ -90,10 +90,10 @@ struct ChatBubble: View {
                 .font(.system(size: 11, design: .monospaced))
                 .padding(8)
                 .background(role == "user"
-                    ? Color.green.opacity(0.15)
-                    : Color.white.opacity(0.05))
+                    ? Color.accentColor.opacity(0.12)
+                    : Color(NSColor.controlBackgroundColor))
                 .cornerRadius(6)
-                .foregroundColor(.white.opacity(0.9))
+                .foregroundColor(.primary)
             if role == "assistant" { Spacer() }
         }
     }

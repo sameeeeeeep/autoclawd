@@ -458,7 +458,14 @@ final class ChunkManager: ObservableObject {
         case .aiSearch:
             guard let qaService, let qaStore else { break }
             do {
-                let answer = try await qaService.answer(question: transcript)
+                // Build rich context from AppState if available, otherwise fall back to basic
+                let answer: String
+                if let appState = self.appState {
+                    let context = await appState.buildQAContext()
+                    answer = try await qaService.answer(question: transcript, context: context, speak: true)
+                } else {
+                    answer = try await qaService.answer(question: transcript)
+                }
                 await MainActor.run {
                     qaStore.append(question: transcript, answer: answer)
                     let pb = NSPasteboard.general
