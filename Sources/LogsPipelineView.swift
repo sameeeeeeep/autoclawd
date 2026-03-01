@@ -721,28 +721,38 @@ struct LogsPipelineView: View {
     // MARK: - Column Header Row
 
     private var columnHeaderRow: some View {
-        HStack(spacing: 0) {
-            columnHeader("TIME", color: Color(NSColor.tertiaryLabelColor))
-                .frame(width: 56, alignment: .leading)
-            columnHeader("TRANSCRIPT", color: .secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            columnHeader("CLEANING", color: .cyan)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            columnHeader("ANALYSIS", color: .purple)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            columnHeader("TASK", color: .orange)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            columnHeader("RESULT", color: .accentColor)
-                .frame(width: 90, alignment: .leading)
+        GeometryReader { geo in
+            let w = geo.size.width
+            let compact = w < 550
+
+            HStack(spacing: 0) {
+                if !compact {
+                    columnHeader("TIME", color: Color(NSColor.tertiaryLabelColor))
+                        .frame(width: 56, alignment: .leading)
+                }
+                columnHeader("TRANSCRIPT", color: .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                columnHeader(compact ? "CLEAN" : "CLEANING", color: .cyan)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if !compact {
+                    columnHeader("ANALYSIS", color: .purple)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                columnHeader("TASK", color: .orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                columnHeader("RESULT", color: .accentColor)
+                    .frame(width: compact ? 60 : 90, alignment: .leading)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 28)
+            .overlay(
+                Rectangle()
+                    .fill(Color(NSColor.separatorColor))
+                    .frame(height: 0.5),
+                alignment: .bottom
+            )
         }
-        .padding(.horizontal, 14)
         .frame(height: 28)
-        .overlay(
-            Rectangle()
-                .fill(Color(NSColor.separatorColor))
-                .frame(height: 0.5),
-            alignment: .bottom
-        )
     }
 
     private func columnHeader(_ text: String, color: Color) -> some View {
@@ -763,41 +773,51 @@ struct LogsPipelineView: View {
                 expandedStage = nil
             }
         } label: {
-            HStack(spacing: 0) {
-                // Left accent border
-                Rectangle()
-                    .fill(isSelected ? Color.accentColor : Color.clear)
-                    .frame(width: 2)
+            GeometryReader { geo in
+                let compact = geo.size.width < 550
 
-                HStack(alignment: .top, spacing: 0) {
-                    timeColumn(group: group)
-                        .frame(width: 56, alignment: .leading)
+                HStack(spacing: 0) {
+                    // Left accent border
+                    Rectangle()
+                        .fill(isSelected ? Color.accentColor : Color.clear)
+                        .frame(width: 2)
 
-                    transcriptColumn(group: group)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(alignment: .top, spacing: 0) {
+                        if !compact {
+                            timeColumn(group: group)
+                                .frame(width: 56, alignment: .leading)
+                        }
 
-                    cleaningColumn(group: group)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        transcriptColumn(group: group)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                    analysisColumn(group: group)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        cleaningColumn(group: group)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                    taskColumn(group: group)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        if !compact {
+                            analysisColumn(group: group)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
 
-                    resultColumn(group: group)
-                        .frame(width: 90, alignment: .leading)
+                        taskColumn(group: group)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        resultColumn(group: group)
+                            .frame(width: compact ? 60 : 90, alignment: .leading)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
+                .frame(width: geo.size.width)
+                .background(isSelected ? Color.accentColor.opacity(0.06) : Color.clear)
+                .overlay(
+                    Rectangle()
+                        .fill(Color(NSColor.separatorColor))
+                        .frame(height: 0.5),
+                    alignment: .bottom
+                )
             }
-            .background(isSelected ? Color.accentColor.opacity(0.06) : Color.clear)
-            .overlay(
-                Rectangle()
-                    .fill(Color(NSColor.separatorColor))
-                    .frame(height: 0.5),
-                alignment: .bottom
-            )
+            .frame(minHeight: 44)
         }
         .buttonStyle(.plain)
     }
@@ -854,7 +874,8 @@ struct LogsPipelineView: View {
     private func cleaningColumn(group: PipelineGroup) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             if !group.cleaningTags.isEmpty {
-                HStack(spacing: 3) {
+                // FlowLayout wraps tags to the next line when the column is narrow
+                FlowLayout(spacing: 3) {
                     ForEach(group.cleaningTags, id: \.self) { tag in
                         TagView(type: .status, label: tag, small: true)
                     }
@@ -874,7 +895,7 @@ struct LogsPipelineView: View {
     private func analysisColumn(group: PipelineGroup) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             if !group.analysisTags.isEmpty {
-                HStack(spacing: 3) {
+                FlowLayout(spacing: 3) {
                     ForEach(group.analysisTags, id: \.self) { tag in
                         TagView(type: .action, label: tag, small: true)
                     }

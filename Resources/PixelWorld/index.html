@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AutoClawd HQ</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #05050f; }
+    canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; cursor: grab; }
+    canvas:active { cursor: grabbing; }
+    #hud {
+      position: fixed; top: 0; left: 0; right: 0;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 10px; pointer-events: none; z-index: 10;
+      background: linear-gradient(to bottom, rgba(5,5,15,0.85), transparent);
+    }
+    .room-label {
+      font: bold 9px/1 'Courier New', monospace; letter-spacing: 1.5px;
+      padding: 3px 8px; border-radius: 3px; border: 1px solid;
+    }
+    #lbl-control { color: #A78BFA; border-color: rgba(139,92,246,0.35); background: rgba(139,92,246,0.08); }
+    #lbl-lab     { color: #FB923C; border-color: rgba(249,115,22,0.35);  background: rgba(249,115,22,0.08); }
+    #lbl-archive { color: #6EE7B7; border-color: rgba(52,211,153,0.35);  background: rgba(52,211,153,0.08); }
+    #task-hud {
+      font: bold 9px/1 'Courier New', monospace; letter-spacing: 1px;
+      color: #06B6D4; padding: 3px 8px; border-radius: 3px;
+      border: 1px solid rgba(6,182,212,0.35); background: rgba(6,182,212,0.08);
+    }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <span class="room-label" id="lbl-control">◈ MISSION CONTROL</span>
+  <span id="task-hud">tasks: 0</span>
+  <div style="display:flex;gap:6px">
+    <span class="room-label" id="lbl-lab">◈ CLAUDE LAB</span>
+    <span class="room-label" id="lbl-archive">◈ ARCHIVE</span>
+  </div>
+</div>
+
+<script>
+'use strict';
+// ═══════════════════════════════════════════════════════════════════
+//  AutoClawd Pixel World
+//  Pixel-art office visualization of the AutoClawd pipeline
+//  Inspired by pixel-agents (github.com/pablodelucca/pixel-agents)
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Config ──────────────────────────────────────────────────────────
+const T = 32;          // tile size (screen px)
+const PX = 4;          // sprite pixel size (4x scale → 32px/8-pixel-sprite-row)
+const SP_W = 8 * PX;  // sprite screen width  = 32px
+const SP_H = 12 * PX; // sprite screen height = 48px
+const WW = 58;         // world width  (tiles)
+const WH = 20;         // world height (tiles)
+const WALK_SPD = 2.2;
+const BOB_AMP  = 1.2;
+const BOB_SPD  = 0.05;
+
+// ── Canvas ───────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
+resize();
+window.addEventListener('resize', resize);
+
+// ── Sprite Palette ───────────────────────────────────────────────────
+// Each character in a sprite row maps to a color. '.' = transparent.
+const PAL = {
+  // Dot (ghost)
+  '1': '#7C3AED',  // dot purple dark
+  '2': '#8B5CF6',  // dot purple
+  '3': '#A78BFA',  // dot light
+  'w': '#E0F2FE',  // eye white
+  'c': '#06B6D4',  // eye cyan
+  // Claw'd (crab)
+  'r': '#C2410C',  // shell dark
+  'o': '#EA580C',  // shell mid
+  'O': '#FB923C',  // shell light
+  'y': '#FEF9C3',  // cream
+  'e': '#1E293B',  // eye dark
+  // Human skin/hair
+  's': '#FCD34D',  // skin warm
+  'S': '#FDE68A',  // skin light
+  'h': '#1E293B',  // dark hair
+  'H': '#92400E',  // brown hair
+  'k': '#F472B6',  // pink skin
+  'K': '#FBCFE8',  // pink skin light
+  'g': '#86EFAC',  // green skin
+  // Shirts
+  'b': '#1D4ED8',  // blue dark
+  'B': '#3B82F6',  // blue
+  'G': '#059669',  // green dark
+  'N': '#10B981',  // green
+  'T': '#0891B2',  // teal
+  'P': '#7C3AED',  // purple
+  'Q': '#6D28D9',  // purple dark
+  'W': '#25D366',  // WA green
+  'X': '#128C7E',  // WA dark
+  'A': '#78716C',  // brown/neutral
+  'Z': '#57534E',  // brown dark
+  // Misc
+  'n': '#1E1B4B',  // near black
+  'L': '#F8FAFC',  // near white
+  '.': null,
+};
+
+// ── Sprite Definitions (8 wide × 12 tall) ─────────────────────────
+// Each row = 8 chars. '.' = transparent.
+function spr(rows) { return rows.map(r => r.split('').map(ch => PAL[ch] ?? null)); }
+
+// ── DOT  (ghost mascot, purple + cyan eyes) ──────────────────────
+const S_DOT_IDLE = spr([
+  '..1111..',  // head top
+  '.122221.',  // head
+  '12wc2cw1',  // eyes (cyan pupils)
+  '12222221',  // face
+  '11111111',  // neck
+  '13333331',  // body top
+  '13333331',  // body
+  '13333331',  // body bottom
+  '11.11.11',  // ghost wavy 1
+  '1..11..1',  // ghost wavy 2
+  '........',
+  '........',
+]);
+
+const S_DOT_TALK = spr([
+  '..1111..',
+  '.122221.',
+  '12wc2cw1',
+  '12.2.221',  // open mouth
+  '11111111',
+  '13333331',
+  '13333331',
+  '13333331',
+  '11.11.11',
+  '1..11..1',
+  '........',
+  '........',
+]);
+
+// ── COPYWRITER (blue shirt, types at desk) ────────────────────────
+const S_COPY_WORK = spr([
+  '..hhhh..',  // hair
+  '.hSSSSh.',  // head
+  'hSSnSnSh',  // eyes
+  'hSSSSSSh',  // face
+  '.hSSSSh.',  // chin
+  '.BBBBBB.',  // shirt top
+  'BBBBBBBB',  // shirt
+  'BBBBBBBBB',
+  'sBBBBBBs',  // arms at keyboard
+  'ssBBBBss',
+  '..ssss..',
+  '........',
+]);
+const S_COPY_IDLE = spr([
+  '..hhhh..',
+  '.hSSSSh.',
+  'hSSnSnSh',
+  'hSSSSSSh',
+  '.hSSSSh.',
+  '.BBBBBB.',
+  'BBBBBBBB',
+  'BBBBBBBB',
+  'sBBsBBBs',  // arms down (idle)
+  'ssBBBBss',
+  '..ssss..',
+  '........',
+]);
+
+// ── ANALYST 1 (green shirt, pink skin) ───────────────────────────
+const S_A1_WORK = spr([
+  '..hhhh..',
+  '.hKKKKh.',
+  'hKKnKnKh',
+  'hKKKKKKh',
+  '.hKKKKh.',
+  '.NNNNNN.',
+  'NNNNNNNN',
+  'NNNNNNNN',
+  'kNNkNNNk',
+  'kkNNNNkk',
+  '..kkkk..',
+  '........',
+]);
+const S_A1_IDLE = S_A1_WORK; // same for now
+
+// ── ANALYST 2 (teal shirt, warm skin) ────────────────────────────
+const S_A2_WORK = spr([
+  '..HHhh..',
+  '.HsSSSH.',
+  'HssnSnSH',
+  'HssSSSSH',
+  '.HsSSsH.',
+  '.TTTTTT.',
+  'TTTTTTTT',
+  'TTTTTTTT',
+  'sTTsTTTs',
+  'ssTTTTss',
+  '..ssss..',
+  '........',
+]);
+
+// ── TASK CREATOR (purple shirt, green skin) ───────────────────────
+const S_TASK_WORK = spr([
+  '..hhhh..',
+  '.hggggH.',
+  'hggnGnGh',
+  'hggggGGh',
+  '.hggggH.',
+  '.PPPPPP.',
+  'PPPPPPPP',
+  'PPPPPPPP',
+  'gPPgPPPg',
+  'ggPPPPgg',
+  '..gggg..',
+  '........',
+]);
+
+// ── WA WATCHER (whatsapp green shirt) ────────────────────────────
+const S_WA_IDLE = spr([
+  '..hhhh..',
+  '.hssssh.',
+  'hssnsns h',
+  'hssssSSh',
+  '.hssssh.',
+  '.WWWWWW.',
+  'WWWWWWWW',
+  'WWWWWWWW',
+  'sWWsWWWs',
+  'ssWWWWss',
+  '..ssss..',
+  '........',
+]);
+// Fix WA sprite (extra char bug)
+const S_WA_WORK = spr([
+  '..hhhh..',
+  '.hssssh.',
+  'hssnsnsh',
+  'hssssssh',
+  '.hssssh.',
+  '.WWWWWW.',
+  'WWWWWWWW',
+  'WWWWWWWW',
+  'sWWWWWWs',
+  'ssWWWWss',
+  '..ssss..',
+  '........',
+]);
+
+// ── CLAW'D (Claude Code mascot: orange crab/lobster) ─────────────
+const S_CLAWD_IDLE = spr([
+  'r......r',  // antennae
+  '.r....r.',
+  '.rOOOOr.',  // carapace top
+  'rOoooooR',
+  'rOeOOeOr',  // eyes
+  'rOoooooR',
+  'OOooooOO',  // claws
+  'rOooooOr',
+  'rroOOorr',  // legs
+  '.rr..rr.',
+  '........',
+  '........',
+]);
+const S_CLAWD_WORK = spr([
+  'r......r',
+  '.r....r.',
+  '.rOOOOr.',
+  'rOoooooR',
+  'rOeOOeOr',
+  'rOoooooR',
+  'OOooooOO',
+  'rOooooOr',  // working: arms forward
+  'rrOooOrr',
+  '.rrOOrr.',
+  '........',
+  '........',
+]);
+
+// ── ARCHIVIST (brown/neutral shirt) ───────────────────────────────
+const S_ARCH_IDLE = spr([
+  '..HHHh..',
+  '.HsssssH',
+  'HssnsnSH',
+  'HsssssSSH',
+  '.HssssH.',
+  '.AAAAAA.',
+  'AAAAAAAA',
+  'AAAAAAAA',
+  'sAAsAAAss',
+  'ssAAAAss',
+  '..ssss..',
+  '........',
+]);
+// Fix archivist (extra char)
+const S_ARCH = spr([
+  '..HHHh..',
+  '.HssssH.',
+  'HssnsnsH',
+  'HssssssH',
+  '.HssssH.',
+  '.AAAAAA.',
+  'AAAAAAAA',
+  'AAAAAAAA',
+  'sAAAAAAs',
+  'ssAAAAss',
+  '..ssss..',
+  '........',
+]);
+
+// ═══════════════════════════════════════════════════════════════════
+//  SPRITE RENDERER
+// ═══════════════════════════════════════════════════════════════════
+function drawSprite(pixels, sx, sy, bobY = 0) {
+  for (let row = 0; row < pixels.length; row++) {
+    for (let col = 0; col < pixels[row].length; col++) {
+      const color = pixels[row][col];
+      if (!color) continue;
+      ctx.fillStyle = color;
+      ctx.fillRect(sx + col * PX, sy + row * PX + bobY, PX, PX);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  WORLD MAP  (0=floor, 1=wall, 2=desk, 3=monitor, 4=carpet, 5=door, 6=shelf, 7=terminal)
+// ═══════════════════════════════════════════════════════════════════
+const MAP = Array.from({length: WH}, () => new Uint8Array(WW));
+
+function fillRect(x1, y1, x2, y2, v) {
+  for (let y = y1; y <= y2; y++)
+    for (let x = x1; x <= x2; x++)
+      if (x >= 0 && x < WW && y >= 0 && y < WH) MAP[y][x] = v;
+}
+
+// Border walls
+fillRect(0, 0, WW-1, 0, 1);
+fillRect(0, WH-1, WW-1, WH-1, 1);
+fillRect(0, 0, 0, WH-1, 1);
+fillRect(WW-1, 0, WW-1, WH-1, 1);
+
+// Room 1 – Mission Control (cols 1-18)
+fillRect(1, 1, 18, WH-2, 4);          // carpet
+fillRect(18, 1, 18, WH-2, 1);         // right wall
+MAP[9][18] = 5; MAP[10][18] = 5;      // door
+
+// Room 2 – Claude Lab (cols 19-37)
+fillRect(19, 1, 37, WH-2, 0);         // floor
+fillRect(37, 1, 37, WH-2, 1);         // right wall
+MAP[9][37] = 5; MAP[10][37] = 5;      // door
+
+// Room 3 – Archive (cols 38-56)
+fillRect(38, 1, WW-2, WH-2, 0);       // floor
+
+// ── Mission Control furniture ──
+// Director desk (Dot)
+fillRect(8, 9, 10, 10, 2);   MAP[8][8] = 3; MAP[8][9] = 3; MAP[8][10] = 3;
+// Copywriter station (top-left)
+fillRect(3, 3, 5, 4, 2);     MAP[3][3] = 3; MAP[3][4] = 3; MAP[3][5] = 3;
+// Analyst 1 desk
+fillRect(10, 3, 11, 4, 2);   MAP[3][10] = 3; MAP[3][11] = 3;
+// Analyst 2 desk
+fillRect(13, 3, 14, 4, 2);   MAP[3][13] = 3; MAP[3][14] = 3;
+// Task creator desk (bottom-left)
+fillRect(3, 13, 5, 14, 2);   MAP[13][3] = 3; MAP[13][4] = 3; MAP[13][5] = 3;
+// WA terminal (bottom-right of room1)
+fillRect(13, 13, 14, 14, 7); MAP[13][13] = 3; MAP[13][14] = 3;
+
+// ── Claude Lab furniture ──
+fillRect(23, 8, 26, 9, 2);
+MAP[7][23]=3; MAP[7][24]=3; MAP[7][25]=3; MAP[7][26]=3;
+
+// ── Archive shelves & desk ──
+fillRect(39, 2, 40, WH-3, 6);  // left bookshelf
+fillRect(54, 2, 54, WH-3, 6);  // right bookshelf
+fillRect(44, 8, 47, 9, 2);     // archivist desk
+MAP[7][44]=3; MAP[7][45]=3; MAP[7][46]=3; MAP[7][47]=3;
+
+function walkable(x, y) {
+  if (x < 0 || y < 0 || x >= WW || y >= WH) return false;
+  const v = MAP[y][x];
+  return v === 0 || v === 4 || v === 5;
+}
+
+// ── BFS Pathfinder ────────────────────────────────────────────────
+function bfs(sx, sy, ex, ey) {
+  if (!walkable(ex, ey)) return null;
+  const visited = new Uint8Array(WW * WH);
+  const queue = [sx, sy, -1, -1];  // x, y, parentX, parentY
+  visited[sy * WW + sx] = 1;
+  const parent = new Int16Array(WW * WH * 2).fill(-1);
+  const DIRS = [[0,-1],[0,1],[-1,0],[1,0]];
+  let head = 0;
+  while (head < queue.length) {
+    const x = queue[head++], y = queue[head++];
+    const px = queue[head++], py = queue[head++];
+    parent[(y*WW+x)*2]   = px;
+    parent[(y*WW+x)*2+1] = py;
+    if (x === ex && y === ey) {
+      // reconstruct
+      const path = [];
+      let cx = ex, cy = ey;
+      while (cx !== -1) {
+        path.unshift({x:cx, y:cy});
+        const pi = (cy*WW+cx)*2;
+        const nx = parent[pi], ny = parent[pi+1];
+        cx = nx; cy = ny;
+      }
+      return path;
+    }
+    for (const [dx,dy] of DIRS) {
+      const nx = x+dx, ny = y+dy;
+      const idx = ny*WW+nx;
+      if (walkable(nx,ny) && !visited[idx]) {
+        visited[idx] = 1;
+        queue.push(nx, ny, x, y);
+      }
+    }
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  CHARACTER  CLASS
+// ═══════════════════════════════════════════════════════════════════
+class Char {
+  constructor(id, name, sprIdle, sprWork, tx, ty) {
+    this.id = id;
+    this.name = name;
+    this.sprIdle = sprIdle;
+    this.sprWork = sprWork;
+    this.tx = tx;  this.ty = ty;          // tile position
+    this.hx = tx;  this.hy = ty;          // home tile
+    this.px = tx * T;  this.py = ty * T;  // pixel position
+    this.state = 'idle';                   // idle | walk | work | talk
+    this.path = [];  this.pi = 0;
+    this.onArrive = null;
+    this.bob = Math.random() * Math.PI * 2;
+    this.bubble = null;                    // {text, timer, max}
+    this.walkTimer = 0;  this.walkFrame = 0;
+    this.glowColor = null;                 // ring color when active
+    this.glowTimer = 0;
+  }
+
+  say(text, frames = 200) {
+    this.bubble = { text, timer: frames, max: frames };
+  }
+
+  flash(color, frames = 60) {
+    this.glowColor = color;
+    this.glowTimer = frames;
+  }
+
+  walkTo(tx, ty, cb) {
+    const path = bfs(this.tx, this.ty, tx, ty);
+    if (!path || path.length === 0) { if (cb) cb(); return; }
+    this.path = path;
+    this.pi = 0;
+    this.state = 'walk';
+    this.onArrive = cb || null;
+  }
+
+  goHome(cb) { this.walkTo(this.hx, this.hy, cb); }
+
+  work() { this.state = 'work'; }
+
+  update() {
+    this.bob += BOB_SPD;
+    if (this.glowTimer > 0) this.glowTimer--;
+
+    if (this.state === 'walk') {
+      if (this.pi >= this.path.length) {
+        this.state = 'idle';
+        if (this.onArrive) { const f = this.onArrive; this.onArrive = null; f(); }
+        return;
+      }
+      const tgt = this.path[this.pi];
+      const tpx = tgt.x * T, tpy = tgt.y * T;
+      const dx = tpx - this.px, dy = tpy - this.py;
+      const dist = Math.hypot(dx, dy);
+      if (dist < WALK_SPD) {
+        this.px = tpx; this.py = tpy;
+        this.tx = tgt.x; this.ty = tgt.y;
+        this.pi++;
+        if (this.pi >= this.path.length) {
+          this.state = 'idle';
+          if (this.onArrive) { const f = this.onArrive; this.onArrive = null; f(); }
+        }
+      } else {
+        this.px += (dx / dist) * WALK_SPD;
+        this.py += (dy / dist) * WALK_SPD;
+        this.walkTimer++;
+        if (this.walkTimer > 7) { this.walkTimer = 0; this.walkFrame ^= 1; }
+      }
+    }
+
+    if (this.bubble) {
+      this.bubble.timer--;
+      if (this.bubble.timer <= 0) this.bubble = null;
+    }
+  }
+
+  draw(cx, cy) {
+    const sx = Math.round(this.px - cx);
+    const sy = Math.round(this.py - cy);
+    if (sx < -64 || sx > canvas.width + 64 || sy < -80 || sy > canvas.height + 80) return;
+
+    // Glow ring
+    if (this.glowTimer > 0 && this.glowColor) {
+      ctx.save();
+      ctx.globalAlpha = (this.glowTimer / 60) * 0.5;
+      ctx.fillStyle = this.glowColor;
+      ctx.beginPath();
+      ctx.ellipse(sx + SP_W/2, sy + SP_H - 4, SP_W/1.8, 6, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Shadow
+    ctx.save();
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(sx + SP_W/2, sy + SP_H - 2, SP_W/2.5, 4, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+
+    // Bob for idle/work
+    const bobY = (this.state === 'idle' || this.state === 'work')
+      ? Math.round(Math.sin(this.bob) * BOB_AMP) : 0;
+
+    const pixels = (this.state === 'work' && this.sprWork) ? this.sprWork : this.sprIdle;
+    drawSprite(pixels, sx, sy + bobY);
+
+    // Name tag
+    const nw = this.name.length * 5 + 8;
+    ctx.fillStyle = 'rgba(15,15,30,0.75)';
+    ctx.fillRect(sx + SP_W/2 - nw/2, sy + SP_H + 3, nw, 10);
+    ctx.fillStyle = '#C4B5FD';
+    ctx.font = '7px "Courier New"';
+    ctx.textAlign = 'center';
+    ctx.fillText(this.name, sx + SP_W/2, sy + SP_H + 11);
+    ctx.textAlign = 'left';
+
+    // Bubble
+    if (this.bubble) drawBubble(this.bubble, sx + SP_W/2, sy + bobY);
+  }
+}
+
+// ── Speech Bubble ─────────────────────────────────────────────────
+function wrapText(text, maxW) {
+  const words = text.split(' ');
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    if ((line + w).length > maxW && line) { lines.push(line.trimEnd()); line = ''; }
+    line += w + ' ';
+  }
+  if (line.trim()) lines.push(line.trim());
+  return lines;
+}
+
+function drawBubble(bubble, cx, charTop) {
+  const alpha = Math.min(1, bubble.timer / 30);
+  const lines = wrapText(bubble.text, 16);
+  const LH = 10, PAD = 5;
+  const bw = Math.max(...lines.map(l => l.length)) * 6 + PAD * 2;
+  const bh = lines.length * LH + PAD * 2;
+  const bx = cx - bw / 2;
+  const by = charTop - bh - 12;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Background
+  ctx.fillStyle = '#FFFBF0';
+  ctx.strokeStyle = '#8B5CF6';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bw, bh, 4);
+  ctx.fill(); ctx.stroke();
+
+  // Tail
+  ctx.fillStyle = '#FFFBF0';
+  ctx.beginPath();
+  ctx.moveTo(cx - 4, by + bh);
+  ctx.lineTo(cx,     by + bh + 7);
+  ctx.lineTo(cx + 4, by + bh);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#8B5CF6';
+  ctx.beginPath();
+  ctx.moveTo(cx - 4, by + bh);
+  ctx.lineTo(cx,     by + bh + 7);
+  ctx.lineTo(cx + 4, by + bh);
+  ctx.stroke();
+
+  // Text
+  ctx.fillStyle = '#1E1B4B';
+  ctx.font = '8px "Courier New"';
+  ctx.textAlign = 'center';
+  lines.forEach((l, i) => ctx.fillText(l, cx, by + PAD + LH * i + LH - 2));
+  ctx.textAlign = 'left';
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  WORLD RENDERER
+// ═══════════════════════════════════════════════════════════════════
+const BOOK_COLS = ['#EF4444','#3B82F6','#22C55E','#F59E0B','#A855F7','#EC4899','#F97316'];
+let tick = 0;
+
+function drawTile(tx, ty, cx, cy) {
+  const v = MAP[ty][tx];
+  const sx = tx * T - cx, sy = ty * T - cy;
+  const even = (tx + ty) % 2 === 0;
+
+  // Base colors
+  const BASE = {
+    0: even ? '#1A1A2E' : '#1E1E38',   // floor
+    1: even ? '#2D2D50' : '#383864',   // wall
+    2: even ? '#3D2B1A' : '#4E3624',   // desk
+    3: '#0A0A18',                       // monitor
+    4: even ? '#141428' : '#181840',   // carpet
+    5: even ? '#1E1E38' : '#222244',   // door/opening
+    6: even ? '#2A1810' : '#3A2820',   // bookshelf
+    7: '#0A160A',                       // terminal
+  };
+
+  ctx.fillStyle = BASE[v] ?? BASE[0];
+  ctx.fillRect(sx, sy, T, T);
+
+  // Tile decorations
+  if (v === 3) { // monitor glow
+    const gCol = tx > 37 ? '#6EE7B7' : (tx > 18 ? '#4ADE80' : '#818CF8');
+    const pulse = 0.25 + 0.12 * Math.sin(tick / 50 + tx * 0.7);
+    ctx.fillStyle = gCol;
+    ctx.globalAlpha = pulse;
+    ctx.fillRect(sx + 2, sy + 2, T - 4, T - 4);
+    // Scanlines
+    for (let r = 0; r < 3; r++) {
+      ctx.fillStyle = gCol;
+      ctx.globalAlpha = 0.5;
+      ctx.fillRect(sx + 4, sy + 4 + r * 8, T - 16, 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  if (v === 7) { // WA terminal green glow
+    const g = 0.3 + 0.2 * Math.sin(tick / 20 + ty);
+    ctx.fillStyle = '#00FF41';
+    ctx.globalAlpha = g;
+    ctx.fillRect(sx + 2, sy + 2, T - 4, T - 4);
+    ctx.globalAlpha = 1;
+  }
+
+  if (v === 6) { // bookshelf – colored spines
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = BOOK_COLS[(tx * 3 + ty + i) % BOOK_COLS.length];
+      ctx.fillRect(sx + 3 + i * 9, sy + 3, 7, T - 6);
+    }
+  }
+
+  if (v === 1) { // wall highlight top edge
+    ctx.fillStyle = '#484880';
+    ctx.fillRect(sx, sy, T, 2);
+  }
+
+  if (v === 2) { // desk edge highlight
+    ctx.fillStyle = '#5E4432';
+    ctx.fillRect(sx, sy, T, 2);
+    ctx.fillStyle = '#2A1A0A';
+    ctx.fillRect(sx, sy + T - 2, T, 2);
+  }
+}
+
+function drawWorld(cx, cy) {
+  const x0 = Math.max(0,    Math.floor(cx / T));
+  const y0 = Math.max(0,    Math.floor(cy / T));
+  const x1 = Math.min(WW-1, Math.ceil((cx + canvas.width)  / T));
+  const y1 = Math.min(WH-1, Math.ceil((cy + canvas.height) / T));
+  for (let ty = y0; ty <= y1; ty++)
+    for (let tx = x0; tx <= x1; tx++)
+      drawTile(tx, ty, cx, cy);
+
+  // Ambient floor particles (carpet area glow)
+  if (Math.random() < 0.04) {
+    const px = (1 + Math.random() * 17) * T - cx;
+    const py = (1 + Math.random() * (WH-2)) * T - cy;
+    ctx.fillStyle = '#6D28D9';
+    ctx.globalAlpha = 0.12;
+    ctx.fillRect(px, py, 2, 2);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ── Pipeline status overlay ───────────────────────────────────────
+const STAGES = [
+  { key: 'transcript',   label: 'TRANSCRIPT',  col: '#38BDF8' },
+  { key: 'cleaning',     label: 'CLEANING',    col: '#818CF8' },
+  { key: 'analysis',     label: 'ANALYSIS',    col: '#A78BFA' },
+  { key: 'taskCreation', label: 'TASKS',       col: '#C084FC' },
+  { key: 'executing',    label: 'EXECUTING',   col: '#FB923C' },
+];
+const pipeline = { transcript:false, cleaning:false, analysis:false, taskCreation:false, executing:false };
+
+function drawOverlay() {
+  const ox = canvas.width - 148, oy = canvas.height - 136;
+  ctx.fillStyle = 'rgba(8,8,18,0.88)';
+  ctx.strokeStyle = 'rgba(139,92,246,0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(ox - 6, oy - 8, 146, STAGES.length * 22 + 20, 6);
+  ctx.fill(); ctx.stroke();
+
+  ctx.font = 'bold 8px "Courier New"';
+  STAGES.forEach((st, i) => {
+    const x = ox, y = oy + i * 22;
+    const active = pipeline[st.key];
+    ctx.fillStyle = active ? st.col : '#2D2D50';
+    if (active) ctx.globalAlpha = 0.7 + 0.3 * Math.sin(tick / 8);
+    ctx.beginPath();
+    ctx.arc(x + 5, y + 7, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = active ? st.col : '#4B5563';
+    ctx.fillText(st.label, x + 14, y + 11);
+
+    if (active) {
+      ctx.fillStyle = st.col;
+      ctx.globalAlpha = 0.12;
+      ctx.fillRect(ox - 6, oy - 8 + i * 22, 146, 22);
+      ctx.globalAlpha = 1;
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  CHARACTER INSTANCES
+// ═══════════════════════════════════════════════════════════════════
+const dot        = new Char('dot',    'Dot',      S_DOT_IDLE,   S_DOT_TALK,   9,  10);
+const copywriter = new Char('copy',   'Writer',   S_COPY_IDLE,  S_COPY_WORK,  4,  5);
+const analyst1   = new Char('a1',     'Analyst·1', S_A1_IDLE,   S_A1_WORK,    11, 5);
+const analyst2   = new Char('a2',     'Analyst·2', S_A2_WORK,   S_A2_WORK,    14, 5);
+const taskBot    = new Char('task',   'TaskBot',  S_TASK_WORK,  S_TASK_WORK,  4,  14);
+const waBot      = new Char('wa',     'WA·Bot',   S_WA_IDLE,    S_WA_WORK,    14, 14);
+const clawd      = new Char('clawd',  "Claw'd",   S_CLAWD_IDLE, S_CLAWD_WORK, 25, 9);
+const archivist  = new Char('arch',   'Archivist',S_ARCH,       S_ARCH,       45, 9);
+
+const CHARS = [dot, copywriter, analyst1, analyst2, taskBot, waBot, clawd, archivist];
+
+// Set initial work states
+copywriter.work();
+analyst1.work();
+analyst2.work();
+clawd.work();
+
+// ── Ambient chatter lines ──────────────────────────────────────────
+const QUIPS = {
+  dot:    ['Monitoring...', 'All systems go!', 'Processing...', 'Standing by.', 'Analysis complete!'],
+  copy:   ['Cleaning text...', 'Merging chunks...', 'Denoising...', 'Done! ✓'],
+  a1:     ['Analyzing...', 'Tagging tasks...', 'Pattern found!', 'Context match!'],
+  a2:     ['Cross-referencing...', 'Sentiment: ok!', 'Topics extracted!', 'Done!'],
+  task:   ['New task queued!', 'Creating...', 'Task ready! ✓', 'Mode: auto!'],
+  wa:     ['WA msg in!', 'Routing to pipeline...', 'Reply sent!', 'Monitoring...'],
+  clawd:  ['Building...', 'Tests pass! ✓', 'Committing...', 'Pushing...', 'Done!'],
+  arch:   ['Filing...', 'Indexed ✓', 'Archived.', 'Searching...', 'Found it!'],
+};
+
+// ═══════════════════════════════════════════════════════════════════
+//  CAMERA
+// ═══════════════════════════════════════════════════════════════════
+let camX = 0, camY = 0, targetCX = 0, targetCY = 0;
+let taskCount = 0;
+
+function focusOn(char) {
+  targetCX = char.px - canvas.width  / 2 + SP_W / 2;
+  targetCY = char.py - canvas.height / 2 + SP_H / 2;
+}
+
+function updateCam() {
+  camX += (targetCX - camX) * 0.07;
+  camY += (targetCY - camY) * 0.07;
+  camX = Math.max(0, Math.min(camX, WW * T - canvas.width));
+  camY = Math.max(0, Math.min(camY, WH * T - canvas.height));
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  PIPELINE EVENT API   (called from Swift via evaluateJavaScript)
+// ═══════════════════════════════════════════════════════════════════
+let taskTotal = 0;
+
+window.receiveEvent = function(type, data) {
+  data = data || {};
+  switch (type) {
+
+    case 'transcript':
+      pipeline.transcript = true;
+      waBot.say('Transcript in! 📥', 220);
+      waBot.flash('#38BDF8');
+      waBot.work();
+      focusOn(waBot);
+      setTimeout(() => { pipeline.transcript = false; }, 4000);
+      break;
+
+    case 'cleaning':
+      pipeline.cleaning = true;
+      copywriter.work();
+      copywriter.say('Cleaning...', 200);
+      copywriter.flash('#818CF8');
+      focusOn(copywriter);
+      setTimeout(() => {
+        pipeline.cleaning = false;
+        copywriter.say('Clean! ✓', 120);
+      }, data.duration || 3500);
+      break;
+
+    case 'analysis':
+      pipeline.analysis = true;
+      analyst1.work(); analyst2.work();
+      analyst1.say('Analyzing...', 200);
+      analyst2.say('Tagging...', 200);
+      analyst1.flash('#A78BFA'); analyst2.flash('#A78BFA');
+      focusOn(analyst1);
+      setTimeout(() => {
+        pipeline.analysis = false;
+        analyst1.say('Done! ✓', 120);
+        analyst2.say('Tasks found!', 120);
+      }, data.duration || 4000);
+      break;
+
+    case 'task_created':
+      pipeline.taskCreation = true;
+      taskTotal++;
+      taskCount = taskTotal;
+      document.getElementById('task-hud').textContent = `tasks: ${taskTotal}`;
+      const title = data.title ? `"${data.title.slice(0,18)}"` : 'New task!';
+      taskBot.say(title, 240);
+      taskBot.flash('#C084FC');
+      focusOn(taskBot);
+
+      if (data.mode === 'auto') {
+        // Walk to doorway to hand off to Claw'd
+        taskBot.walkTo(17, 10, () => {
+          taskBot.say('Handing off! →', 160);
+          setTimeout(() => {
+            clawd.say(`On it! ${title}`, 300);
+            clawd.flash('#FB923C');
+            pipeline.executing = true;
+            pipeline.taskCreation = false;
+            taskBot.goHome();
+            focusOn(clawd);
+          }, 800);
+        });
+      } else {
+        dot.say('Task queued →', 160);
+        setTimeout(() => { pipeline.taskCreation = false; }, 2500);
+      }
+      break;
+
+    case 'task_executing':
+      pipeline.executing = true;
+      clawd.work();
+      clawd.say('Executing...', 240);
+      clawd.flash('#FB923C');
+      focusOn(clawd);
+      break;
+
+    case 'task_done':
+      pipeline.executing = false;
+      clawd.say('Done! 🎉', 200);
+      clawd.flash('#4ADE80');
+      // Deliver result back through door
+      clawd.walkTo(20, 10, () => {
+        dot.say('Great work! ✓', 200);
+        dot.flash('#4ADE80');
+        setTimeout(() => {
+          clawd.goHome();
+          archivist.say('Archiving...', 160);
+          archivist.flash('#6EE7B7');
+          focusOn(archivist);
+        }, 1800);
+      });
+      focusOn(clawd);
+      break;
+
+    case 'whatsapp':
+      waBot.say('WA message! 📱', 200);
+      waBot.flash('#25D366');
+      focusOn(waBot);
+      break;
+
+    case 'reset':
+      Object.keys(pipeline).forEach(k => pipeline[k] = false);
+      break;
+  }
+};
+
+// Batch status update from Swift
+window.setPipelineStatus = function(status) {
+  Object.assign(pipeline, status);
+};
+
+// ═══════════════════════════════════════════════════════════════════
+//  AMBIENT ANIMATIONS
+// ═══════════════════════════════════════════════════════════════════
+let ambientTick = 0;
+// Map character IDs to instances for ambient chatter
+const CHAR_MAP = { dot, copy: copywriter, a1: analyst1, a2: analyst2,
+                   task: taskBot, wa: waBot, clawd, arch: archivist };
+
+function runAmbient() {
+  ambientTick++;
+
+  // Random chatter every ~7 seconds
+  if (ambientTick % 420 === 0) {
+    const ids = Object.keys(QUIPS);
+    const pick = ids[Math.floor(Math.random() * ids.length)];
+    const char = CHAR_MAP[pick];
+    if (char && !char.bubble) {
+      const lines = QUIPS[pick];
+      char.say(lines[Math.floor(Math.random() * lines.length)], 140);
+    }
+  }
+
+  // Auto-pan camera every 20 seconds (unless mid-event)
+  if (ambientTick % 1200 === 0) {
+    const targets = [dot, clawd, copywriter, archivist, waBot];
+    focusOn(targets[(ambientTick / 1200) % targets.length]);
+  }
+
+  // Dot randomly checks on workers
+  if (ambientTick % 600 === 50 && dot.state === 'idle') {
+    const targets = [copywriter, analyst1, taskBot];
+    const tgt = targets[Math.floor(ambientTick / 600) % targets.length];
+    dot.walkTo(tgt.hx + 1, tgt.hy, () => {
+      dot.say('Good work!', 100);
+      setTimeout(() => dot.goHome(), 3000);
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  DRAG TO PAN
+// ═══════════════════════════════════════════════════════════════════
+let drag = false, dragX = 0, dragY = 0, dragCX = 0, dragCY = 0;
+
+canvas.addEventListener('mousedown', e => {
+  drag = true;
+  dragX = e.clientX; dragY = e.clientY;
+  dragCX = camX; dragCY = camY;
+});
+canvas.addEventListener('mousemove', e => {
+  if (!drag) return;
+  targetCX = camX = dragCX - (e.clientX - dragX);
+  targetCY = camY = dragCY - (e.clientY - dragY);
+});
+canvas.addEventListener('mouseup',    () => { drag = false; });
+canvas.addEventListener('mouseleave', () => { drag = false; });
+
+// ── Click to focus ─────────────────────────────────────────────────
+canvas.addEventListener('dblclick', () => focusOn(dot));
+
+// ═══════════════════════════════════════════════════════════════════
+//  GAME LOOP
+// ═══════════════════════════════════════════════════════════════════
+function loop() {
+  tick++;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#05050f';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  updateCam();
+  const cx = Math.round(camX), cy = Math.round(camY);
+
+  drawWorld(cx, cy);
+
+  // Sort characters by Y for depth
+  CHARS.forEach(c => c.update());
+  runAmbient();
+  [...CHARS].sort((a, b) => a.py - b.py).forEach(c => c.draw(cx, cy));
+
+  drawOverlay();
+  requestAnimationFrame(loop);
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+// Center camera on Mission Control
+targetCX = 0; targetCY = 2 * T;
+camX = 0; camY = 2 * T;
+
+setTimeout(() => dot.say('Welcome to AutoClawd HQ! 👻', 260), 600);
+setTimeout(() => clawd.say('Ready to execute! 🦀', 220), 2400);
+
+requestAnimationFrame(loop);
+
+// Notify Swift the world is ready
+try {
+  window.webkit?.messageHandlers?.worldBridge?.postMessage({ type: 'ready' });
+} catch(_) {}
+</script>
+</body>
+</html>

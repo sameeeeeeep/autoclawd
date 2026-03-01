@@ -176,6 +176,13 @@ async function connectWhatsApp(): Promise<void> {
       const rawJid = msg.key.remoteJid;
       if (!rawJid || rawJid === 'status@broadcast') continue;
 
+      // Only process self-chat (Message Yourself) and individual DMs.
+      // Groups use @g.us JIDs — filter them out at the source to prevent
+      // group messages from ever entering the AutoClawd pipeline.
+      if (rawJid.endsWith('@g.us') || rawJid.endsWith('@broadcast')) {
+        continue;
+      }
+
       // Skip messages sent by the bot itself (via POST /send)
       if (msg.key.id && botSentMessageIDs.has(msg.key.id)) {
         botSentMessageIDs.delete(msg.key.id); // clean up

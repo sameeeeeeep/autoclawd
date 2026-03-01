@@ -104,6 +104,8 @@ final class WhatsAppPoller: ObservableObject {
         let selfChatJID = "\(myJID)@s.whatsapp.net"
 
         for msg in messages {
+            // Reject group chats and broadcast lists — must be a personal JID
+            guard msg.jid.hasSuffix("@s.whatsapp.net") else { continue }
             // Only process messages in the self-chat conversation (exact match)
             guard msg.jid == selfChatJID else { continue }
 
@@ -327,7 +329,8 @@ final class WhatsAppPoller: ObservableObject {
             sessionID: "whatsapp",
             sessionChunkSeq: 0,
             durationSeconds: 0,
-            speakerName: sender
+            speakerName: sender,
+            source: .whatsapp
         )
 
         await MainActor.run {

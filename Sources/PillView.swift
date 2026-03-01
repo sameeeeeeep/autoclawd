@@ -23,6 +23,8 @@ struct PillView: View {
     let pillMode: PillMode
     let onCycleMode: () -> Void
     let appearanceMode: AppearanceMode
+    /// Collapse the widget to a single dot (minimal state)
+    var onCollapse: (() -> Void)? = nil
 
     @State private var scanOffset: CGFloat = -120
     @State private var scanTimer: Timer? = nil
@@ -129,13 +131,23 @@ struct PillView: View {
     }
 
     // MARK: - Minimal Dot
+    // When collapsed the dot takes on the state colour so you can still see at-a-glance status.
 
     private var minimalView: some View {
-        Circle()
-            .fill(Color(NSColor.controlBackgroundColor))
-            .frame(width: 12, height: 12)
-            .overlay(Circle().stroke(Color(NSColor.separatorColor), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
+        let dotColor: Color = {
+            switch state {
+            case .listening:  return .green
+            case .processing: return .orange
+            case .paused:     return Color(NSColor.tertiaryLabelColor)
+            default:          return Color(NSColor.controlBackgroundColor)
+            }
+        }()
+
+        return Circle()
+            .fill(dotColor)
+            .frame(width: 10, height: 10)
+            .overlay(Circle().stroke(Color(NSColor.separatorColor).opacity(0.4), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
     }
 
     // MARK: - Waveform Bars
@@ -241,6 +253,15 @@ struct PillView: View {
             Button("Transcribe Mode  \u{2303}X") { onCycleMode() }
             Divider()
             Button("View Logs") { onOpenLogs() }
+            Divider()
+            // Collapse vs expand depending on current state
+            if state == .minimal {
+                Button("Expand Widget") { onToggleMinimal() }
+            } else {
+                Button("Collapse to Dot") {
+                    onCollapse?() ?? onToggleMinimal()
+                }
+            }
             Divider()
             Button("Quit AutoClawd") { NSApp.terminate(nil) }
         }

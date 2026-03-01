@@ -92,6 +92,10 @@ final class AppState: ObservableObject {
         didSet { SettingsManager.shared.appearanceMode = appearanceMode }
     }
 
+    @Published var fontSizePreference: FontSizePreference {
+        didSet { SettingsManager.shared.fontSizePreference = fontSizePreference }
+    }
+
     // MARK: - People roster & speaker tagging
 
     @Published var people: [Person] {
@@ -114,6 +118,11 @@ final class AppState: ObservableObject {
     @Published var pendingExtractionCount: Int = 0
     @Published var synthesizeThreshold: Int {
         didSet { SettingsManager.shared.synthesizeThreshold = synthesizeThreshold }
+    }
+
+    /// Plain-English rules describing tasks that can run autonomously without user approval.
+    @Published var autonomousTaskRules: [String] {
+        didSet { SettingsManager.shared.autonomousTaskRules = autonomousTaskRules }
     }
     @Published var isCleaningUp = false
 
@@ -224,10 +233,12 @@ final class AppState: ObservableObject {
         micEnabled          = settings.micEnabled
         audioRetentionDays  = settings.audioRetentionDays
         groqAPIKey          = settings.groqAPIKey
-        synthesizeThreshold = settings.synthesizeThreshold
+        synthesizeThreshold    = settings.synthesizeThreshold
+        autonomousTaskRules    = settings.autonomousTaskRules
         showAmbientWidget    = settings.showAmbientWidget
         showToasts           = settings.showToasts
         appearanceMode      = settings.appearanceMode
+        fontSizePreference  = settings.fontSizePreference
         self.people       = AppState.init_loadPeople()
         self.locationName = UserDefaults.standard.string(forKey: "autoclawd.locationName") ?? "My Room"
 

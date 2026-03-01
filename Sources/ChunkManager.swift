@@ -432,7 +432,8 @@ final class ChunkManager: ObservableObject {
                     sessionID: currentSID,
                     sessionChunkSeq: sessionChunkSeq,
                     durationSeconds: duration,
-                    speakerName: speakerName
+                    speakerName: speakerName,
+                    source: .ambient
                 )
             } else if let extractionService {
                 // Legacy fallback
@@ -449,10 +450,25 @@ final class ChunkManager: ObservableObject {
             }
 
         case .transcription:
-            guard let pasteService else { break }
-            await MainActor.run {
-                pasteService.paste(text: transcript)
-                self.appState?.latestTranscriptChunk = transcript
+            // Paste chunk immediately for live display
+            if let pasteService {
+                await MainActor.run {
+                    pasteService.paste(text: transcript)
+                    self.appState?.latestTranscriptChunk = transcript
+                }
+            }
+            // Also run through cleaning stage so chunks get merged and denoised over time.
+            // The cleaned version will appear in LogsPipelineView as a merged transcript.
+            if let pipelineOrchestrator, let tid = transcriptID {
+                await pipelineOrchestrator.processTranscript(
+                    text: transcript,
+                    transcriptID: tid,
+                    sessionID: currentSID,
+                    sessionChunkSeq: sessionChunkSeq,
+                    durationSeconds: duration,
+                    speakerName: speakerName,
+                    source: .transcription
+                )
             }
 
         case .aiSearch:

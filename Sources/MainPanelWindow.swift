@@ -18,6 +18,10 @@ final class MainPanelWindow: NSWindow {
         minSize = NSSize(width: 500, height: 400)
         center()
 
-        contentView = NSHostingView(rootView: MainPanelView(appState: appState))
+        let scale = appState.fontSizePreference.scale
+        contentView = NSHostingView(
+            rootView: MainPanelView(appState: appState)
+                .applyFontScale(scale)
+        )
     }
 }

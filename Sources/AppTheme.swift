@@ -2,6 +2,27 @@
 import AppKit
 import SwiftUI
 
+// MARK: - Font Scale Environment Key
+
+private struct FontScaleKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1.0
+}
+
+extension EnvironmentValues {
+    /// A multiplier (0.85 / 1.0 / 1.2) applied to system font sizes throughout the app.
+    var fontScale: CGFloat {
+        get { self[FontScaleKey.self] }
+        set { self[FontScaleKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Injects the user's chosen font scale from AppState into the view hierarchy.
+    func applyFontScale(_ scale: CGFloat) -> some View {
+        environment(\.fontScale, scale)
+    }
+}
+
 // MARK: - AppTheme
 
 enum AppTheme {

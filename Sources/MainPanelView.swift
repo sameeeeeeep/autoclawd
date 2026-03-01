@@ -24,6 +24,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
 enum WorldSubTab: String, CaseIterable, Identifiable {
     case time  = "Time"
     case space = "Space"
+    case hq    = "HQ"
 
     var id: String { rawValue }
 }
@@ -102,6 +103,8 @@ struct MainPanelView: View {
             WorldTimeView(appState: appState)
         case .space:
             WorldSpaceView(appState: appState)
+        case .hq:
+            PixelWorldView(appState: appState)
         }
     }
 }

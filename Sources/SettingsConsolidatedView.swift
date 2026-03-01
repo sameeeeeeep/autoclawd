@@ -286,6 +286,14 @@ struct SettingsConsolidatedView: View {
                     Text("Auto: 20").tag(20)
                 }
             }
+
+            Section("Autonomous Task Rules") {
+                Text("List task categories that autoclawd can execute without asking for approval. One rule per line. Example: \"Send a WhatsApp reply\", \"Create a GitHub issue\", \"Search the web\".")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                AutonomousRulesEditor(rules: $appState.autonomousTaskRules)
+            }
         }
         .formStyle(.grouped)
     }
@@ -485,6 +493,19 @@ struct SettingsConsolidatedView: View {
                         Text(mode.displayName).tag(mode)
                     }
                 }
+            }
+
+            Section("Text Size") {
+                Picker("Font size", selection: $appState.fontSizePreference) {
+                    ForEach(FontSizePreference.allCases, id: \.self) { pref in
+                        Text(pref.displayName).tag(pref)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("Changes take effect after reopening the main panel.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -808,5 +829,71 @@ struct AddHotWordSheet: View {
         }
         .padding(24)
         .frame(width: 380)
+    }
+}
+
+// MARK: - Autonomous Rules Editor
+
+/// Inline list editor for the autonomous task rules setting.
+/// Each rule is a plain-English description of a task category.
+private struct AutonomousRulesEditor: View {
+    @Binding var rules: [String]
+    @State private var newRule: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if rules.isEmpty {
+                Text("No rules yet — all tasks will require approval.")
+                    .font(.caption)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                    .padding(.vertical, 4)
+            } else {
+                ForEach(Array(rules.enumerated()), id: \.offset) { index, rule in
+                    HStack(spacing: 6) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(.accentColor)
+
+                        Text(rule)
+                            .font(.system(size: 12))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Button {
+                            rules.remove(at: index)
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundColor(.red.opacity(0.7))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 2)
+
+                    if index < rules.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+
+            HStack(spacing: 6) {
+                TextField("Add a rule, e.g. \"Send WhatsApp replies\"", text: $newRule)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .onSubmit { addRule() }
+
+                Button(action: addRule) {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundColor(.accentColor)
+                }
+                .buttonStyle(.plain)
+                .disabled(newRule.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    private func addRule() {
+        let trimmed = newRule.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        rules.append(trimmed)
+        newRule = ""
     }
 }
