@@ -57,8 +57,8 @@ final class TaskExecutionService: @unchecked Sendable {
         }
     }
 
-    /// Send a follow-up message to an active Claude session.
-    func sendMessage(taskID: String, message: String) {
+    /// Send a follow-up message to an active Claude session (with optional attachments).
+    func sendMessage(taskID: String, message: String, attachments: [Attachment] = []) {
         sessionsLock.lock()
         let session = activeSessions[taskID]
         sessionsLock.unlock()
@@ -67,11 +67,12 @@ final class TaskExecutionService: @unchecked Sendable {
             Log.warn(.taskExec, "Task \(taskID): no active session for follow-up")
             return
         }
-        session.sendMessage(message)
-        // Log the user's message as a step
+        session.sendMessage(message, attachments: attachments)
+        // Log the user's message as a step (with attachment indicators)
         let steps = pipelineStore.fetchSteps(taskID: taskID)
         let nextIdx = (steps.map(\.stepIndex).max() ?? 0) + 1
-        logStep(taskID: taskID, index: nextIdx, description: "You: \(message)")
+        let attachSuffix = attachments.isEmpty ? "" : " [\(attachments.map(\.fileName).joined(separator: ", "))]"
+        logStep(taskID: taskID, index: nextIdx, description: "You: \(message)\(attachSuffix)")
     }
 
     /// Stop an active session.
@@ -92,12 +93,23 @@ final class TaskExecutionService: @unchecked Sendable {
     // MARK: - Claude Code Execution (Interactive Streaming)
 
     private func executeViaClaude(task: PipelineTaskRecord, project: Project) async {
-        logStep(taskID: task.id, index: 1, description: "Starting Claude Code session...")
-        Log.info(.taskExec, "Task \(task.id): executing via Claude Code in \(project.localPath)")
+        // Load any context capture attachments associated with this task
+        let attachments: [Attachment] = task.attachmentPaths.compactMap { path in
+            ContextCaptureStore.loadAttachment(path: path)
+        }
+        if !attachments.isEmpty {
+            logStep(taskID: task.id, index: 1,
+                    description: "Starting Claude Code session with \(attachments.count) attachment(s)...")
+        } else {
+            logStep(taskID: task.id, index: 1, description: "Starting Claude Code session...")
+        }
+        Log.info(.taskExec, "Task \(task.id): executing via Claude Code in \(project.localPath)" +
+                 (attachments.isEmpty ? "" : " with \(attachments.count) attachment(s)"))
 
         guard let (session, eventStream) = claudeCodeRunner.startSession(
             prompt: task.prompt,
-            in: project
+            in: project,
+            attachments: attachments
         ) else {
             logStep(taskID: task.id, index: 2, description: "Failed to start Claude CLI", status: "failed")
             pipelineStore.updateTaskStatus(id: task.id, status: .needs_input)

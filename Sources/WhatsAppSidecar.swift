@@ -60,27 +60,6 @@ final class WhatsAppSidecar: @unchecked Sendable {
         return nil
     }
 
-    /// Find the `npx` executable alongside node.
-    private static func findNpx() -> URL? {
-        if let nodeURL = findNode() {
-            let npxPath = nodeURL.deletingLastPathComponent().appendingPathComponent("npx").path
-            if FileManager.default.isExecutableFile(atPath: npxPath) {
-                return URL(fileURLWithPath: npxPath)
-            }
-        }
-        // Direct check
-        let candidates = [
-            "/usr/local/bin/npx",
-            "/opt/homebrew/bin/npx",
-        ]
-        for path in candidates {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return URL(fileURLWithPath: path)
-            }
-        }
-        return nil
-    }
-
     /// Path to the bundled WhatsAppSidecar directory.
     /// Checks: 1) App bundle Resources, 2) Development directory alongside Sources.
     private static func sidecarDirectory() -> URL? {
@@ -123,8 +102,8 @@ final class WhatsAppSidecar: @unchecked Sendable {
 
         intentionallyStopped = false
 
-        guard let npxURL = Self.findNpx() else {
-            Log.warn(.system, "[WhatsApp] npx not found — cannot start sidecar. Install Node.js >= 20.")
+        guard let nodeURL = Self.findNode() else {
+            Log.warn(.system, "[WhatsApp] node not found — cannot start sidecar. Install Node.js >= 20.")
             return
         }
 
@@ -133,30 +112,40 @@ final class WhatsAppSidecar: @unchecked Sendable {
             return
         }
 
-        // Ensure node_modules exist
+        // Ensure node_modules exist (tsx is a regular dependency)
         let nodeModules = sidecarDir.appendingPathComponent("node_modules")
         if !FileManager.default.fileExists(atPath: nodeModules.path) {
             Log.info(.system, "[WhatsApp] Installing sidecar dependencies...")
-            installDependencies(npxURL: npxURL, sidecarDir: sidecarDir)
+            installDependencies(nodeURL: nodeURL, sidecarDir: sidecarDir)
+        }
+
+        // Run tsx via node directly — avoids symlink issues when bundled
+        let tsxCli = sidecarDir
+            .appendingPathComponent("node_modules")
+            .appendingPathComponent("tsx")
+            .appendingPathComponent("dist")
+            .appendingPathComponent("cli.mjs")
+        guard FileManager.default.fileExists(atPath: tsxCli.path) else {
+            Log.warn(.system, "[WhatsApp] tsx cli not found at \(tsxCli.path) — try deleting node_modules and restarting")
+            return
         }
 
         let authDir = FileStorageManager.shared.whatsappAuthDirectory.path
         let mediaDir = FileStorageManager.shared.whatsappMediaDirectory.path
 
         let proc = Process()
-        proc.executableURL = npxURL
-        proc.arguments = ["tsx", "src/index.ts"]
+        proc.executableURL = nodeURL
+        proc.arguments = [tsxCli.path, "src/index.ts"]
         proc.currentDirectoryURL = sidecarDir
 
         var env = ProcessInfo.processInfo.environment
         env["PORT"] = String(Self.port)
         env["AUTH_DIR"] = authDir
         env["MEDIA_DIR"] = mediaDir
-        // Ensure node can find npx/tsx in the same bin directory
-        if let nodeBin = Self.findNode()?.deletingLastPathComponent().path {
-            let existingPath = env["PATH"] ?? "/usr/bin:/bin"
-            env["PATH"] = "\(nodeBin):\(existingPath)"
-        }
+        // Ensure node is on PATH so tsx can find it
+        let nodeBin = nodeURL.deletingLastPathComponent().path
+        let existingPath = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = "\(nodeBin):\(existingPath)"
         proc.environment = env
 
         let pipe = Pipe()
@@ -242,9 +231,9 @@ final class WhatsAppSidecar: @unchecked Sendable {
 
     // MARK: - Dependency Installation
 
-    private func installDependencies(npxURL: URL, sidecarDir: URL) {
-        // Find npm alongside npx
-        let npmPath = npxURL.deletingLastPathComponent().appendingPathComponent("npm").path
+    private func installDependencies(nodeURL: URL, sidecarDir: URL) {
+        // Find npm alongside node
+        let npmPath = nodeURL.deletingLastPathComponent().appendingPathComponent("npm").path
         guard FileManager.default.isExecutableFile(atPath: npmPath) else {
             Log.warn(.system, "[WhatsApp] npm not found — cannot install sidecar dependencies")
             return
@@ -252,14 +241,13 @@ final class WhatsAppSidecar: @unchecked Sendable {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: npmPath)
-        proc.arguments = ["install", "--production"]
+        proc.arguments = ["install"]
         proc.currentDirectoryURL = sidecarDir
 
         var env = ProcessInfo.processInfo.environment
-        if let nodeBin = Self.findNode()?.deletingLastPathComponent().path {
-            let existingPath = env["PATH"] ?? "/usr/bin:/bin"
-            env["PATH"] = "\(nodeBin):\(existingPath)"
-        }
+        let nodeBin = nodeURL.deletingLastPathComponent().path
+        let existingPath = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = "\(nodeBin):\(existingPath)"
         proc.environment = env
 
         let pipe = Pipe()

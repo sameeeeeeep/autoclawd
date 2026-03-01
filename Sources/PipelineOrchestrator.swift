@@ -26,19 +26,31 @@ final class PipelineOrchestrator: @unchecked Sendable {
 
     // MARK: - Public API
 
-    /// Process a new transcript through the full pipeline.
-    /// Called by ChunkManager.processChunk() in ambient intelligence mode.
+    /// Process a new transcript through the pipeline.
+    ///
+    /// `source` controls which stages run:
+    /// - `.ambient` / `.whatsapp` — full pipeline (clean → analyze → task → execute)
+    /// - `.transcription` — Stage 1 (clean) only; transcript is stored for copy-paste use
+    /// - `.code` — skips all LLM stages; the Code widget handles execution itself
     func processTranscript(
         text: String,
         transcriptID: Int64,
         sessionID: String?,
         sessionChunkSeq: Int,
         durationSeconds: Int,
-        speakerName: String?
+        speakerName: String?,
+        source: PipelineSource = .ambient
     ) async {
-        Log.info(.pipeline, "Pipeline: processing transcript (\(text.count) chars, session=\(sessionID ?? "none"), seq=\(sessionChunkSeq))")
+        Log.info(.pipeline, "Pipeline[\(source.rawValue)]: processing transcript (\(text.count) chars, session=\(sessionID ?? "none"), seq=\(sessionChunkSeq))")
 
-        // Stage 1: Clean
+        // Code mode: the widget manages its own execution — no pipeline stages needed.
+        if source == .code {
+            Log.info(.pipeline, "Pipeline[code]: skipping all stages (code widget handles execution)")
+            await notifyUpdate()
+            return
+        }
+
+        // Stage 1: Clean (runs for all non-code sources)
         guard let cleaned = await cleaningService.processNewTranscript(
             text: text,
             transcriptID: transcriptID,
@@ -53,7 +65,14 @@ final class PipelineOrchestrator: @unchecked Sendable {
 
         await notifyUpdate()
 
-        // Stage 2: Analyze
+        // Transcription mode: clean only — no task analysis or creation.
+        // User is dictating/copy-pasting; the cleaned transcript is the end product.
+        if source == .transcription {
+            Log.info(.pipeline, "Pipeline[transcription]: stopping after cleaning stage")
+            return
+        }
+
+        // Stage 2: Analyze (ambient + whatsapp)
         guard let analysis = await analysisService.analyze(cleaned: cleaned) else {
             Log.info(.pipeline, "Pipeline: analysis returned nil")
             return
@@ -61,8 +80,16 @@ final class PipelineOrchestrator: @unchecked Sendable {
 
         await notifyUpdate()
 
-        // Stage 3: Create tasks
-        let tasks = await taskCreationService.createTasks(from: analysis)
+        // Grab any context captures (screenshots, clipboard images) from this session
+        let captures = ContextCaptureStore.shared.recentUnattached(sessionID: sessionID)
+        let capturePaths = captures.map(\.filePath).filter { !$0.isEmpty }
+        if !captures.isEmpty {
+            Log.info(.pipeline, "Pipeline: found \(captures.count) context capture(s) for session")
+            ContextCaptureStore.shared.markAttached(ids: captures.map(\.id))
+        }
+
+        // Stage 3: Create tasks (with attached context captures)
+        let tasks = await taskCreationService.createTasks(from: analysis, attachmentPaths: capturePaths)
 
         await notifyUpdate()
 
@@ -71,7 +98,8 @@ final class PipelineOrchestrator: @unchecked Sendable {
             return
         }
 
-        Log.info(.pipeline, "Pipeline: \(tasks.count) task(s) created")
+        Log.info(.pipeline, "Pipeline: \(tasks.count) task(s) created" +
+                 (capturePaths.isEmpty ? "" : " with \(capturePaths.count) attachment(s)"))
 
         // Stage 4: Execute auto tasks
         for task in tasks where task.mode == .auto {

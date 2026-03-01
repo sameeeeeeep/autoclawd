@@ -3,24 +3,43 @@ import Security
 
 // MARK: - AppSettingsStorage
 //
-// Stores sensitive values (API keys) in the macOS Keychain using SecItem APIs.
-// Values are encrypted at rest and only accessible when the device is unlocked.
+// Priority order for sensitive values (API keys):
+//   1. Environment variable  — zero friction, works in shell + launchd
+//   2. Keychain              — encrypted at rest, macOS native
+//   3. Legacy .settings file — one-time migration only
 //
-// Interface is intentionally identical to the old file-backed version so all
-// call sites in SettingsManager.swift require zero changes.
+// Set env vars in ~/.zshenv or via launchctl:
+//   GROQ_API_KEY=sk-...
+//   ANTHROPIC_API_KEY=sk-ant-...
 //
-// One-time migration: on first load(), if the Keychain has no entry, checks the
-// legacy .settings JSON file, migrates to Keychain, and removes from the file.
+// Environment-variable names are derived from the account key automatically:
+//   "groq_api_key_storage"     → GROQ_API_KEY
+//   "anthropic_api_key_storage" → ANTHROPIC_API_KEY
+// You can also set the exact uppercased key as the env var.
 
 enum AppSettingsStorage {
     private static let service = Bundle.main.bundleIdentifier ?? "com.autoclawd.app"
 
+    // MARK: - Known env var mappings
+
+    private static let envVarMap: [String: String] = [
+        "groq_api_key_storage":      "GROQ_API_KEY",
+        "anthropic_api_key_storage": "ANTHROPIC_API_KEY",
+    ]
+
     // MARK: - Public API
 
     static func load(account: String) -> String? {
-        // 1. Try Keychain first
+        // 1. Environment variable (highest priority — no keychain prompt)
+        let envKey = envVarMap[account] ?? account.uppercased().replacingOccurrences(of: "_STORAGE", with: "")
+        if let envVal = ProcessInfo.processInfo.environment[envKey], !envVal.isEmpty {
+            return envVal
+        }
+
+        // 2. Try Keychain
         if let val = keychainLoad(account: account) { return val }
-        // 2. One-time migration from legacy .settings JSON file
+
+        // 3. One-time migration from legacy .settings JSON file
         if let val = legacyLoad(account: account) {
             keychainSave(val, account: account)
             legacyDelete(account: account)
@@ -31,6 +50,8 @@ enum AppSettingsStorage {
     }
 
     static func save(_ value: String, account: String) {
+        // When a value is saved explicitly (via UI), store it in Keychain.
+        // Env-var values are never written back to Keychain — they're read-only.
         keychainSave(value, account: account)
     }
 

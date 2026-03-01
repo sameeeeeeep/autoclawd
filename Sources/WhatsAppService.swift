@@ -63,18 +63,18 @@ final class WhatsAppService: @unchecked Sendable {
 
     // MARK: - Health
 
-    /// Check current connection status.
-    func checkHealth() async -> WhatsAppStatus {
-        guard let url = URL(string: "\(baseURL)/health") else { return .disconnected }
+    /// Check current connection status. Returns (status, phoneNumber).
+    func checkHealth() async -> (WhatsAppStatus, String?) {
+        guard let url = URL(string: "\(baseURL)/health") else { return (.disconnected, nil) }
         do {
             let (data, response) = try await session.data(from: url)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                return .disconnected
+                return (.disconnected, nil)
             }
             let health = try JSONDecoder().decode(WhatsAppHealthResponse.self, from: data)
-            return WhatsAppStatus(rawValue: health.status) ?? .disconnected
+            return (WhatsAppStatus(rawValue: health.status) ?? .disconnected, health.phoneNumber)
         } catch {
-            return .disconnected
+            return (.disconnected, nil)
         }
     }
 

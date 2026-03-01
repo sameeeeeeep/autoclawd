@@ -71,11 +71,15 @@ final class PipelineStore: @unchecked Sendable {
                 workflow_steps     TEXT NOT NULL DEFAULT '',
                 missing_connection TEXT,
                 pending_question   TEXT,
+                attachment_paths   TEXT NOT NULL DEFAULT '',
                 created_at         REAL NOT NULL,
                 started_at         REAL,
                 completed_at       REAL
             );
         """)
+
+        // Migration: add attachment_paths column if table already exists without it
+        migrateAddColumn("pipeline_tasks", column: "attachment_paths", definition: "TEXT NOT NULL DEFAULT ''")
 
         execSQL("""
             CREATE TABLE IF NOT EXISTS task_execution_steps (
@@ -258,14 +262,16 @@ final class PipelineStore: @unchecked Sendable {
                 INSERT OR IGNORE INTO pipeline_tasks
                     (id, analysis_id, title, prompt, project_id, project_name,
                      mode, status, skill_id, workflow_id, workflow_steps,
-                     missing_connection, pending_question, created_at, started_at, completed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                     missing_connection, pending_question, attachment_paths,
+                     created_at, started_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             defer { sqlite3_finalize(stmt) }
 
             let stepsCSV = task.workflowSteps.joined(separator: "|")
+            let pathsCSV = task.attachmentPaths.joined(separator: "|")
 
             sqlite3_bind_text(stmt, 1, task.id, -1, SQLITE_TRANSIENT_PS)
             sqlite3_bind_text(stmt, 2, task.analysisID, -1, SQLITE_TRANSIENT_PS)
@@ -280,9 +286,10 @@ final class PipelineStore: @unchecked Sendable {
             sqlite3_bind_text(stmt, 11, stepsCSV, -1, SQLITE_TRANSIENT_PS)
             bindOptionalText(stmt, 12, task.missingConnection)
             bindOptionalText(stmt, 13, task.pendingQuestion)
-            sqlite3_bind_double(stmt, 14, task.createdAt.timeIntervalSince1970)
-            bindOptionalDouble(stmt, 15, task.startedAt?.timeIntervalSince1970)
-            bindOptionalDouble(stmt, 16, task.completedAt?.timeIntervalSince1970)
+            sqlite3_bind_text(stmt, 14, pathsCSV, -1, SQLITE_TRANSIENT_PS)
+            sqlite3_bind_double(stmt, 15, task.createdAt.timeIntervalSince1970)
+            bindOptionalDouble(stmt, 16, task.startedAt?.timeIntervalSince1970)
+            bindOptionalDouble(stmt, 17, task.completedAt?.timeIntervalSince1970)
 
             if sqlite3_step(stmt) != SQLITE_DONE {
                 Log.error(.pipeline, "PipelineStore insertTask failed")
@@ -370,7 +377,8 @@ final class PipelineStore: @unchecked Sendable {
         let sql = """
             SELECT id, analysis_id, title, prompt, project_id, project_name,
                    mode, status, skill_id, workflow_id, workflow_steps,
-                   missing_connection, pending_question, created_at, started_at, completed_at
+                   missing_connection, pending_question, attachment_paths,
+                   created_at, started_at, completed_at
             FROM pipeline_tasks ORDER BY created_at DESC LIMIT ?;
         """
         var stmt: OpaquePointer?
@@ -393,11 +401,13 @@ final class PipelineStore: @unchecked Sendable {
             let stepsCSV = String(cString: sqlite3_column_text(stmt, 10))
             let missingConn = columnOptionalText(stmt, 11)
             let pendingQ = columnOptionalText(stmt, 12)
-            let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 13))
-            let startedAt = columnOptionalDate(stmt, 14)
-            let completedAt = columnOptionalDate(stmt, 15)
+            let pathsCSV = columnOptionalText(stmt, 13) ?? ""
+            let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 14))
+            let startedAt = columnOptionalDate(stmt, 15)
+            let completedAt = columnOptionalDate(stmt, 16)
 
             let steps = stepsCSV.isEmpty ? [] : stepsCSV.split(separator: "|").map(String.init)
+            let attachPaths = pathsCSV.isEmpty ? [] : pathsCSV.split(separator: "|").map(String.init)
 
             results.append(PipelineTaskRecord(
                 id: id, analysisID: analysisID, title: title, prompt: prompt,
@@ -406,6 +416,7 @@ final class PipelineStore: @unchecked Sendable {
                 status: TaskStatus(rawValue: statusRaw) ?? .upcoming,
                 skillID: skillID, workflowID: workflowID, workflowSteps: steps,
                 missingConnection: missingConn, pendingQuestion: pendingQ,
+                attachmentPaths: attachPaths,
                 createdAt: createdAt, startedAt: startedAt, completedAt: completedAt
             ))
         }
@@ -559,6 +570,24 @@ final class PipelineStore: @unchecked Sendable {
         if result != SQLITE_OK, let e = err {
             Log.error(.system, "PipelineStore exec error: \(String(cString: e))")
             sqlite3_free(err)
+        }
+    }
+
+    /// Safely add a column to an existing table (no-op if column already exists).
+    private func migrateAddColumn(_ table: String, column: String, definition: String) {
+        // Use prepared statement-style ALTER TABLE — safe since table/column are hardcoded constants
+        let sql = "ALTER TABLE \(table) ADD COLUMN \(column) \(definition);"
+        var err: UnsafeMutablePointer<CChar>?
+        let result = sqlite3_exec(db, sql, nil, nil, &err)
+        if result != SQLITE_OK {
+            // "duplicate column name" is expected if migration already ran — silently ignore
+            if let e = err {
+                let msg = String(cString: e)
+                if !msg.contains("duplicate column") {
+                    Log.error(.system, "PipelineStore migration error: \(msg)")
+                }
+                sqlite3_free(err)
+            }
         }
     }
 }

@@ -14,42 +14,39 @@ struct MapEditorView: View {
             HStack {
                 Text("EDIT ROOM")
                     .font(AppTheme.caption)
-                    .foregroundColor(AppTheme.textSecondary)
+                    .foregroundColor(.secondary)
                 Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
 
-            Divider().opacity(0.2)
+            Divider()
 
             // ── Location name ─────────────────────────────────────────
             VStack(alignment: .leading, spacing: 4) {
                 Text("LOCATION")
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.35))
+                    .foregroundColor(.secondary)
                 TextField("Room name", text: $appState.locationName)
                     .font(AppTheme.caption)
-                    .textFieldStyle(.plain)
-                    .padding(6)
-                    .background(Color.white.opacity(0.06))
-                    .cornerRadius(6)
+                    .textFieldStyle(.roundedBorder)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
-            Divider().opacity(0.2)
+            Divider()
 
             // ── People list ───────────────────────────────────────────
             VStack(alignment: .leading, spacing: 4) {
                 Text("PEOPLE")
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.35))
+                    .foregroundColor(.secondary)
                     .padding(.horizontal, 12)
                     .padding(.top, 10)
 
@@ -64,21 +61,18 @@ struct MapEditorView: View {
                 .frame(maxHeight: 180)
             }
 
-            Divider().opacity(0.2)
+            Divider()
 
             // ── Add person ────────────────────────────────────────────
             HStack(spacing: 6) {
                 TextField("Add person…", text: $newName)
                     .font(AppTheme.caption)
-                    .textFieldStyle(.plain)
-                    .padding(6)
-                    .background(Color.white.opacity(0.06))
-                    .cornerRadius(6)
+                    .textFieldStyle(.roundedBorder)
                     .onSubmit { addPerson() }
                 Button(action: addPerson) {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(AppTheme.green)
+                        .foregroundColor(Color.green)
                 }
                 .buttonStyle(.plain)
                 .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -126,14 +120,14 @@ private struct PersonRowView: View {
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 9))
-                        .foregroundColor(.white.opacity(0.3))
+                        .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 6)
-        .background(Color.white.opacity(0.04))
+        .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(5)
     }
 }

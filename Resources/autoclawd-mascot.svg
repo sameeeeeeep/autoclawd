@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" shape-rendering="crispEdges">
+  <!--
+    AutoClawd — Clawd the 8-bit Blue Lobster  v7 (FINAL)
+    32×32 grid @ 8px per pixel
+
+    CLAW: "[" bracket — the dominant feature
+      Top bar  : x=8–80,  y=32–56
+      Spine    : x=8–24,  y=32–112
+      Bottom bar: x=8–80, y=88–112
+      Opening  : x=24–80, y=56–88  ← pincer mouth
+
+    ARM: x=56–80, y=112–136  (arm left = body left, single clean step)
+    BODY: x=56–224, y=136–216  (blob body)
+    EYE L: white highlight + orange pupil  (asymmetry = personality)
+    EYE R: white highlight only
+  -->
+
+  <!-- ═══ CLAW TOP BAR ═══ -->
+  <rect x="8"   y="32"  width="72" height="24" fill="#1d4ed8"/>
+  <rect x="8"   y="32"  width="64" height="16" fill="#2563eb"/>
+  <rect x="8"   y="32"  width="64" height="8"  fill="#3b82f6"/>
+  <rect x="8"   y="32"  width="56" height="8"  fill="#60a5fa"/>
+
+  <!-- ═══ CLAW LEFT SPINE ═══ -->
+  <rect x="8"   y="32"  width="24" height="80" fill="#1d4ed8"/>
+  <rect x="8"   y="32"  width="16" height="80" fill="#2563eb"/>
+
+  <!-- ═══ CLAW BOTTOM BAR ═══ -->
+  <rect x="8"   y="88"  width="72" height="24" fill="#1d4ed8"/>
+  <rect x="8"   y="88"  width="64" height="16" fill="#2563eb"/>
+
+  <!-- ═══ ARM ═══ -->
+  <rect x="56"  y="112" width="24" height="24" fill="#1d4ed8"/>
+  <rect x="56"  y="112" width="16" height="16" fill="#2563eb"/>
+
+  <!-- ═══ BODY ═══ -->
+  <rect x="56"  y="136" width="168" height="80" fill="#1d4ed8"/>
+  <rect x="56"  y="136" width="160" height="72" fill="#2563eb"/>
+  <rect x="56"  y="136" width="160" height="8"  fill="#3b82f6"/>
+  <rect x="64"  y="136" width="144" height="8"  fill="#60a5fa"/>
+  <rect x="56"  y="144" width="160" height="8"  fill="#3b82f6"/>
+
+  <!-- ═══ LEFT EYE — dark + white highlight + orange pupil ═══ -->
+  <rect x="88"  y="168" width="16" height="16" fill="#0a1628"/>
+  <rect x="88"  y="168" width="8"  height="8"  fill="#ffffff"/>
+  <rect x="96"  y="176" width="8"  height="8"  fill="#f97316"/>
+
+  <!-- ═══ RIGHT EYE — dark + white highlight ═══ -->
+  <rect x="192" y="168" width="16" height="16" fill="#0a1628"/>
+  <rect x="192" y="168" width="8"  height="8"  fill="#ffffff"/>
+
+  <!-- ═══ LEGS ═══ -->
+  <rect x="88"  y="216" width="16" height="24" fill="#1d4ed8"/>
+  <rect x="88"  y="216" width="8"  height="24" fill="#2563eb"/>
+  <rect x="192" y="216" width="16" height="24" fill="#1d4ed8"/>
+  <rect x="192" y="216" width="8"  height="24" fill="#2563eb"/>
+
+</svg>

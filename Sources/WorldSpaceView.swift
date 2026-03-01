@@ -81,7 +81,6 @@ struct WorldSpaceView: View {
     }
 
     var body: some View {
-        let theme = ThemeManager.shared.current
         Group {
             if places.isEmpty {
                 emptyPlacesState
@@ -96,7 +95,7 @@ struct WorldSpaceView: View {
                                     .frame(minWidth: 140, idealWidth: 190, maxWidth: 240)
                                     .overlay(
                                         Rectangle()
-                                            .fill(theme.glassBorder)
+                                            .fill(Color(NSColor.separatorColor))
                                             .frame(width: 0.5),
                                         alignment: .trailing
                                     )
@@ -124,7 +123,7 @@ struct WorldSpaceView: View {
 
                                 placeListPanel
                                     .frame(width: min(260, geo.size.width * 0.75))
-                                    .background(theme.surface)
+                                    .background(Color(NSColor.controlBackgroundColor))
                                     .shadow(color: .black.opacity(0.2), radius: 12)
                                     .transition(.move(edge: .leading))
                             }
@@ -140,7 +139,6 @@ struct WorldSpaceView: View {
     // MARK: - Compact Place Selector (shown when sidebar is collapsed)
 
     private var compactPlaceSelector: some View {
-        let theme = ThemeManager.shared.current
         let place = selectedPlace
 
         return HStack(spacing: 8) {
@@ -155,16 +153,16 @@ struct WorldSpaceView: View {
                     Text("Places")
                         .font(.system(size: 10, weight: .medium))
                 }
-                .foregroundColor(showPlacesList ? theme.accent : theme.textSecondary)
+                .foregroundColor(showPlacesList ? .accentColor : .secondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(
                     Capsule()
-                        .fill(showPlacesList ? theme.accent.opacity(0.12) : theme.glass)
+                        .fill(showPlacesList ? Color.accentColor.opacity(0.12) : Color(NSColor.windowBackgroundColor).opacity(0.8))
                 )
                 .overlay(
                     Capsule()
-                        .stroke(theme.glassBorder, lineWidth: 0.5)
+                        .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
                 )
             }
             .buttonStyle(.plain)
@@ -175,7 +173,7 @@ struct WorldSpaceView: View {
                     .font(.system(size: 12))
                 Text(place.name)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(.primary)
             }
 
             Spacer()
@@ -186,7 +184,7 @@ struct WorldSpaceView: View {
         .padding(.vertical, 8)
         .overlay(
             Rectangle()
-                .fill(theme.glassBorder)
+                .fill(Color(NSColor.separatorColor))
                 .frame(height: 0.5),
             alignment: .bottom
         )
@@ -355,17 +353,16 @@ struct WorldSpaceView: View {
     // MARK: - Empty State
 
     private var emptyPlacesState: some View {
-        let theme = ThemeManager.shared.current
-        return VStack(spacing: 16) {
+        VStack(spacing: 16) {
             Spacer()
             Text("\u{1F30D}")
                 .font(.system(size: 40))
             Text("No places detected yet")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(theme.textPrimary)
+                .foregroundColor(.primary)
             Text("AutoClawd learns your places from WiFi networks as you move around.")
                 .font(.system(size: 11))
-                .foregroundColor(theme.textTertiary)
+                .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 300)
             Spacer()
@@ -376,11 +373,10 @@ struct WorldSpaceView: View {
     // MARK: - Left Panel: Place List
 
     private var placeListPanel: some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Places")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(theme.textPrimary)
+                .foregroundColor(.primary)
                 .padding(.horizontal, 12)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
@@ -398,7 +394,6 @@ struct WorldSpaceView: View {
     }
 
     private func placeCard(place: PlaceDetail) -> some View {
-        let theme = ThemeManager.shared.current
         let isSelected = selectedPlaceID == place.id
         let activities = allActivities[place.id] ?? []
 
@@ -418,11 +413,11 @@ struct WorldSpaceView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(place.name)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(theme.textPrimary)
+                        .foregroundColor(.primary)
 
                     Text(place.address)
                         .font(.system(size: 9))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         .lineLimit(1)
 
                     HStack(spacing: 4) {
@@ -436,11 +431,11 @@ struct WorldSpaceView: View {
             .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 9)
-                    .fill(isSelected ? theme.accent.opacity(0.08) : Color.clear)
+                    .fill(isSelected ? Color.accentColor.opacity(0.08) : Color.clear)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 9)
-                    .stroke(isSelected ? theme.accent.opacity(0.18) : Color.clear, lineWidth: 0.5)
+                    .stroke(isSelected ? Color.accentColor.opacity(0.18) : Color.clear, lineWidth: 0.5)
             )
             .clipShape(RoundedRectangle(cornerRadius: 9))
             .contentShape(Rectangle())
@@ -473,7 +468,6 @@ struct WorldSpaceView: View {
     // MARK: - Detail Header
 
     private var detailHeader: some View {
-        let theme = ThemeManager.shared.current
         let place = selectedPlace
 
         return HStack(alignment: .center) {
@@ -485,11 +479,11 @@ struct WorldSpaceView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(place.name)
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(theme.textPrimary)
+                        .foregroundColor(.primary)
 
                     Text(place.address)
                         .font(.system(size: 9))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 }
 
                 TagView(type: .place, label: place.name)
@@ -504,7 +498,7 @@ struct WorldSpaceView: View {
         .padding(.horizontal, 18)
         .overlay(
             Rectangle()
-                .fill(theme.glassBorder)
+                .fill(Color(NSColor.separatorColor))
                 .frame(height: 0.5),
             alignment: .bottom
         )
@@ -513,8 +507,7 @@ struct WorldSpaceView: View {
     // MARK: - View Mode Toggle
 
     private var viewModeToggle: some View {
-        let theme = ThemeManager.shared.current
-        return HStack(spacing: 0) {
+        HStack(spacing: 0) {
             toggleButton(label: "Overview", mode: "overview")
             toggleButton(label: "By Day", mode: "byday")
         }
@@ -524,13 +517,12 @@ struct WorldSpaceView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 7)
-                .stroke(theme.glassBorder, lineWidth: 0.5)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
         )
         .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 
     private func toggleButton(label: String, mode: String) -> some View {
-        let theme = ThemeManager.shared.current
         let isActive = viewMode == mode
 
         return Button {
@@ -542,10 +534,10 @@ struct WorldSpaceView: View {
         } label: {
             Text(label)
                 .font(.system(size: 10, weight: isActive ? .semibold : .regular))
-                .foregroundColor(isActive ? theme.accent : theme.textTertiary)
+                .foregroundColor(isActive ? .accentColor : Color(NSColor.tertiaryLabelColor))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 5)
-                .background(isActive ? theme.accent.opacity(0.18) : Color.clear)
+                .background(isActive ? Color.accentColor.opacity(0.18) : Color.clear)
         }
         .buttonStyle(.plain)
     }
@@ -553,7 +545,6 @@ struct WorldSpaceView: View {
     // MARK: - Day Selector
 
     private var daySelector: some View {
-        let theme = ThemeManager.shared.current
         let recentDays = (0..<7)
 
         return ScrollView(.horizontal, showsIndicators: false) {
@@ -570,15 +561,15 @@ struct WorldSpaceView: View {
                         VStack(spacing: 3) {
                             Text(code)
                                 .font(.system(size: 9, design: .monospaced))
-                                .foregroundColor(isSelected ? theme.accent : theme.textSecondary)
+                                .foregroundColor(isSelected ? .accentColor : .secondary)
 
                             Text(dayLabel(offset: offset))
                                 .font(.system(size: 8))
-                                .foregroundColor(isSelected ? theme.accent : theme.textTertiary)
+                                .foregroundColor(isSelected ? .accentColor : Color(NSColor.tertiaryLabelColor))
 
                             if hasActivity {
                                 Circle()
-                                    .fill(theme.accent)
+                                    .fill(Color.accentColor)
                                     .frame(width: 4, height: 4)
                             } else {
                                 Circle()
@@ -590,11 +581,11 @@ struct WorldSpaceView: View {
                         .padding(.vertical, 6)
                         .background(
                             RoundedRectangle(cornerRadius: 7)
-                                .fill(isSelected ? theme.accent.opacity(0.12) : Color.clear)
+                                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 7)
-                                .stroke(isSelected ? theme.accent.opacity(0.3) : Color.clear, lineWidth: 0.5)
+                                .stroke(isSelected ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 0.5)
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 7))
                     }
@@ -606,7 +597,7 @@ struct WorldSpaceView: View {
         }
         .overlay(
             Rectangle()
-                .fill(theme.glassBorder)
+                .fill(Color(NSColor.separatorColor))
                 .frame(height: 0.5),
             alignment: .bottom
         )
@@ -624,20 +615,19 @@ struct WorldSpaceView: View {
     // MARK: - People Section
 
     private var peopleSection: some View {
-        let theme = ThemeManager.shared.current
         let people = peopleAtPlace
 
         return VStack(alignment: .leading, spacing: 8) {
             Text("PEOPLE AT \(selectedPlace.name.uppercased())")
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(1)
-                .foregroundColor(theme.textSecondary)
+                .foregroundColor(.secondary)
                 .textCase(.uppercase)
 
             if people.isEmpty {
                 Text("No people detected at this place yet")
                     .font(.system(size: 11))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     .padding(.vertical, 8)
             } else {
                 // Wrapping HStack of person cards
@@ -651,8 +641,7 @@ struct WorldSpaceView: View {
     }
 
     private func personCard(person: Person) -> some View {
-        let theme = ThemeManager.shared.current
-        return HStack(spacing: 6) {
+        HStack(spacing: 6) {
             Circle()
                 .fill(person.color)
                 .frame(width: 7, height: 7)
@@ -660,12 +649,12 @@ struct WorldSpaceView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(person.name)
                     .font(.system(size: 11))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(.primary)
 
                 if person.isMe {
                     Text("You")
                         .font(.system(size: 8))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 }
             }
 
@@ -673,13 +662,12 @@ struct WorldSpaceView: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
-        .glassCard(cornerRadius: 9)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
     }
 
     // MARK: - Activity Timeline
 
     private var activityTimeline: some View {
-        let theme = ThemeManager.shared.current
         let activities: [PlaceActivity] = viewMode == "byday"
             ? activitiesForSelectedDay
             : activitiesForPlace
@@ -700,15 +688,15 @@ struct WorldSpaceView: View {
                 Text(headerText)
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(1)
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(.secondary)
 
                 Text("\(eventCount)")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1)
                     .background(
-                        Capsule().fill(theme.glassBorder)
+                        Capsule().fill(Color(NSColor.separatorColor))
                     )
             }
 
@@ -721,26 +709,24 @@ struct WorldSpaceView: View {
     }
 
     private var emptyActivityState: some View {
-        let theme = ThemeManager.shared.current
-        return HStack {
+        HStack {
             Spacer()
             Text("No activity at this place on this day")
                 .font(.system(size: 11))
-                .foregroundColor(theme.textTertiary)
+                .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 .padding(.vertical, 32)
             Spacer()
         }
     }
 
     private func timelineContent(activities: [PlaceActivity]) -> some View {
-        let theme = ThemeManager.shared.current
         let grouped = Dictionary(grouping: activities, by: { $0.dayOffset })
         let sortedDays = grouped.keys.sorted()
 
         return ZStack(alignment: .topLeading) {
             // Timeline vertical line
             Rectangle()
-                .fill(theme.glassBorder)
+                .fill(Color(NSColor.separatorColor))
                 .frame(width: 1)
                 .padding(.leading, 5)
 
@@ -764,7 +750,6 @@ struct WorldSpaceView: View {
     }
 
     private func dayHeader(dayOffset: Int) -> some View {
-        let theme = ThemeManager.shared.current
         let date = Calendar.current.date(byAdding: .day, value: -dayOffset, to: Date()) ?? Date()
         let code = Episode.code(from: date)
         let formatter = DateFormatter()
@@ -774,24 +759,23 @@ struct WorldSpaceView: View {
         return HStack(spacing: 8) {
             // Timeline node
             Circle()
-                .fill(theme.accent)
+                .fill(Color.accentColor)
                 .frame(width: 9, height: 9)
                 .offset(x: -22.5) // Center on the timeline line
 
             Text(code)
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundColor(theme.accent)
+                .foregroundColor(.accentColor)
 
             Text(dateStr)
                 .font(.system(size: 9))
-                .foregroundColor(theme.textTertiary)
+                .foregroundColor(Color(NSColor.tertiaryLabelColor))
         }
         .padding(.top, 12)
         .padding(.bottom, 6)
     }
 
     private func activityEntry(activity: PlaceActivity) -> some View {
-        let theme = ThemeManager.shared.current
         let dotColor = activityDotColor(type: activity.type)
         // Resolve person name from appState.people or fall back to personID
         let personName: String = {
@@ -816,7 +800,7 @@ struct WorldSpaceView: View {
                 HStack(spacing: 5) {
                     Text(activity.time)
                         .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
 
                     TagView(type: .person, label: personName, small: true)
 
@@ -833,20 +817,18 @@ struct WorldSpaceView: View {
 
                 Text(activity.text)
                     .font(.system(size: 10))
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(.secondary)
                     .lineSpacing(10 * 0.4) // ~1.4 line height
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(theme.isDark
-                          ? Color.white.opacity(0.015)
-                          : Color.black.opacity(0.015))
+                    .fill(Color(NSColor.controlBackgroundColor))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(theme.glassBorder, lineWidth: 0.5)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
             )
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
@@ -854,25 +836,23 @@ struct WorldSpaceView: View {
     }
 
     private func activityDotColor(type: ActivityType) -> Color {
-        let theme = ThemeManager.shared.current
         switch type {
-        case .location:   return theme.accent
-        case .meeting:    return theme.secondary
-        case .transcript: return theme.tertiary
-        case .social:     return theme.warning
-        case .personal:   return theme.textTertiary
+        case .location:   return .accentColor
+        case .meeting:    return .purple
+        case .transcript: return .cyan
+        case .social:     return .orange
+        case .personal:   return Color(NSColor.tertiaryLabelColor)
         }
     }
 
     // MARK: - Tasks Section
 
     private var tasksSection: some View {
-        let theme = ThemeManager.shared.current
-        return VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("TASKS & EXTRACTIONS")
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(1)
-                .foregroundColor(theme.textSecondary)
+                .foregroundColor(.secondary)
 
             ForEach(tasksForPlace, id: \.id) { task in
                 taskCard(task: task)
@@ -881,14 +861,13 @@ struct WorldSpaceView: View {
     }
 
     private func taskCard(task: SpaceTaskItem) -> some View {
-        let theme = ThemeManager.shared.current
         let statusColor: Color = {
             switch task.status {
-            case "applied", "executed": return theme.accent
-            case "HIGH":                return theme.error
-            case "MEDIUM":              return theme.warning
-            case "LOW":                 return theme.textTertiary
-            default:                    return theme.secondary
+            case "applied", "executed": return .accentColor
+            case "HIGH":                return .red
+            case "MEDIUM":              return .orange
+            case "LOW":                 return Color(NSColor.tertiaryLabelColor)
+            default:                    return .purple
             }
         }()
 
@@ -899,7 +878,7 @@ struct WorldSpaceView: View {
 
             Text(task.title)
                 .font(.system(size: 10))
-                .foregroundColor(theme.textPrimary)
+                .foregroundColor(.primary)
                 .lineLimit(2)
 
             Spacer(minLength: 0)
@@ -910,7 +889,7 @@ struct WorldSpaceView: View {
             }
         }
         .padding(10)
-        .glassCard(cornerRadius: 8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

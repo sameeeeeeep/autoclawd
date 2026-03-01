@@ -14,6 +14,7 @@ struct ClipboardEntry {
 
 /// Polls NSPasteboard every 2 seconds for new content.
 /// Stores entries in memory; persisted to SQLite in Phase 2.
+/// When an image is detected, saves it to disk via ContextCaptureStore for pipeline consumption.
 final class ClipboardMonitor: @unchecked Sendable {
     static let shared = ClipboardMonitor()
 
@@ -22,6 +23,9 @@ final class ClipboardMonitor: @unchecked Sendable {
     private(set) var entries: [ClipboardEntry] = []
     private let maxEntries = 500
     private let queue = DispatchQueue(label: "com.autoclawd.clipboard", qos: .utility)
+
+    /// The current listening session ID (set by ChunkManager when listening starts).
+    var currentSessionID: String?
 
     private init() {}
 
@@ -69,16 +73,44 @@ final class ClipboardMonitor: @unchecked Sendable {
             entries.removeFirst(entries.count - maxEntries)
         }
 
+        // Save clipboard images to disk for pipeline context capture
+        if type == "image" {
+            saveClipboardImage(pasteboard: pasteboard)
+        } else if type == "url" {
+            if let urlString = pasteboard.string(forType: .URL) {
+                ContextCaptureStore.shared.registerURL(urlString, sessionID: currentSessionID)
+            }
+        }
+
         Log.info(.clipboard, "\(type) copied: \(charCount) chars — '\(preview)'")
     }
 
+    /// Save clipboard image data to disk via ContextCaptureStore.
+    private func saveClipboardImage(pasteboard: NSPasteboard) {
+        let sessionID = currentSessionID
+        if let pngData = pasteboard.data(forType: .png) {
+            ContextCaptureStore.shared.registerImageData(
+                pngData, type: .clipboardImage, sessionID: sessionID,
+                mimeType: "image/png", ext: "png"
+            )
+        } else if let tiffData = pasteboard.data(forType: .tiff),
+                  let bitmapRep = NSBitmapImageRep(data: tiffData),
+                  let pngData = bitmapRep.representation(using: .png, properties: [:]) {
+            ContextCaptureStore.shared.registerImageData(
+                pngData, type: .clipboardImage, sessionID: sessionID,
+                mimeType: "image/png", ext: "png"
+            )
+        }
+    }
+
     private func classify(pasteboard: NSPasteboard) -> (type: String, preview: String, charCount: Int) {
+        // Check for images first — screenshots (Cmd+Shift+3/4) go to clipboard as images
+        if pasteboard.data(forType: .png) != nil || pasteboard.data(forType: .tiff) != nil {
+            return ("image", "[image data]", 0)
+        }
         if let string = pasteboard.string(forType: .string) {
             let preview = String(string.prefix(60)).replacingOccurrences(of: "\n", with: " ")
             return ("text", preview, string.count)
-        }
-        if pasteboard.data(forType: .png) != nil || pasteboard.data(forType: .tiff) != nil {
-            return ("image", "[image data]", 0)
         }
         if let urlString = pasteboard.string(forType: .URL) {
             return ("url", String(urlString.prefix(60)), urlString.count)

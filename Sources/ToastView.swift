@@ -13,14 +13,14 @@ struct ToastView: View {
             // Message — one line, truncated
             Text(entry.message)
                 .font(AppTheme.caption)
-                .foregroundColor(AppTheme.textPrimary)
+                .foregroundColor(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
 
             // Component tag
             Text("[\(entry.component.rawValue)]")
                 .font(AppTheme.caption)
-                .foregroundColor(AppTheme.textSecondary)
+                .foregroundColor(.secondary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -44,7 +44,7 @@ struct ToastView: View {
     private var badgeColor: Color {
         switch entry.level {
         case .warn, .error: return .red
-        default:            return AppTheme.green
+        default:            return Color.green
         }
     }
 

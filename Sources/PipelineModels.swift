@@ -1,5 +1,21 @@
 import Foundation
 
+// MARK: - Pipeline Source
+
+/// Controls which pipeline stages run for a given transcript.
+/// Every transcript entering the pipeline must declare its source so the
+/// orchestrator knows which stages to skip.
+enum PipelineSource: String, Codable {
+    /// Always-on ambient mic → full pipeline: clean → analyze → task → execute
+    case ambient
+    /// Transcription mode (copy-paste / dictation) → clean only, no task creation
+    case transcription
+    /// Code co-pilot widget → save transcript + Claude Code task; skip LLM analysis
+    case code
+    /// WhatsApp self-chat → full pipeline + QA reply
+    case whatsapp
+}
+
 // MARK: - Cleaned Transcript
 
 /// Result of merging/denoising raw transcript chunks (Stage 1).
@@ -59,6 +75,7 @@ struct PipelineTaskRecord: Identifiable {
     let workflowSteps: [String]
     let missingConnection: String?
     let pendingQuestion: String?
+    let attachmentPaths: [String]     // file paths to context captures (screenshots, images)
     let createdAt: Date
     var startedAt: Date?
     var completedAt: Date?

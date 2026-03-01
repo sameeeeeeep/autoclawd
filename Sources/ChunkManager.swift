@@ -102,12 +102,15 @@ final class ChunkManager: ObservableObject {
         // Begin a new session row
         let ssid = locationService.currentSSID
         currentSessionID = sessionStore.beginSession(wifiSSID: ssid)
+        // Tell ClipboardMonitor about our session so captures get tagged
+        ClipboardMonitor.shared.currentSessionID = currentSessionID
     }
 
     func stopListening() {
         chunkTimer?.cancel()
         chunkTimer = nil
         _ = audioRecorder.stopRecording()
+        ClipboardMonitor.shared.currentSessionID = nil
         // End the session
         if let sid = currentSessionID {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
@@ -429,7 +432,8 @@ final class ChunkManager: ObservableObject {
                     sessionID: currentSID,
                     sessionChunkSeq: sessionChunkSeq,
                     durationSeconds: duration,
-                    speakerName: speakerName
+                    speakerName: speakerName,
+                    source: .ambient
                 )
             } else if let extractionService {
                 // Legacy fallback
@@ -446,16 +450,38 @@ final class ChunkManager: ObservableObject {
             }
 
         case .transcription:
-            guard let pasteService else { break }
-            await MainActor.run {
-                pasteService.paste(text: transcript)
-                self.appState?.latestTranscriptChunk = transcript
+            // Paste chunk immediately for live display
+            if let pasteService {
+                await MainActor.run {
+                    pasteService.paste(text: transcript)
+                    self.appState?.latestTranscriptChunk = transcript
+                }
+            }
+            // Also run through cleaning stage so chunks get merged and denoised over time.
+            // The cleaned version will appear in LogsPipelineView as a merged transcript.
+            if let pipelineOrchestrator, let tid = transcriptID {
+                await pipelineOrchestrator.processTranscript(
+                    text: transcript,
+                    transcriptID: tid,
+                    sessionID: currentSID,
+                    sessionChunkSeq: sessionChunkSeq,
+                    durationSeconds: duration,
+                    speakerName: speakerName,
+                    source: .transcription
+                )
             }
 
         case .aiSearch:
             guard let qaService, let qaStore else { break }
             do {
-                let answer = try await qaService.answer(question: transcript)
+                // Build rich context from AppState if available, otherwise fall back to basic
+                let answer: String
+                if let appState = self.appState {
+                    let context = await appState.buildQAContext()
+                    answer = try await qaService.answer(question: transcript, context: context, speak: true)
+                } else {
+                    answer = try await qaService.answer(question: transcript)
+                }
                 await MainActor.run {
                     qaStore.append(question: transcript, answer: answer)
                     let pb = NSPasteboard.general
@@ -465,6 +491,12 @@ final class ChunkManager: ObservableObject {
                 }
             } catch {
                 Log.error(.qa, "QA failed: \(error.localizedDescription)")
+            }
+
+        case .code:
+            // Feed voice transcription into the active co-pilot session
+            await MainActor.run {
+                self.appState?.feedVoiceToCodeSession(transcript)
             }
         }
 

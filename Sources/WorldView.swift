@@ -34,18 +34,18 @@ struct WorldView: View {
             HStack(spacing: AppTheme.md) {
                 Button { shiftMonth(-1) } label: {
                     Image(systemName: "chevron.left")
-                        .foregroundColor(AppTheme.textSecondary)
+                        .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
 
                 Text(monthLabel)
                     .font(AppTheme.heading)
-                    .foregroundColor(AppTheme.textPrimary)
+                    .foregroundColor(.primary)
                     .frame(minWidth: 120)
 
                 Button { shiftMonth(1) } label: {
                     Image(systemName: "chevron.right")
-                        .foregroundColor(AppTheme.textSecondary)
+                        .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
 
@@ -80,7 +80,7 @@ struct WorldView: View {
             // Search bar
             searchBar
         }
-        .background(AppTheme.background)
+        .background(Color(NSColor.windowBackgroundColor))
         .onAppear { loadTranscripts() }
         .sheet(item: $runningTodo) { todo in
             ExecutionOutputView(todo: todo, appState: appState)
@@ -108,7 +108,7 @@ struct WorldView: View {
                 ForEach(["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], id: \.self) { d in
                     Text(d)
                         .font(AppTheme.caption)
-                        .foregroundColor(AppTheme.textSecondary)
+                        .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -195,13 +195,13 @@ struct WorldView: View {
             HStack {
                 Text("Unscheduled")
                     .font(AppTheme.label)
-                    .foregroundColor(AppTheme.textPrimary)
+                    .foregroundColor(.primary)
                 Text("\(unscheduledTodos.count)")
                     .font(AppTheme.caption)
                     .foregroundColor(.white)
                     .padding(.horizontal, AppTheme.xs)
                     .padding(.vertical, 2)
-                    .background(AppTheme.textSecondary)
+                    .background(Color.secondary)
                     .cornerRadius(AppTheme.xs)
                 Spacer()
             }
@@ -211,7 +211,7 @@ struct WorldView: View {
             if unscheduledTodos.isEmpty {
                 Text("All caught up — no unscheduled todos.")
                     .font(AppTheme.body)
-                    .foregroundColor(AppTheme.textSecondary)
+                    .foregroundColor(.secondary)
                     .padding(.horizontal, AppTheme.lg)
                     .padding(.vertical, AppTheme.sm)
             } else {
@@ -240,16 +240,16 @@ struct WorldView: View {
     private var searchBar: some View {
         HStack(spacing: AppTheme.sm) {
             Image(systemName: "magnifyingglass")
-                .foregroundColor(AppTheme.textSecondary)
+                .foregroundColor(.secondary)
                 .font(.system(size: 13))
             TextField("Search transcripts, todos, world model\u{2026}", text: $searchQuery)
                 .textFieldStyle(.plain)
                 .font(AppTheme.body)
-                .foregroundColor(AppTheme.textPrimary)
+                .foregroundColor(.primary)
         }
         .padding(.horizontal, AppTheme.lg)
         .padding(.vertical, AppTheme.md)
-        .background(AppTheme.surface)
+        .background(Color(NSColor.controlBackgroundColor))
     }
 
     // MARK: - Wifi Banner
@@ -257,21 +257,21 @@ struct WorldView: View {
     private func wifiBanner(ssid: String) -> some View {
         HStack(spacing: AppTheme.sm) {
             Image(systemName: "wifi")
-                .foregroundColor(AppTheme.cyan)
+                .foregroundColor(.cyan)
                 .font(.system(size: 12))
             Text("You're on '\(ssid)' \u{2014} what should I call this place?")
                 .font(AppTheme.caption)
-                .foregroundColor(AppTheme.textPrimary)
+                .foregroundColor(.primary)
             TextField("e.g. Home, Philz Coffee", text: $appState.wifiLabelInput)
                 .textFieldStyle(.plain)
                 .font(AppTheme.caption)
                 .frame(maxWidth: 140)
                 .padding(.horizontal, AppTheme.sm)
                 .padding(.vertical, AppTheme.xs)
-                .background(AppTheme.surface)
+                .background(Color(NSColor.controlBackgroundColor))
                 .cornerRadius(AppTheme.cornerRadius)
                 .overlay(RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
-                            .stroke(AppTheme.border, lineWidth: 1))
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 1))
             Button("Save") { appState.confirmWifiLabel() }
                 .buttonStyle(PrimaryButtonStyle())
                 .controlSize(.small)
@@ -284,7 +284,7 @@ struct WorldView: View {
         }
         .padding(.horizontal, AppTheme.lg)
         .padding(.vertical, AppTheme.sm)
-        .background(AppTheme.background)
+        .background(Color(NSColor.windowBackgroundColor))
     }
 
     private func loadTranscripts() {
@@ -325,16 +325,16 @@ struct DayCell: View {
                     .font(isToday ? AppTheme.label : AppTheme.body)
                     .foregroundColor(
                         isToday ? .white :
-                        isSelected ? AppTheme.textPrimary :
-                        isCurrentMonth ? AppTheme.textPrimary : AppTheme.textDisabled
+                        isSelected ? .primary :
+                        isCurrentMonth ? .primary : Color(NSColor.tertiaryLabelColor)
                     )
                     .frame(width: 28, height: 28)
                     .background(
                         Group {
                             if isToday {
-                                Circle().fill(AppTheme.textPrimary)
+                                Circle().fill(Color.primary)
                             } else if isSelected {
-                                Circle().fill(AppTheme.surface)
+                                Circle().fill(Color(NSColor.controlBackgroundColor))
                             } else {
                                 Circle().fill(Color.clear)
                             }
@@ -343,10 +343,10 @@ struct DayCell: View {
 
                 HStack(spacing: 2) {
                     if hasTodo {
-                        Circle().fill(AppTheme.green).frame(width: 4, height: 4)
+                        Circle().fill(Color.green).frame(width: 4, height: 4)
                     }
                     if hasTranscript {
-                        Circle().fill(AppTheme.cyan).frame(width: 4, height: 4)
+                        Circle().fill(Color.cyan).frame(width: 4, height: 4)
                     }
                 }
                 .frame(height: 6)
@@ -375,14 +375,14 @@ struct UnscheduledTodoRow: View {
             priorityDot
             Text(todo.content)
                 .font(AppTheme.body)
-                .foregroundColor(AppTheme.textPrimary)
+                .foregroundColor(.primary)
                 .lineLimit(2)
                 .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text(projectName)
                 .font(AppTheme.caption)
-                .foregroundColor(AppTheme.textSecondary)
+                .foregroundColor(.secondary)
                 .lineLimit(1)
             if canRun {
                 Button("Run", action: onRun)
@@ -392,16 +392,16 @@ struct UnscheduledTodoRow: View {
         }
         .padding(.horizontal, AppTheme.lg)
         .padding(.vertical, AppTheme.sm)
-        .background(AppTheme.background)
+        .background(Color(NSColor.windowBackgroundColor))
         .contentShape(Rectangle())
     }
 
     private var priorityDot: some View {
         let color: Color = {
             switch todo.priority {
-            case "HIGH":   return AppTheme.destructive
-            case "MEDIUM": return Color.orange
-            default:       return AppTheme.border
+            case "HIGH":   return .red
+            case "MEDIUM": return .orange
+            default:       return Color(NSColor.separatorColor)
             }
         }()
         return Circle().fill(color).frame(width: 6, height: 6)

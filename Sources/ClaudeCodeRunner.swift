@@ -52,20 +52,41 @@ final class ClaudeSession: @unchecked Sendable {
     }
 
     /// Send a follow-up message to Claude (for back-and-forth conversation).
-    func sendMessage(_ text: String) {
+    func sendMessage(_ text: String, attachments: [Attachment] = []) {
         guard isRunning else { return }
+
+        // Build content: array of content blocks when attachments present, plain string otherwise
+        let content: Any
+        if attachments.isEmpty {
+            content = text
+        } else {
+            var blocks: [[String: Any]] = []
+            // Add attachment content blocks first (images/documents)
+            for attachment in attachments {
+                if let block = attachment.toContentBlock() {
+                    blocks.append(block)
+                }
+            }
+            // Add text block
+            if !text.isEmpty {
+                blocks.append(["type": "text", "text": text])
+            }
+            content = blocks
+        }
+
         let msg: [String: Any] = [
             "type": "user",
             "message": [
                 "role": "user",
-                "content": text
-            ]
+                "content": content,
+            ],
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: msg),
               let json = String(data: data, encoding: .utf8) else { return }
         let line = json + "\n"
         stdinPipe.fileHandleForWriting.write(line.data(using: .utf8)!)
-        Log.info(.taskExec, "ClaudeSession: sent follow-up message (\(text.prefix(60))...)")
+        let attachDesc = attachments.isEmpty ? "" : " + \(attachments.count) attachment(s)"
+        Log.info(.taskExec, "ClaudeSession: sent follow-up message (\(text.prefix(60))...)\(attachDesc)")
     }
 
     /// Stop the session.
@@ -131,7 +152,9 @@ final class ClaudeCodeRunner: Sendable {
     func startSession(
         prompt: String,
         in project: Project,
-        resumeSessionID: String? = nil
+        resumeSessionID: String? = nil,
+        attachments: [Attachment] = [],
+        dangerouslySkipPermissions: Bool = true
     ) -> (ClaudeSession, AsyncThrowingStream<ClaudeEvent, Error>)? {
         guard let claudeURL = ClaudeCodeRunner.findCLI() else {
             Log.error(.taskExec, "Claude CLI not found")
@@ -146,8 +169,10 @@ final class ClaudeCodeRunner: Sendable {
             "--input-format", "stream-json",
             "--verbose",
             "--include-partial-messages",
-            "--dangerously-skip-permissions",
         ]
+        if dangerouslySkipPermissions {
+            args.append("--dangerously-skip-permissions")
+        }
         if let mcpConfigPath = MCPConfigManager.configPath() {
             args += ["--mcp-config", mcpConfigPath]
         }
@@ -193,19 +218,33 @@ final class ClaudeCodeRunner: Sendable {
             stdoutPipe: stdoutPipe
         )
 
-        // Send initial prompt via stdin
+        // Send initial prompt via stdin (with optional attachments as content blocks)
+        let content: Any
+        if attachments.isEmpty {
+            content = prompt
+        } else {
+            var blocks: [[String: Any]] = []
+            for attachment in attachments {
+                if let block = attachment.toContentBlock() {
+                    blocks.append(block)
+                }
+            }
+            blocks.append(["type": "text", "text": prompt])
+            content = blocks
+        }
         let initialMsg: [String: Any] = [
             "type": "user",
             "message": [
                 "role": "user",
-                "content": prompt
-            ]
+                "content": content,
+            ],
         ]
         if let data = try? JSONSerialization.data(withJSONObject: initialMsg),
            let json = String(data: data, encoding: .utf8) {
             let line = json + "\n"
             stdinPipe.fileHandleForWriting.write(line.data(using: .utf8)!)
-            Log.info(.taskExec, "ClaudeSession: sent initial prompt (\(prompt.count) chars)")
+            let attachDesc = attachments.isEmpty ? "" : " + \(attachments.count) attachment(s)"
+            Log.info(.taskExec, "ClaudeSession: sent initial prompt (\(prompt.count) chars)\(attachDesc)")
         }
 
         // Create event stream by parsing NDJSON from stdout using readabilityHandler

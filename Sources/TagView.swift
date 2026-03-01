@@ -14,32 +14,23 @@ struct TagView: View {
     var small: Bool = false
 
     private var color: Color {
-        let theme = ThemeManager.shared.current
         switch type {
-        case .project: return theme.tagProject
-        case .person:  return theme.tagPerson
-        case .place:   return theme.tagPlace
-        case .action:  return theme.tagAction
-        case .status:  return theme.tagStatus
+        case .project: return .blue
+        case .person:  return .pink
+        case .place:   return .purple
+        case .action:  return .orange
+        case .status:  return .green
         }
     }
 
     var body: some View {
         Text(label)
-            .font(.system(size: small ? 9 : 10, weight: .semibold))
-            .tracking(0.3)
+            .font(.system(size: small ? 9 : 10, weight: .medium))
             .foregroundColor(color)
-            .padding(.horizontal, small ? 7 : 10)
+            .lineLimit(1)
+            .padding(.horizontal, small ? 6 : 8)
             .padding(.vertical, small ? 2 : 3)
-            .background(
-                Capsule()
-                    .fill(color.opacity(0.09))
-            )
-            .overlay(
-                Capsule()
-                    .stroke(color.opacity(0.17), lineWidth: 0.5)
-            )
-            .clipShape(Capsule())
+            .background(color.opacity(0.12), in: Capsule())
     }
 }
 
@@ -51,24 +42,10 @@ struct InfoButton: View {
     @State private var isHovered = false
 
     var body: some View {
-        let theme = ThemeManager.shared.current
-
         Button(action: { action?() }) {
-            Text("i")
-                .font(.custom("Georgia", size: 9).bold().italic())
-                .foregroundColor(isHovered ? theme.accent : theme.textTertiary)
-                .frame(width: 18, height: 18)
-                .background(
-                    Circle()
-                        .fill(theme.isDark
-                              ? Color.white.opacity(0.03)
-                              : Color.black.opacity(0.03))
-                )
-                .overlay(
-                    Circle()
-                        .stroke(theme.glassBorder, lineWidth: 0.5)
-                )
-                .shadow(color: isHovered ? theme.accent.opacity(0.4) : .clear, radius: 6)
+            Image(systemName: "info.circle")
+                .font(.system(size: 12))
+                .foregroundColor(isHovered ? .accentColor : .secondary)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -83,31 +60,20 @@ struct LiveBadge: View {
     @State private var pulse = true
 
     var body: some View {
-        let theme = ThemeManager.shared.current
-
         HStack(spacing: 4) {
             Circle()
-                .fill(theme.error)
+                .fill(Color.red)
                 .frame(width: 5, height: 5)
                 .opacity(pulse ? 1.0 : 0.3)
-                .shadow(color: pulse ? theme.error.opacity(0.6) : .clear, radius: 3)
 
             Text("LIVE")
                 .font(.system(size: 9, weight: .bold))
                 .tracking(1.2)
-                .foregroundColor(theme.error)
+                .foregroundColor(.red)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 2)
-        .background(
-            Capsule()
-                .fill(theme.error.opacity(0.09))
-        )
-        .overlay(
-            Capsule()
-                .stroke(theme.error.opacity(0.21), lineWidth: 0.5)
-        )
-        .clipShape(Capsule())
+        .background(Color.red.opacity(0.1), in: Capsule())
         .onAppear {
             withAnimation(.easeInOut(duration: 0.4).repeatForever(autoreverses: true)) {
                 pulse = false
@@ -127,9 +93,9 @@ struct ModeBadge: View {
 
     private var icon: String {
         switch mode {
-        case .auto: return "\u{26A1}"
-        case .ask:  return "\u{2753}"
-        case .user: return "\u{1F464}"
+        case .auto: return "bolt.fill"
+        case .ask:  return "questionmark.circle"
+        case .user: return "person.fill"
         }
     }
 
@@ -142,34 +108,21 @@ struct ModeBadge: View {
     }
 
     private var color: Color {
-        let theme = ThemeManager.shared.current
         switch mode {
-        case .auto: return theme.accent
-        case .ask:  return theme.warning
-        case .user: return theme.tertiary
+        case .auto: return .accentColor
+        case .ask:  return .orange
+        case .user: return .cyan
         }
     }
 
     var body: some View {
-        HStack(spacing: 3) {
-            Text(icon)
-                .font(.system(size: 9))
-            Text(label)
-                .font(.system(size: 9, weight: .semibold))
-                .tracking(0.3)
-        }
-        .foregroundColor(color)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
-        .background(
-            Capsule()
-                .fill(color.opacity(0.09))
-        )
-        .overlay(
-            Capsule()
-                .stroke(color.opacity(0.15), lineWidth: 0.5)
-        )
-        .clipShape(Capsule())
+        Label(label, systemImage: icon)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundColor(color)
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.1), in: Capsule())
     }
 }
 
@@ -179,52 +132,41 @@ struct StatusDot: View {
     let status: String
 
     private var color: Color {
-        let theme = ThemeManager.shared.current
         switch status {
-        case "completed":        return theme.accent
-        case "ongoing":          return theme.warning
-        case "pending_approval": return theme.warning
-        case "needs_input":      return theme.secondary
-        case "upcoming":         return theme.textTertiary
-        case "filtered":         return theme.textTertiary
-        default:                 return theme.textTertiary
+        case "completed":        return .green
+        case "ongoing":          return .orange
+        case "pending_approval": return .orange
+        case "needs_input":      return .purple
+        case "upcoming":         return Color(NSColor.tertiaryLabelColor)
+        case "filtered":         return Color(NSColor.tertiaryLabelColor)
+        default:                 return Color(NSColor.tertiaryLabelColor)
         }
-    }
-
-    private var showGlow: Bool {
-        status == "completed"
     }
 
     var body: some View {
         Circle()
             .fill(color)
             .frame(width: 6, height: 6)
-            .shadow(color: showGlow ? color.opacity(0.5) : .clear, radius: 4)
     }
 }
 
-// MARK: - GlassCard ViewModifier
+// MARK: - GlassCard ViewModifier (now uses system material)
 
 struct GlassCard: ViewModifier {
-    var cornerRadius: CGFloat = 12
+    var cornerRadius: CGFloat = 10
 
     func body(content: Content) -> some View {
-        let theme = ThemeManager.shared.current
         content
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(theme.glass)
-            )
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(theme.glassBorder, lineWidth: 0.5)
+                    .stroke(Color(.separatorColor), lineWidth: 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
     }
 }
 
 extension View {
-    func glassCard(cornerRadius: CGFloat = 12) -> some View {
+    func glassCard(cornerRadius: CGFloat = 10) -> some View {
         modifier(GlassCard(cornerRadius: cornerRadius))
     }
 }

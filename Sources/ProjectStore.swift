@@ -3,13 +3,16 @@ import SQLite3
 
 // MARK: - Project
 
-struct Project: Identifiable {
+struct Project: Identifiable, Hashable {
     let id: String         // UUID string
     var name: String
     var localPath: String  // absolute folder path
     let createdAt: Date
     var tags: [String]           // stored as comma-separated e.g. "ai,personal,work"
     var linkedProjectIDs: [UUID] // stored as comma-separated UUIDs
+
+    static func == (lhs: Project, rhs: Project) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
     init(id: String, name: String, localPath: String, createdAt: Date,
          tags: [String] = [], linkedProjectIDs: [UUID] = []) {

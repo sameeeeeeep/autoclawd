@@ -26,10 +26,10 @@ struct IntelligenceConsolidatedView: View {
                         VStack(spacing: AppTheme.xs) {
                             Text(tab.rawValue)
                                 .font(subTab == tab ? AppTheme.label : AppTheme.body)
-                                .foregroundColor(subTab == tab ? AppTheme.textPrimary : AppTheme.textSecondary)
+                                .foregroundColor(subTab == tab ? .primary : .secondary)
                                 .padding(.horizontal, AppTheme.lg)
                             Rectangle()
-                                .fill(subTab == tab ? AppTheme.green : Color.clear)
+                                .fill(subTab == tab ? Color.green : Color.clear)
                                 .frame(height: 2)
                         }
                     }
@@ -67,7 +67,7 @@ struct IntelligenceConsolidatedView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(AppTheme.background)
+        .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             appState.refreshExtractionItems()
             let grouped = Dictionary(grouping: appState.extractionItems, by: \.chunkIndex)
@@ -85,7 +85,7 @@ struct IntelligenceConsolidatedView: View {
                  ? "No pending"
                  : "\(appState.pendingExtractionCount) pending")
                 .font(AppTheme.caption)
-                .foregroundColor(AppTheme.textSecondary)
+                .foregroundColor(.secondary)
 
             Picker("", selection: $appState.synthesizeThreshold) {
                 Text("Manual").tag(0)
@@ -138,7 +138,7 @@ struct IntelligenceConsolidatedView: View {
     private var worldModelContent: some View {
         TextEditor(text: $worldModelText)
             .font(AppTheme.mono)
-            .foregroundColor(AppTheme.textPrimary)
+            .foregroundColor(.primary)
             .padding(AppTheme.lg)
             .onChange(of: worldModelText) { newVal in
                 appState.saveWorldModel(newVal)
@@ -165,7 +165,7 @@ struct IntelligenceConsolidatedView: View {
                 }
             }
         }
-        .background(AppTheme.surface)
+        .background(Color(NSColor.controlBackgroundColor))
         .task {
             while true {
                 try? await Task.sleep(for: .seconds(2))
@@ -178,7 +178,7 @@ struct IntelligenceConsolidatedView: View {
         HStack(alignment: .top, spacing: AppTheme.sm) {
             Text(shortTime(entry.timestamp))
                 .font(AppTheme.mono)
-                .foregroundColor(AppTheme.textDisabled)
+                .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 .frame(width: 60, alignment: .leading)
 
             Text(entry.level.rawValue)
@@ -188,12 +188,12 @@ struct IntelligenceConsolidatedView: View {
 
             Text("[\(entry.component.rawValue)]")
                 .font(AppTheme.mono)
-                .foregroundColor(AppTheme.textSecondary)
+                .foregroundColor(.secondary)
                 .frame(width: 80, alignment: .leading)
 
             Text(entry.message)
                 .font(AppTheme.mono)
-                .foregroundColor(AppTheme.textPrimary)
+                .foregroundColor(.primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -204,10 +204,10 @@ struct IntelligenceConsolidatedView: View {
 
     private func levelColor(_ level: LogLevel) -> Color {
         switch level {
-        case .error: return AppTheme.destructive
+        case .error: return Color.red
         case .warn:  return .orange
-        case .info:  return AppTheme.textSecondary
-        case .debug: return AppTheme.textDisabled
+        case .info:  return .secondary
+        case .debug: return Color(NSColor.tertiaryLabelColor)
         }
     }
 
@@ -245,12 +245,12 @@ struct IntelligenceConsolidatedView: View {
         VStack(spacing: AppTheme.md) {
             Image(systemName: icon)
                 .font(.system(size: 32))
-                .foregroundColor(AppTheme.border)
+                .foregroundColor(Color(NSColor.separatorColor))
             Text(message)
                 .font(AppTheme.body)
-                .foregroundColor(AppTheme.textSecondary)
+                .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppTheme.background)
+        .background(Color(NSColor.windowBackgroundColor))
     }
 }

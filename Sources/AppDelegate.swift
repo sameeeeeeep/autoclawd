@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Combine
+import Speech
 import SwiftUI
 
 @MainActor
@@ -22,13 +23,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.onShowSetup = { [weak self] in Task { @MainActor in self?.showSetupWindowSync() } }
 
         showPill()
-        pillWindow?.setWidgetHeight(Self.widgetHeight(for: appState.pillMode))
+        pillWindow?.setWidgetHeight(Self.widgetHeight(for: appState.pillMode, codeStep: appState.codeWidgetStep))
 
         // Show first-run setup if dependencies are missing
         showSetupIfNeeded()
 
-        // Check microphone permission
-        checkMicPermission()
+        // Request all required permissions upfront (mic + speech recognition).
+        // On first launch this ensures permission dialogs fire before the first
+        // recording attempt — preventing the first chunk from silently failing.
+        requestPermissionsUpfront()
 
         // Log toast subscription
         AutoClawdLogger.toastPublisher
@@ -41,7 +44,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .dropFirst()  // initial resize handled above
             .receive(on: DispatchQueue.main)
             .sink { [weak self] mode in
-                self?.pillWindow?.setWidgetHeight(Self.widgetHeight(for: mode))
+                guard let self else { return }
+                let step = self.appState.codeWidgetStep
+                self.pillWindow?.setWidgetHeight(Self.widgetHeight(for: mode, codeStep: step))
+            }
+            .store(in: &cancellables)
+
+        // Resize when code widget step changes (project select vs copilot)
+        appState.$codeWidgetStep
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] step in
+                guard let self, self.appState.pillMode == .code else { return }
+                self.pillWindow?.setWidgetHeight(Self.widgetHeight(for: .code, codeStep: step))
             }
             .store(in: &cancellables)
 
@@ -96,11 +110,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Widget panel height for each pill mode.
-    static func widgetHeight(for mode: PillMode) -> CGFloat {
+    static func widgetHeight(for mode: PillMode, codeStep: CodeWidgetStep = .projectSelect) -> CGFloat {
         switch mode {
         case .ambientIntelligence: return 220  // map square
         case .transcription:       return 140  // text + apply button
         case .aiSearch:            return 150  // Q + A display
+        case .code:
+            switch codeStep {
+            case .projectSelect: return 120  // compact picker
+            case .copilot:       return 260  // session thread
+            }
         }
     }
 
@@ -126,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Ambient Mode  ⌃A",    action: #selector(menuAmbient),    keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "AI Search Mode  ⌃S",  action: #selector(menuSearch),     keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Transcribe Mode  ⌃X", action: #selector(menuTranscribe), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Code Mode  ⌃D",      action: #selector(menuCode),       keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "View Logs",           action: #selector(menuViewLogs),   keyEquivalent: ""))
         menu.addItem(.separator())
@@ -144,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func menuAmbient()      { appState.pillMode = .ambientIntelligence; if !appState.isListening { appState.startListening() } }
     @objc private func menuSearch()       { appState.pillMode = .aiSearch;            if !appState.isListening { appState.startListening() } }
     @objc private func menuTranscribe()   { appState.pillMode = .transcription;       if !appState.isListening { appState.startListening() } }
+    @objc private func menuCode()         { appState.pillMode = .code }
 
     // MARK: - Toast
 
@@ -194,22 +215,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Microphone Permission
 
-    private func checkMicPermission() {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            break
-        case .notDetermined:
+    // MARK: - Upfront Permission Requests
+
+    /// Request microphone + speech recognition permissions immediately at launch.
+    /// This surfaces the system dialogs before the first recording attempt, so
+    /// the first audio chunk never fails due to pending permissions.
+    private func requestPermissionsUpfront() {
+        // Microphone
+        let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        if micStatus == .notDetermined {
             AVCaptureDevice.requestAccess(for: .audio) { granted in
                 DispatchQueue.main.async {
-                    if granted {
-                        Log.info(.system, "Microphone permission granted")
-                    } else {
-                        Log.warn(.system, "Microphone permission denied")
-                        self.showMicAlert()
-                    }
+                    Log.info(.system, "Microphone permission: \(granted ? "granted" : "denied")")
+                    if !granted { self.showMicAlert() }
                 }
             }
-        default:
+        } else if micStatus == .denied || micStatus == .restricted {
+            showMicAlert()
+        }
+
+        // Speech Recognition (for local transcription mode)
+        let srStatus = SFSpeechRecognizer.authorizationStatus()
+        if srStatus == .notDetermined {
+            SFSpeechRecognizer.requestAuthorization { status in
+                DispatchQueue.main.async {
+                    Log.info(.system, "Speech recognition permission: \(status == .authorized ? "granted" : "denied")")
+                }
+            }
+        }
+    }
+
+    private func checkMicPermission() {
+        // Kept for compatibility — actual requesting is now done in requestPermissionsUpfront()
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .denied {
             showMicAlert()
         }
     }
@@ -280,7 +318,8 @@ struct PillContentView: View {
                 onToggleMinimal: onToggleMinimal,
                 pillMode: appState.pillMode,
                 onCycleMode: { appState.cyclePillMode() },
-                appearanceMode: appState.appearanceMode
+                appearanceMode: appState.appearanceMode,
+                onCollapse: onToggleMinimal
             )
 
             widgetForCurrentMode
@@ -317,6 +356,10 @@ struct PillContentView: View {
                 isListening: appState.isListening
             )
             .transition(.opacity.combined(with: .offset(y: -6)))
+
+        case .code:
+            CodeWidgetView(appState: appState)
+                .transition(.opacity.combined(with: .offset(y: -6)))
         }
     }
 }

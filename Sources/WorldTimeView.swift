@@ -95,8 +95,7 @@ struct WorldTimeView: View {
     // MARK: - Overlay Panel Wrapper
 
     private func overlayPanel<Content: View>(alignment: Alignment, @ViewBuilder content: () -> Content) -> some View {
-        let theme = ThemeManager.shared.current
-        return ZStack(alignment: alignment) {
+        ZStack(alignment: alignment) {
             // Scrim
             Color.black.opacity(0.3)
                 .ignoresSafeArea()
@@ -108,7 +107,7 @@ struct WorldTimeView: View {
                 }
 
             content()
-                .background(theme.surface)
+                .background(Color(NSColor.controlBackgroundColor))
                 .shadow(color: .black.opacity(0.2), radius: 12)
                 .transition(.move(edge: alignment == .leading ? .leading : .trailing))
         }
@@ -273,17 +272,15 @@ struct WorldTimeView: View {
     // MARK: - Left Panel: Episode List
 
     private var episodeListPanel: some View {
-        let theme = ThemeManager.shared.current
-
-        return VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             // Header
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("Episodes")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(.primary)
                 Text(seasonCode)
                     .font(.system(size: 9, weight: .regular, design: .monospaced))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 Spacer()
             }
             .padding(.horizontal, 12)
@@ -294,10 +291,10 @@ struct WorldTimeView: View {
                 VStack(spacing: 8) {
                     Text("No episodes yet")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(theme.textSecondary)
+                        .foregroundColor(.secondary)
                     Text("Episodes appear as you record throughout the day.")
                         .font(.system(size: 9))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         .multilineTextAlignment(.center)
                 }
                 .padding(20)
@@ -318,7 +315,7 @@ struct WorldTimeView: View {
         .frame(minWidth: 160, idealWidth: 220, maxWidth: 280)
         .overlay(
             Rectangle()
-                .fill(theme.glassBorder)
+                .fill(Color(NSColor.separatorColor))
                 .frame(width: 0.5),
             alignment: .trailing
         )
@@ -327,7 +324,6 @@ struct WorldTimeView: View {
     // MARK: - Episode Card
 
     private func episodeCard(episode: Episode, index: Int) -> some View {
-        let theme = ThemeManager.shared.current
         let isSelected = selectedEpisodeIndex == index
         let dateFormatter: DateFormatter = {
             let f = DateFormatter()
@@ -344,30 +340,30 @@ struct WorldTimeView: View {
                     // Thumbnail
                     ZStack {
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(theme.glass)
+                            .fill(Color(NSColor.windowBackgroundColor).opacity(0.8))
                         if episode.isToday {
                             Circle()
-                                .fill(theme.error)
+                                .fill(.red)
                                 .frame(width: 8, height: 8)
                         } else if !episode.segments.isEmpty {
                             Image(systemName: "play.fill")
                                 .font(.system(size: 9))
-                                .foregroundColor(theme.textTertiary)
+                                .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         }
                     }
                     .frame(width: 38, height: 26)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)
-                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
                     )
 
                     VStack(alignment: .leading, spacing: 1) {
                         Text(episode.episodeCode)
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundColor(theme.textPrimary)
+                            .foregroundColor(.primary)
                         Text(dateFormatter.string(from: episode.date))
                             .font(.system(size: 9))
-                            .foregroundColor(theme.textTertiary)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     }
 
                     if episode.isToday {
@@ -383,7 +379,7 @@ struct WorldTimeView: View {
                 if let title = episode.title {
                     Text(title)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(isSelected ? theme.textPrimary : theme.textSecondary)
+                        .foregroundColor(isSelected ? .primary : .secondary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                 }
@@ -392,7 +388,7 @@ struct WorldTimeView: View {
                 if isSelected, let summary = episode.summary {
                     Text(summary)
                         .font(.system(size: 9))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         .lineSpacing(9 * 0.55) // 1.55 line height
                         .lineLimit(4)
                         .multilineTextAlignment(.leading)
@@ -401,12 +397,12 @@ struct WorldTimeView: View {
             .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(isSelected ? theme.accent.opacity(0.08) : Color.clear)
+                    .fill(isSelected ? Color.accentColor.opacity(0.08) : Color.clear)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(
-                        isSelected ? theme.accent.opacity(0.18) : Color.clear,
+                        isSelected ? Color.accentColor.opacity(0.18) : Color.clear,
                         lineWidth: 0.5
                     )
             )
@@ -433,8 +429,7 @@ struct WorldTimeView: View {
     }
 
     private func compactToggleBar(showEpisodeToggle: Bool, showTranscriptToggle: Bool) -> some View {
-        let theme = ThemeManager.shared.current
-        return HStack(spacing: 8) {
+        HStack(spacing: 8) {
             if showEpisodeToggle {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -448,16 +443,16 @@ struct WorldTimeView: View {
                         Text("Episodes")
                             .font(.system(size: 10, weight: .medium))
                     }
-                    .foregroundColor(showEpisodes ? theme.accent : theme.textSecondary)
+                    .foregroundColor(showEpisodes ? .accentColor : .secondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(
                         Capsule()
-                            .fill(showEpisodes ? theme.accent.opacity(0.12) : theme.glass)
+                            .fill(showEpisodes ? Color.accentColor.opacity(0.12) : Color(NSColor.windowBackgroundColor).opacity(0.8))
                     )
                     .overlay(
                         Capsule()
-                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
                     )
                 }
                 .buttonStyle(.plain)
@@ -467,7 +462,7 @@ struct WorldTimeView: View {
             if showEpisodeToggle {
                 Text(selectedEpisode.episodeCode)
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(.secondary)
             }
 
             Spacer()
@@ -487,22 +482,22 @@ struct WorldTimeView: View {
                         if !transcriptRecords.isEmpty {
                             Text("\(transcriptRecords.count)")
                                 .font(.system(size: 8, weight: .semibold))
-                                .foregroundColor(theme.accent)
+                                .foregroundColor(.accentColor)
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
-                                .background(Capsule().fill(theme.accent.opacity(0.15)))
+                                .background(Capsule().fill(Color.accentColor.opacity(0.15)))
                         }
                     }
-                    .foregroundColor(showTranscript ? theme.accent : theme.textSecondary)
+                    .foregroundColor(showTranscript ? .accentColor : .secondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(
                         Capsule()
-                            .fill(showTranscript ? theme.accent.opacity(0.12) : theme.glass)
+                            .fill(showTranscript ? Color.accentColor.opacity(0.12) : Color(NSColor.windowBackgroundColor).opacity(0.8))
                     )
                     .overlay(
                         Capsule()
-                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
                     )
                 }
                 .buttonStyle(.plain)
@@ -513,7 +508,6 @@ struct WorldTimeView: View {
     // MARK: - Player Header Bar
 
     private var playerHeaderBar: some View {
-        let theme = ThemeManager.shared.current
         let ep = selectedEpisode
         let dateFormatter: DateFormatter = {
             let f = DateFormatter()
@@ -525,11 +519,11 @@ struct WorldTimeView: View {
             // Left: episode code + date + live badge + title
             Text(ep.episodeCode)
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
-                .foregroundColor(theme.textPrimary)
+                .foregroundColor(.primary)
 
             Text(dateFormatter.string(from: ep.date))
                 .font(.system(size: 10))
-                .foregroundColor(theme.textTertiary)
+                .foregroundColor(Color(NSColor.tertiaryLabelColor))
 
             if ep.isToday {
                 LiveBadge()
@@ -538,7 +532,7 @@ struct WorldTimeView: View {
             if let title = ep.title {
                 Text("— \(title)")
                     .font(.system(size: 10))
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -564,11 +558,11 @@ struct WorldTimeView: View {
                     .padding(.vertical, 4)
                     .background(
                         Capsule()
-                            .fill(isLive ? theme.error : theme.glass)
+                            .fill(isLive ? Color.red : Color(NSColor.windowBackgroundColor).opacity(0.8))
                     )
                     .overlay(
                         Capsule()
-                            .stroke(isLive ? theme.error.opacity(0.5) : theme.glassBorder, lineWidth: 0.5)
+                            .stroke(isLive ? Color.red.opacity(0.5) : Color(NSColor.separatorColor), lineWidth: 0.5)
                     )
             }
             .buttonStyle(.plain)
@@ -578,15 +572,15 @@ struct WorldTimeView: View {
             } label: {
                 Image(systemName: appState.isListening ? "mic.fill" : "mic.slash.fill")
                     .font(.system(size: 11))
-                    .foregroundColor(appState.isListening ? theme.accent : theme.textTertiary)
+                    .foregroundColor(appState.isListening ? .accentColor : Color(NSColor.tertiaryLabelColor))
                     .frame(width: 28, height: 28)
                     .background(
                         RoundedRectangle(cornerRadius: 7)
-                            .fill(appState.isListening ? theme.accent.opacity(0.18) : theme.glass)
+                            .fill(appState.isListening ? Color.accentColor.opacity(0.18) : Color(NSColor.windowBackgroundColor).opacity(0.8))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 7)
-                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
                     )
             }
             .buttonStyle(.plain)
@@ -595,7 +589,7 @@ struct WorldTimeView: View {
         .padding(.horizontal, 16)
         .overlay(
             Rectangle()
-                .fill(theme.glassBorder)
+                .fill(Color(NSColor.separatorColor))
                 .frame(height: 0.5),
             alignment: .bottom
         )
@@ -604,18 +598,16 @@ struct WorldTimeView: View {
     // MARK: - Square Map
 
     private var squareMap: some View {
-        let theme = ThemeManager.shared.current
-
-        return GeometryReader { geo in
+        GeometryReader { geo in
             let size = min(geo.size.width, geo.size.height)
 
             ZStack(alignment: .topLeading) {
                 // Glass background
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(theme.glass)
+                    .fill(Color(NSColor.windowBackgroundColor).opacity(0.8))
                     .overlay(
                         RoundedRectangle(cornerRadius: 16)
-                            .stroke(theme.glassBorder, lineWidth: 0.5)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
                     )
 
                 // 8x8 grid overlay
@@ -636,25 +628,25 @@ struct WorldTimeView: View {
                         path.move(to: CGPoint(x: 0, y: y))
                         path.addLine(to: CGPoint(x: canvasSize.width, y: y))
                     }
-                    context.stroke(path, with: .color(theme.textPrimary.opacity(0.03)), lineWidth: 0.5)
+                    context.stroke(path, with: .color(Color.primary.opacity(0.03)), lineWidth: 0.5)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 16))
 
-                // Location label — real location from AppState
+                // Location label -- real location from AppState
                 Text(appState.locationName.uppercased())
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(.secondary)
                     .tracking(1)
                     .padding(.top, 12)
                     .padding(.leading, 14)
 
-                // Speaker dots — real people from AppState (draggable)
+                // Speaker dots -- real people from AppState (draggable)
                 ForEach(Array(appState.people.enumerated()), id: \.element.id) { index, person in
                     if !person.isMusic {
                         let isActive = appState.currentSpeakerID == person.id
                         VStack(spacing: 3) {
                             Circle()
-                                .fill(isActive ? person.color : theme.textSecondary)
+                                .fill(isActive ? person.color : Color.secondary)
                                 .frame(
                                     width: isActive ? 14 : 10,
                                     height: isActive ? 14 : 10
@@ -665,7 +657,7 @@ struct WorldTimeView: View {
                                 )
                             Text(person.name)
                                 .font(.system(size: 9))
-                                .foregroundColor(theme.textSecondary)
+                                .foregroundColor(.secondary)
                         }
                         .simultaneousGesture(
                             DragGesture(minimumDistance: 6)
@@ -731,7 +723,6 @@ struct WorldTimeView: View {
     // MARK: - Waveform Container
 
     private var waveformContainer: some View {
-        let theme = ThemeManager.shared.current
         let locationDisplay = appState.locationName
 
         return HStack(spacing: 12) {
@@ -741,7 +732,7 @@ struct WorldTimeView: View {
                 HStack(alignment: .center, spacing: 2) {
                     ForEach(0..<50, id: \.self) { i in
                         RoundedRectangle(cornerRadius: 1)
-                            .fill(isLive ? theme.error.opacity(0.7) : theme.accent.opacity(0.6))
+                            .fill(isLive ? Color.red.opacity(0.7) : Color.accentColor.opacity(0.6))
                             .frame(width: 2, height: max(3, waveformHeights[i] * 28))
                     }
                 }
@@ -752,15 +743,15 @@ struct WorldTimeView: View {
                     if isLive && appState.isListening {
                         Text("Listening \u{2022} \(locationDisplay)")
                             .font(.system(size: 9))
-                            .foregroundColor(theme.textTertiary)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     } else if isLive && !appState.isListening {
                         Text("Mic off \u{2022} \(locationDisplay)")
                             .font(.system(size: 9))
-                            .foregroundColor(theme.textTertiary)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     } else {
                         Text("Paused at \(formatTime(seekTime))")
                             .font(.system(size: 9))
-                            .foregroundColor(theme.textTertiary)
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     }
                     Spacer()
                 }
@@ -772,17 +763,16 @@ struct WorldTimeView: View {
             if isLive {
                 Text(currentTimeString())
                     .font(.system(size: 20, weight: .ultraLight, design: .monospaced))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(.primary)
             }
         }
         .padding(12)
-        .glassCard(cornerRadius: 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     // MARK: - Seek Bar
 
     private var seekBar: some View {
-        let theme = ThemeManager.shared.current
         let totalSeconds: TimeInterval = 86400
         let ep = selectedEpisode
 
@@ -795,7 +785,7 @@ struct WorldTimeView: View {
                 ZStack(alignment: .leading) {
                     // Background track
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(theme.glass.opacity(0.05))
+                        .fill(Color(NSColor.windowBackgroundColor).opacity(0.8).opacity(0.05))
                         .frame(height: 5)
 
                     // Recorded segments
@@ -803,17 +793,17 @@ struct WorldTimeView: View {
                         let startX = CGFloat(segment.start / totalSeconds) * width
                         let segWidth = CGFloat((segment.end - segment.start) / totalSeconds) * width
                         RoundedRectangle(cornerRadius: 2)
-                            .fill(theme.accent.opacity(0.5))
+                            .fill(Color.accentColor.opacity(0.5))
                             .frame(width: max(1, segWidth), height: 5)
                             .offset(x: startX)
                     }
 
                     // Playhead
                     Circle()
-                        .fill(isLive ? theme.error : theme.accent)
+                        .fill(isLive ? Color.red : Color.accentColor)
                         .frame(width: 13, height: 13)
                         .shadow(
-                            color: (isLive ? theme.error : theme.accent).opacity(0.4),
+                            color: (isLive ? Color.red : Color.accentColor).opacity(0.4),
                             radius: 5
                         )
                         .offset(x: playheadX - 6.5)
@@ -840,7 +830,7 @@ struct WorldTimeView: View {
                 ForEach(["12a", "4a", "8a", "12p", "4p", "8p"], id: \.self) { label in
                     Text(label)
                         .font(.system(size: 8))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     if label != "8p" { Spacer() }
                 }
             }
@@ -849,11 +839,11 @@ struct WorldTimeView: View {
             HStack {
                 Text(formatTime(seekTime))
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 Spacer()
                 Text(formatTime(totalSeconds))
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
             }
         }
     }
@@ -861,17 +851,15 @@ struct WorldTimeView: View {
     // MARK: - Right Panel: Transcript List
 
     private var transcriptPanel: some View {
-        let theme = ThemeManager.shared.current
-
-        return VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             // Header
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("Transcripts")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(.primary)
                 Text("\(transcriptRecords.count)")
                     .font(.system(size: 9))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 Spacer()
             }
             .padding(.horizontal, 12)
@@ -882,10 +870,10 @@ struct WorldTimeView: View {
                 VStack(spacing: 8) {
                     Text("No transcripts")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(theme.textSecondary)
+                        .foregroundColor(.secondary)
                     Text("Transcripts will appear here as audio is recorded and processed.")
                         .font(.system(size: 9))
-                        .foregroundColor(theme.textTertiary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                         .multilineTextAlignment(.center)
                 }
                 .padding(16)
@@ -906,7 +894,7 @@ struct WorldTimeView: View {
         .frame(minWidth: 160, idealWidth: 220, maxWidth: 260)
         .overlay(
             Rectangle()
-                .fill(theme.glassBorder)
+                .fill(Color(NSColor.separatorColor))
                 .frame(width: 0.5),
             alignment: .leading
         )
@@ -915,7 +903,6 @@ struct WorldTimeView: View {
     // MARK: - Transcript Entry
 
     private func transcriptEntry(record: TranscriptRecord) -> some View {
-        let theme = ThemeManager.shared.current
         let recordDaySeconds = record.timestamp.timeIntervalSince(
             Calendar.current.startOfDay(for: record.timestamp)
         )
@@ -933,7 +920,7 @@ struct WorldTimeView: View {
             HStack(spacing: 6) {
                 Text(timeFormatter.string(from: record.timestamp))
                     .font(.system(size: 8, design: .monospaced))
-                    .foregroundColor(theme.textTertiary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
 
                 if let speaker = record.speakerName {
                     TagView(type: .person, label: speaker, small: true)
@@ -947,7 +934,7 @@ struct WorldTimeView: View {
             if !previewText.isEmpty {
                 Text(previewText)
                     .font(.system(size: 10))
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(.secondary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
             }
@@ -955,14 +942,14 @@ struct WorldTimeView: View {
         .padding(7)
         .background(
             RoundedRectangle(cornerRadius: 7)
-                .fill(isActive ? theme.accent.opacity(0.08) : Color.clear)
+                .fill(isActive ? Color.accentColor.opacity(0.08) : Color.clear)
         )
         .overlay(
             isActive
                 ? AnyView(
                     HStack(spacing: 0) {
                         RoundedRectangle(cornerRadius: 1)
-                            .fill(theme.accent)
+                            .fill(Color.accentColor)
                             .frame(width: 2)
                         Spacer()
                     }

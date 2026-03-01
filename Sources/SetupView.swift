@@ -39,18 +39,18 @@ struct SetupView: View {
             HStack {
                 Text("AUTOCLAWD SETUP")
                     .font(AppTheme.heading)
-                    .foregroundColor(.white)
+                    .foregroundColor(.primary)
                 Spacer()
                 if installer.isComplete {
                     Button("Skip →") { onComplete?() }
                         .buttonStyle(.plain)
                         .font(AppTheme.caption)
-                        .foregroundColor(AppTheme.textSecondary)
+                        .foregroundColor(.secondary)
                 }
             }
             Text("AutoClawd needs a few things installed to work. We'll handle it for you.")
                 .font(AppTheme.caption)
-                .foregroundColor(AppTheme.textSecondary)
+                .foregroundColor(.secondary)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
@@ -89,11 +89,11 @@ struct SetupView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         ProgressView(value: installer.modelProgress)
                             .progressViewStyle(.linear)
-                            .tint(AppTheme.green)
+                            .tint(Color.green)
                             .frame(width: 160)
                         Text(installer.modelProgressText)
                             .font(AppTheme.caption)
-                            .foregroundColor(AppTheme.textSecondary)
+                            .foregroundColor(.secondary)
                     }
                 } else {
                     actionButton(
@@ -143,7 +143,7 @@ struct SetupView: View {
                         }
                         .buttonStyle(.plain)
                         .font(AppTheme.caption)
-                        .foregroundColor(AppTheme.green)
+                        .foregroundColor(Color.green)
                         .disabled(groqInput.isEmpty || groqValidating)
                     }
                     if let err = groqError {
@@ -182,10 +182,10 @@ struct SetupView: View {
             Divider()
             HStack(spacing: 10) {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(AppTheme.green)
+                    .foregroundColor(Color.green)
                 Text("All set — AutoClawd is ready to use.")
                     .font(AppTheme.body)
-                    .foregroundColor(AppTheme.green)
+                    .foregroundColor(Color.green)
                 Spacer()
                 Button("Launch AutoClawd") { onComplete?() }
                     .buttonStyle(.plain)
@@ -193,7 +193,7 @@ struct SetupView: View {
                     .foregroundColor(.black)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
-                    .background(AppTheme.green)
+                    .background(Color.green)
                     .cornerRadius(4)
             }
             .padding(.horizontal, 20)
@@ -225,7 +225,7 @@ struct SetupView: View {
                         .frame(width: 14, height: 14)
                     Text(runningLabel)
                         .font(AppTheme.caption)
-                        .foregroundColor(AppTheme.textSecondary)
+                        .foregroundColor(.secondary)
                 }
             case .failed(let msg):
                 VStack(alignment: .trailing, spacing: 4) {
@@ -244,12 +244,12 @@ struct SetupView: View {
                 Button(label) { action() }
                     .buttonStyle(.plain)
                     .font(AppTheme.caption)
-                    .foregroundColor(AppTheme.green)
+                    .foregroundColor(Color.green)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)
-                            .stroke(AppTheme.green.opacity(0.6), lineWidth: 1)
+                            .stroke(Color.green.opacity(0.6), lineWidth: 1)
                     )
             }
         }
@@ -264,7 +264,7 @@ struct SetupView: View {
                     Text("DONE")
                         .font(AppTheme.caption)
                 }
-                .foregroundColor(AppTheme.green)
+                .foregroundColor(Color.green)
             }
         }
     }
@@ -296,10 +296,10 @@ private struct SetupRow<Trailing: View>: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(AppTheme.body)
-                    .foregroundColor(.white)
+                    .foregroundColor(.primary)
                 Text(subtitle)
                     .font(AppTheme.caption)
-                    .foregroundColor(AppTheme.textSecondary)
+                    .foregroundColor(.secondary)
             }
 
             Spacer()
@@ -313,7 +313,7 @@ private struct SetupRow<Trailing: View>: View {
 
     private var circleColor: Color {
         switch status {
-        case .done:    return AppTheme.green
+        case .done:    return Color.green
         case .running: return .yellow
         case .failed:  return .red
         case .pending: return .white.opacity(0.3)

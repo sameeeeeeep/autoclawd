@@ -32,6 +32,29 @@ enum AppearanceMode: String, CaseIterable {
     }
 }
 
+enum FontSizePreference: String, CaseIterable {
+    case small  = "small"
+    case medium = "medium"
+    case large  = "large"
+
+    var displayName: String {
+        switch self {
+        case .small:  return "Small"
+        case .medium: return "Medium"
+        case .large:  return "Large"
+        }
+    }
+
+    /// Base size multiplier applied to system font sizes throughout the app.
+    var scale: CGFloat {
+        switch self {
+        case .small:  return 0.85
+        case .medium: return 1.0
+        case .large:  return 1.2
+        }
+    }
+}
+
 enum ColorSchemeSetting: String, CaseIterable {
     case system = "system"
     case light  = "light"
@@ -76,6 +99,8 @@ final class SettingsManager: @unchecked Sendable {
     private let kWhatsAppNotifyTasks = "whatsapp_notify_tasks"
     private let kWhatsAppNotifySummaries = "whatsapp_notify_summaries"
     private let kWhatsAppMyJID = "whatsapp_my_jid"
+    private let kFontSizePreference  = "font_size_preference"
+    private let kAutonomousTaskRules = "autonomous_task_rules"
 
     // MARK: - Properties
 
@@ -172,6 +197,16 @@ final class SettingsManager: @unchecked Sendable {
         }
     }
 
+    // MARK: - Font Size
+
+    var fontSizePreference: FontSizePreference {
+        get {
+            let raw = defaults.string(forKey: kFontSizePreference) ?? FontSizePreference.medium.rawValue
+            return FontSizePreference(rawValue: raw) ?? .medium
+        }
+        set { defaults.set(newValue.rawValue, forKey: kFontSizePreference) }
+    }
+
     // MARK: - WhatsApp
 
     var whatsAppEnabled: Bool {
@@ -192,6 +227,20 @@ final class SettingsManager: @unchecked Sendable {
     var whatsAppMyJID: String {
         get { defaults.string(forKey: kWhatsAppMyJID) ?? "" }
         set { defaults.set(newValue, forKey: kWhatsAppMyJID) }
+    }
+
+    // MARK: - Autonomous Task Rules
+    //
+    // Plain-English descriptions of task categories that autoclawd can execute
+    // autonomously without requiring user approval.  The analysis LLM receives
+    // this list when it assigns task.mode — tasks matching a rule get `.auto`,
+    // all others get `.ask`.
+    //
+    // Default: empty → nothing runs autonomously until the user configures rules.
+
+    var autonomousTaskRules: [String] {
+        get { defaults.stringArray(forKey: kAutonomousTaskRules) ?? [] }
+        set { defaults.set(newValue, forKey: kAutonomousTaskRules) }
     }
 
     private init() {}

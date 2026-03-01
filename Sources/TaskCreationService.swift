@@ -23,7 +23,7 @@ final class TaskCreationService: @unchecked Sendable {
 
     // MARK: - Public API
 
-    func createTasks(from analysis: TranscriptAnalysis) async -> [PipelineTaskRecord] {
+    func createTasks(from analysis: TranscriptAnalysis, attachmentPaths: [String] = []) async -> [PipelineTaskRecord] {
         guard !analysis.taskDescriptions.isEmpty else {
             Log.info(.taskCreate, "Stage 3: no task descriptions from analysis, skipping")
             return []
@@ -58,19 +58,36 @@ final class TaskCreationService: @unchecked Sendable {
                 status = .needs_input
                 pendingQuestion = plan.needsInput
             } else {
-                switch plan.certainty {
-                case "high":
+                // Check user-configured autonomous rules first.
+                // If the task title or prompt matches any rule, force .auto regardless of certainty.
+                let autonomousRules = SettingsManager.shared.autonomousTaskRules
+                let taskText = "\(desc.title) \(desc.prompt)".lowercased()
+                let matchesAutonomousRule = autonomousRules.contains { rule in
+                    let keywords = rule.lowercased()
+                        .components(separatedBy: .whitespacesAndNewlines)
+                        .filter { !$0.isEmpty && $0.count > 2 }
+                    return keywords.allSatisfy { taskText.contains($0) }
+                }
+
+                if matchesAutonomousRule {
                     mode = .auto
                     status = .upcoming
                     pendingQuestion = nil
-                case "medium":
-                    mode = .ask
-                    status = .pending_approval
-                    pendingQuestion = "Review and approve this task before execution?"
-                default: // "low" or unknown
-                    mode = .ask
-                    status = .needs_input
-                    pendingQuestion = plan.needsInput ?? "Low certainty. Please review before proceeding."
+                } else {
+                    switch plan.certainty {
+                    case "high":
+                        mode = .auto
+                        status = .upcoming
+                        pendingQuestion = nil
+                    case "medium":
+                        mode = .ask
+                        status = .pending_approval
+                        pendingQuestion = "Review and approve this task before execution?"
+                    default: // "low" or unknown
+                        mode = .ask
+                        status = .needs_input
+                        pendingQuestion = plan.needsInput ?? "Low certainty. Please review before proceeding."
+                    }
                 }
             }
 
@@ -92,6 +109,7 @@ final class TaskCreationService: @unchecked Sendable {
                 workflowSteps: workflow?.steps ?? [],
                 missingConnection: missingConnection,
                 pendingQuestion: pendingQuestion,
+                attachmentPaths: attachmentPaths,
                 createdAt: Date(),
                 startedAt: nil,
                 completedAt: nil
