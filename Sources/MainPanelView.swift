@@ -64,21 +64,31 @@ struct MainPanelView: View {
     }
 
     // MARK: - Content
+    // ZStack keeps all tabs alive (not destroyed on switch) so PixelWorldView
+    // retains its WKWebView and pipeline subscriptions across tab changes.
 
     @ViewBuilder
     private var content: some View {
-        switch selectedTab {
-        case .world:
+        ZStack {
             VStack(spacing: 0) {
                 worldSubTabBar
                 worldSubTabContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        case .logs:
+            .opacity(selectedTab == .world ? 1 : 0)
+            .allowsHitTesting(selectedTab == .world)
+
             LogsPipelineView(appState: appState)
-        case .settings:
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selectedTab == .logs ? 1 : 0)
+                .allowsHitTesting(selectedTab == .logs)
+
             SettingsConsolidatedView(appState: appState)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selectedTab == .settings ? 1 : 0)
+                .allowsHitTesting(selectedTab == .settings)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - World Sub-Tab Bar
@@ -95,16 +105,26 @@ struct MainPanelView: View {
     }
 
     // MARK: - World Sub-Tab Content
+    // ZStack keeps all sub-tabs alive — PixelWorldView is never destroyed,
+    // its WKWebView keeps running and its .onReceive subscriptions stay active.
 
     @ViewBuilder
     private var worldSubTabContent: some View {
-        switch selectedWorldSubTab {
-        case .time:
+        ZStack {
             WorldTimeView(appState: appState)
-        case .space:
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selectedWorldSubTab == .time ? 1 : 0)
+                .allowsHitTesting(selectedWorldSubTab == .time)
+
             WorldSpaceView(appState: appState)
-        case .hq:
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selectedWorldSubTab == .space ? 1 : 0)
+                .allowsHitTesting(selectedWorldSubTab == .space)
+
             PixelWorldView(appState: appState)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selectedWorldSubTab == .hq ? 1 : 0)
+                .allowsHitTesting(selectedWorldSubTab == .hq)
         }
     }
 }

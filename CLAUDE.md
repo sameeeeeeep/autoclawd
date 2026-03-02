@@ -1,6 +1,14 @@
 # AutoClawd — CLAUDE.md
 
-AutoClawd is a macOS ambient AI agent. It runs as a floating pill widget, always-on microphone, and background pipeline that listens to conversations, transcribes them, extracts tasks, and executes them autonomously via Claude Code.
+AutoClawd is a macOS ambient AI agent. It runs as a floating pill widget with an always-on microphone and a background pipeline that listens to conversations, transcribes them with local AI models, extracts tasks, and executes them autonomously via Claude Code — without the user ever typing a prompt.
+
+## Core Concept
+
+- **Always-on mic** → captures 30-second audio chunks continuously
+- **Always-on intelligence** → local Llama 3.2 cleans and analyzes every transcript
+- **Zero-prompt execution** → tasks are created and auto-run based on what was said, not what was asked
+- **World model** → persistent per-project knowledge base built from every conversation
+- **Mission Control HQ** → live pixel-art visualization of the pipeline (agents queue, walk desk-to-desk, reflect real events)
 
 ## Build & Run
 
@@ -31,6 +39,7 @@ AutoClawd.app (Swift/SwiftUI macOS app)
   └── MainPanelWindow       main dashboard (opens on pill tap)
   └── ToastWindow           notification toasts
   └── SetupWindow           first-run dependency setup
+  └── PixelWorld (WebKit)   Mission Control HQ canvas overlay
 
 WhatsApp Sidecar (Node.js/Express on localhost:7891)
   └── Baileys WA Web client → buffers messages → polled every 2s
@@ -42,41 +51,52 @@ WhatsApp Sidecar (Node.js/Express on localhost:7891)
                                               │
                                     ┌─────────▼─────────┐
                                     │ Stage 1: Cleaning  │  TranscriptCleaningService
-                                    │  merge chunks,     │
-                                    │  denoise           │
+                                    │  local Llama 3.2   │  merge chunks, denoise,
+                                    │                    │  resolve speaker context
                                     └─────────┬──────────┘
-                                              │  (transcript mode stops here)
+                                              │  (transcription mode stops here)
                                     ┌─────────▼──────────┐
                                     │ Stage 2: Analysis  │  TranscriptAnalysisService
-                                    │  project, priority │
-                                    │  tags, tasks       │
+                                    │  local Llama 3.2   │  project, priority, tags,
+                                    │                    │  tasks, world model update
                                     └─────────┬──────────┘
                                               │
                                     ┌─────────▼──────────┐
                                     │ Stage 3: Task      │  TaskCreationService
-                                    │  Creation          │
+                                    │  Creation          │  mode: auto / ask / user
                                     └─────────┬──────────┘
-                                              │  (code mode stops here — saves transcript+task only)
+                                              │  (code mode stops here)
                                     ┌─────────▼──────────┐
                                     │ Stage 4: Execution │  TaskExecutionService
-                                    │  auto tasks via    │
-                                    │  Claude Code       │
+                                    │  Claude Code SDK   │  streamed output, auto tasks
                                     └────────────────────┘
 ```
 
 ### Pipeline Sources (PipelineSource enum)
-Each transcript entering the pipeline carries a source tag controlling which stages run:
+Each transcript carries a source tag that controls which stages run:
 - `.ambient` — full pipeline (clean → analyze → task → execute)
-- `.transcription` — clean only (merges/denoises speech; no task creation)
-- `.code` — save transcript + Claude Code task; skip LLM analysis stages
+- `.transcription` — clean only (merge/denoise; no task creation)
+- `.code` — save transcript + Claude Code task; skip LLM analysis
 - `.whatsapp` — full pipeline (same as ambient, with QA reply)
+
+### Local AI Model Usage
+
+| Stage | Model | Provider | Purpose |
+|-------|-------|----------|---------|
+| Transcription | Whisper | Groq (cloud) or Apple SFSpeech (local) | Speech → text |
+| Cleaning | Llama 3.2 3B | Ollama (local) | Merge, denoise, resolve context |
+| Analysis | Llama 3.2 3B | Ollama (local) | Extract tasks, update world model |
+| Task framing | Llama 3.2 3B | Ollama (local) | Clean task titles from README/CLAUDE.md |
+| Execution | Claude Code | Anthropic API | Run tasks in project folders |
+
+Groq is optional and used only for transcription speed. All analysis runs locally — Ollama must be installed and `llama3.2:3b` pulled.
 
 ### Key Files
 
 | File | Purpose |
 |------|---------|
 | `App.swift` | SwiftUI `@main` entry point (headless — no default window) |
-| `AppDelegate.swift` | NSApplicationDelegate; creates PillWindow, MainPanelWindow, wires subscriptions |
+| `AppDelegate.swift` | NSApplicationDelegate; creates all windows, wires subscriptions |
 | `AppState.swift` | Central `ObservableObject` — all shared state, service singletons |
 | `PipelineOrchestrator.swift` | Routes transcripts through the 4-stage pipeline |
 | `PipelineModels.swift` | Core value types: `CleanedTranscript`, `TranscriptAnalysis`, `PipelineTaskRecord` |
@@ -91,9 +111,63 @@ Each transcript entering the pipeline carries a source tag controlling which sta
 | `PillView.swift` | Floating widget SwiftUI view |
 | `PillWindow.swift` | NSPanel wrapper with drag, snap-to-edge, height animation |
 | `MainPanelView.swift` | Main dashboard shell |
-| `LogsPipelineView.swift` | Pipeline stage visualizer (the column view) |
+| `LogsPipelineView.swift` | Pipeline stage visualizer (column view) |
 | `SettingsConsolidatedView.swift` | All settings UI |
 | `WorkflowRegistry.swift` | Registered execution workflows (e.g. `autoclawd-claude-code`) |
+
+### PixelWorld — Mission Control HQ
+
+A live canvas visualization of the pipeline, rendered as a pixel-art room inside a WebKit `WKWebView`.
+
+**Files:**
+```
+Resources/PixelWorld/
+  index.html          WebKit container, loads bg + scripts
+  background.png      960×648 perspective room artwork
+  adapter.js          AutoClawd → PixelWorld bridge (pipeline event routing)
+  game.js             Canvas renderer — perspective, sprites, agents, desks
+  sprites/
+    StandingA-*.png   12 directional walk/stand sprites (640×1120 RGBA)
+```
+
+**Agent queue system:**
+```
+[ .1 ] [ .2 ] [ .3 ]   ← queue, left-to-right, near TV wall
+                                agent at front gets the next transcript
+                                queue always refills from the right
+         │
+    transcript arrives
+         │
+    ┌────▼────┐   ┌──────────┐   ┌──────────┐   ┌─────────────┐   ┌─────────┐
+    │  Comms  │──▶│ Analysis │──▶│ Projects │──▶│ Claude Code │──▶│ Archive │
+    └─────────┘   └──────────┘   └──────────┘   └─────────────┘   └─────────┘
+                                                                         │
+                                                             success: disappears
+                                                             failure: re-queues right
+```
+
+**Event → desk mapping (adapter.js → game.js):**
+
+| Pipeline event | Game action |
+|---|---|
+| `agentToolStart id=1` (transcript) | `assignNextAgent()` — dequeue front, walk to Comms |
+| `agentToolStart id=2` (cleaning) | advance `atComms → toAnalysis` |
+| `agentToolStart id=3` (analysis) | advance `atAnalysis → toProjects` |
+| `agentToolStart id=4` (task created) | advance `atProjects → toCode` |
+| `agentStatus id=4 status='waiting'` (task done) | advance `atCode → toArchive` |
+| Stall timeout (600 ticks ≈ 10s) | `returnToQueue()` — re-queue at right end |
+
+**Agent state machine:**
+```
+inQueue → toComms → atComms → toAnalysis → atAnalysis → toProjects
+       → atProjects → toCode → atCode → toArchive → atArchive → leaving → (removed)
+```
+
+**Rendering:**
+- `perspScale(y)` → 0.58–1.0 scale based on y position (perspective depth)
+- Draw list sorted back-to-front by y each frame
+- StandingA sprites: 640×1120 RGBA, directional (back/front/left/right × walk1/walk2 + stand)
+- Desk labels (Comms, Analysis, Projects, Claude Code, QA, Archive) rendered in cyan above monitors
 
 ### Pill Modes (PillMode enum)
 - `.ambientIntelligence` — always-on mic → full pipeline
@@ -116,6 +190,9 @@ API keys are resolved in priority order:
 2. macOS Keychain (legacy fallback)
 
 Set env vars in `~/.zshenv` or pass them to the app via launchd/`launchctl setenv`.
+
+Groq is optional — if absent, transcription falls back to Apple SFSpeechRecognizer (fully local).
+Anthropic key is required only for Claude Code execution (Stage 4).
 
 ## WhatsApp Integration
 
@@ -150,6 +227,7 @@ All settings live in `SettingsManager.shared`:
 - **No force-unwraps** in production paths. Use `guard let` or default values.
 - **Single source of truth**: `AppState` holds all published state. Don't duplicate state across views.
 - **Avoid huge files**: If a view exceeds ~300 lines, split into subviews.
+- **PixelWorld events**: Emit pipeline events from Swift via `WKWebView.evaluateJavaScript("receiveEvent('type', data)")` — do not bypass the adapter.js routing layer.
 
 ## Common Tasks
 
@@ -158,6 +236,7 @@ All settings live in `SettingsManager.shared`:
 2. Inject into `PipelineOrchestrator.init()`
 3. Call it in `processTranscript()` after the appropriate stage
 4. Update `PipelineSource` routing if the stage should be skipped for certain modes
+5. Add a corresponding desk in `adapter.js` and wire the event in `game.js`
 
 ### Add a new setting
 1. Add key constant + computed property in `SettingsManager.swift`
@@ -180,4 +259,20 @@ await appState.pipelineOrchestrator.processTranscript(
     speakerName: "Test",
     source: .ambient
 )
+```
+
+### Test PixelWorld pipeline animation (browser console)
+```javascript
+// Simulate a full pipeline run
+receiveEvent('transcript', {})          // agent dequeues, walks to Comms
+receiveEvent('cleaning', {})            // agent walks to Analysis
+receiveEvent('analysis', {})            // agent walks to Projects
+receiveEvent('task_created', { title: 'Send email', mode: 'auto' })  // walks to Claude Code
+receiveEvent('task_done', {})           // walks to Archive, disappears
+
+// Force-advance a stalled agent
+advancePipeline('atComms', 'toAnalysis', 1)
+
+// Manually spawn a queue agent
+spawnQueueAgent()
 ```

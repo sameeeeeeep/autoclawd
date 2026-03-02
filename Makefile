@@ -69,6 +69,7 @@ $(MACOS_DIR)/$(APP_NAME): $(SOURCES) Info.plist $(ICON_ICNS) $(MCP_BINARY)
 		cp -r Resources/PixelWorld/. "$(RESOURCES)/PixelWorld/"; \
 		echo "Bundled PixelWorld web app"; \
 	fi
+	@xattr -cr "$(APP_BUNDLE)" 2>/dev/null || true
 	@codesign --force --sign "$(CODESIGN_IDENTITY)" \
 		--entitlements AutoClawd.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
@@ -91,10 +92,13 @@ clean:
 
 run: all
 	@-pkill -x "$(APP_NAME)" 2>/dev/null; true
-	@cp -r "$(APP_BUNDLE)" ~/Applications/ 2>/dev/null; true
-	@osascript -e "tell application \"Finder\" to open POSIX file \"$$HOME/Applications/$(APP_NAME).app\"" 2>/dev/null || \
-	 open ~/Applications/$(APP_NAME).app 2>/dev/null || \
-	 echo "Build complete → open build/$(APP_NAME).app from Finder (first launch needs mic + speech permissions)"
+	@sleep 0.4
+	@# Try to install into ~/Applications; if bundle is locked (quarantine/codesign), fall back to build dir
+	@chmod -R u+w ~/Applications/$(APP_NAME).app 2>/dev/null; true
+	@rm -rf ~/Applications/$(APP_NAME).app 2>/dev/null; true
+	@cp -r "$(APP_BUNDLE)" ~/Applications/ 2>/dev/null && \
+	  open ~/Applications/$(APP_NAME).app 2>/dev/null || \
+	  open "$(APP_BUNDLE)"
 
 # ── DMG ──────────────────────────────────────────────────────────────────────
 # Produces build/AutoClawd-<VERSION>.dmg — standard drag-to-Applications UX.

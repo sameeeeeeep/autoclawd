@@ -47,8 +47,14 @@ enum PixelWorldEvent {
 // MARK: - PixelWorldCoordinator
 
 /// Bridges JS → Swift messages and holds a weak WKWebView reference for event dispatch.
+/// Events sent before the page is ready are buffered and replayed once the JS signals
+/// `webviewReady` (so nothing is lost during the ~1s page-load window).
 final class PixelWorldCoordinator: NSObject, WKScriptMessageHandler {
     weak var webView: WKWebView?
+
+    // Buffer JS calls that arrive before the page finishes loading.
+    private var pendingJS: [String] = []
+    private var isReady = false
 
     func userContentController(
         _ userContentController: WKUserContentController,
@@ -58,22 +64,49 @@ final class PixelWorldCoordinator: NSObject, WKScriptMessageHandler {
               let type = body["type"] as? String else { return }
 
         switch type {
-        case "ready":
-            Log.info(.ui, "PixelWorld: web app ready")
+        case "webviewReady":
+            Log.info(.ui, "PixelWorld: page ready — draining \(pendingJS.count) buffered events")
+            // Delay slightly so _initPixelWorld (80 ms setTimeout in adapter.js) finishes
+            // setting up agents before we replay queued pipeline events.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.isReady = true
+                self?.drainPending()
+            }
         default:
             Log.info(.ui, "PixelWorld: JS message '\(type)'")
         }
     }
 
-    /// Evaluate arbitrary JS on the web view (main thread only).
+    /// Evaluate arbitrary JS on the web view. Buffers the call if the page isn't ready yet.
     @MainActor
     func send(_ js: String) {
+        guard isReady else {
+            pendingJS.append(js)
+            return
+        }
         webView?.evaluateJavaScript(js, completionHandler: nil)
     }
 
     @MainActor
     func sendEvent(_ event: PixelWorldEvent) {
         send(event.jsCall)
+    }
+
+    /// Reset ready state when the WebView navigates to a new page (e.g. on reload).
+    @MainActor
+    func reset() {
+        isReady  = false
+        pendingJS = []
+    }
+
+    // MARK: Private
+
+    private func drainPending() {
+        let queued = pendingJS
+        pendingJS = []
+        for js in queued {
+            webView?.evaluateJavaScript(js, completionHandler: nil)
+        }
     }
 }
 
@@ -220,27 +253,27 @@ struct PixelWorldView: View {
     private var controlBar: some View {
         HStack(spacing: 6) {
             Button {
-                bridge.coordinator.send("focusOn(dot)")
+                bridge.coordinator.send("focusOn('dot')")
             } label: {
-                Label("HQ", systemImage: "dot.circle")
+                Label("Dot", systemImage: "dot.circle")
                     .font(.system(size: 10, weight: .medium))
             }
             .buttonStyle(.bordered)
             .controlSize(.mini)
 
             Button {
-                bridge.coordinator.send("focusOn(clawd)")
+                bridge.coordinator.send("focusOn('clawd')")
             } label: {
-                Label("Lab", systemImage: "terminal")
+                Label("Code", systemImage: "terminal")
                     .font(.system(size: 10, weight: .medium))
             }
             .buttonStyle(.bordered)
             .controlSize(.mini)
 
             Button {
-                bridge.coordinator.send("focusOn(archivist)")
+                bridge.coordinator.send("focusOn('wabot')")
             } label: {
-                Label("Archive", systemImage: "archivebox")
+                Label("Comms", systemImage: "message")
                     .font(.system(size: 10, weight: .medium))
             }
             .buttonStyle(.bordered)
