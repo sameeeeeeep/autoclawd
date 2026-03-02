@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 enum PillMode: String, CaseIterable {
     case ambientIntelligence = "ambientIntelligence"
@@ -30,6 +31,15 @@ enum PillMode: String, CaseIterable {
         case .transcription:       return "[TRS]"
         case .aiSearch:            return "[SRC]"
         case .code:                return "[COD]"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .ambientIntelligence: return .green
+        case .transcription:       return .accentColor
+        case .aiSearch:            return .accentColor
+        case .code:                return .blue
         }
     }
 

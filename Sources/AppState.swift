@@ -797,6 +797,28 @@ final class AppState: ObservableObject {
         refreshPipeline()
     }
 
+    /// Re-run the full pipeline (analysis → task creation → execution) on an
+    /// existing cleaned transcript. Useful for transcripts captured in
+    /// transcription-only mode, or that previously produced no actionable tasks.
+    func rerunPipeline(cleanedTranscript: CleanedTranscript) {
+        let text = cleanedTranscript.cleanedText
+        let tid  = cleanedTranscript.sourceTranscriptIDs.first ?? 0
+        let sid  = cleanedTranscript.sessionID ?? UUID().uuidString
+        let dur  = cleanedTranscript.durationSeconds
+        let spk  = cleanedTranscript.speakerName
+        Task { [pipelineOrchestrator] in
+            await pipelineOrchestrator.processTranscript(
+                text: text,
+                transcriptID: tid,
+                sessionID: sid,
+                sessionChunkSeq: 0,
+                durationSeconds: dur,
+                speakerName: spk,
+                source: .ambient
+            )
+        }
+    }
+
     /// Send a follow-up message to an active Claude session for a task (with optional attachments).
     func sendMessageToTask(id: String, message: String, attachments: [Attachment] = []) {
         taskExecutionService.sendMessage(taskID: id, message: message, attachments: attachments)

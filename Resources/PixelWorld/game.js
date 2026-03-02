@@ -61,10 +61,14 @@ var DESKS = [
   { x: 195, y: 479, label: 'Comms',       idx: 0 },
   { x: 480, y: 469, label: 'Analysis',    idx: 1 },
   { x: 765, y: 479, label: 'Projects',    idx: 2 },
-  { x: 220, y: 579, label: 'Claude Code', idx: 3 },
-  { x: 480, y: 589, label: 'QA',          idx: 4 },
+  { x: 220, y: 579, label: 'Approval',    idx: 3 },
+  { x: 480, y: 589, label: 'Claude Code', idx: 4 },
   { x: 740, y: 579, label: 'Archive',     idx: 5 },
 ];
+
+// How far in front of the desk's y-centre an agent stands (px).
+// Increase to push agents further toward the viewer from the desk.
+var DESK_STAND_OFFSET = 50;
 
 // ── Agent color palettes ──────────────────────────────────────────────────────
 var PAL = [
@@ -170,7 +174,7 @@ function getSprite(tmplName, palIdx) {
 // ── Walker sprite sheets (StandingA character) ────────────────────────────────
 // Each file: 640×1120 RGBA, transparent BG
 // Content center x ≈ 317 (= 0.495 of width), content bottom y ≈ 1090 (= 0.973 of height)
-var WALKER_BASE_H  = 90;        // rendered height at perspScale=1.0
+var WALKER_BASE_H  = 135;       // rendered height at perspScale=1.0
 var WALKER_CX_FRAC = 317 / 640; // content center-x fraction
 var WALKER_BY_FRAC = 1090 / 1120; // content bottom-y fraction
 
@@ -191,7 +195,8 @@ var walkerLoaded = 0;
   };
   Object.keys(files).forEach(function (k) {
     var img = new Image();
-    img.onload = function () { WALKER[k] = img; walkerLoaded++; };
+    img.onload  = function () { WALKER[k] = img; walkerLoaded++; };
+    img.onerror = function () { walkerLoaded++; }; // count failures so drawWalker unblocks
     img.src = './sprites/' + files[k];
   });
 })();
@@ -256,7 +261,7 @@ window.addEventListener('message', function(ev) {
       if (agents[m.id]) agents[m.id].status = m.status;
       // Agent 4 (Claude Code) goes idle/waiting → advance to Archive
       if (m.id == 4 && m.status === 'waiting') {
-        advancePipeline('atCode', 'toArchive', 5);
+        advancePipeline('atClaude', 'toArchive', 5);
       }
       break;
     case 'agentToolStart':
@@ -271,8 +276,8 @@ window.addEventListener('message', function(ev) {
       if (m.id == 2) advancePipeline('atComms', 'toAnalysis', 1);
       // id=3 analysis starts → advance from Analysis to Projects
       if (m.id == 3) advancePipeline('atAnalysis', 'toProjects', 2);
-      // id=4 task created/executing → advance from Projects to Claude Code
-      if (m.id == 4) advancePipeline('atProjects', 'toCode', 3);
+      // id=4 task created/executing → advance from Projects to Approval desk
+      if (m.id == 4) advancePipeline('atProjects', 'toApproval', 3);
       break;
     case 'agentToolsClear':
       if (agents[m.id]) {
@@ -310,14 +315,14 @@ function rrect(x,y,w,h,r) {
 // Full mission-control console: desk surface + monitor backs + control panel
 function drawDesk(d) {
   var sc   = perspScale(d.y);
-  var dw   = Math.round(92 * sc);    // wide console
+  var dw   = Math.round(138 * sc);   // wide console
   var dx   = Math.round(d.x - dw / 2);
 
   // Vertical positions
-  var surfY = Math.round(d.y - 22 * sc);   // desk top surface
-  var surfH = Math.max(2, Math.round(5 * sc));
-  var panH  = Math.max(5, Math.round(18 * sc));  // front panel face height
-  var legH  = Math.round(14 * sc);               // legs to floor
+  var surfY = Math.round(d.y - 33 * sc);   // desk top surface
+  var surfH = Math.max(2, Math.round(8 * sc));
+  var panH  = Math.max(5, Math.round(27 * sc));  // front panel face height
+  var legH  = Math.round(21 * sc);               // legs to floor
 
   // ── Desk top surface ──────────────────────────────────────────────────────
   f(dx, surfY, dw, surfH, '#1e2e42');
@@ -331,7 +336,7 @@ function drawDesk(d) {
     Math.max(1, Math.round(sc)), '#0a1220');
 
   // Embedded widescreen in panel
-  var sw = Math.round(36 * sc), sh = Math.max(3, Math.round(7 * sc));
+  var sw = Math.round(54 * sc), sh = Math.max(3, Math.round(11 * sc));
   var sx = Math.round(d.x - sw / 2);
   var sy = surfY + surfH + Math.round(panH * 0.08);
   f(sx, sy, sw, sh, '#0b1828');
@@ -343,20 +348,20 @@ function drawDesk(d) {
 
   // Status LEDs row
   var ledY = surfY + surfH + Math.round(panH * 0.76);
-  var lr   = Math.max(1, Math.round(2 * sc));
-  f(Math.round(d.x - 14*sc), ledY, lr, lr, '#1ecc44');
-  f(Math.round(d.x -  5*sc), ledY, lr, lr, '#2244ee');
-  f(Math.round(d.x +  4*sc), ledY, lr, lr, '#ee3318');
-  f(Math.round(d.x + 12*sc), ledY, lr, lr, '#eeaa00');
+  var lr   = Math.max(1, Math.round(3 * sc));
+  f(Math.round(d.x - 21*sc), ledY, lr, lr, '#1ecc44');
+  f(Math.round(d.x -  8*sc), ledY, lr, lr, '#2244ee');
+  f(Math.round(d.x +  6*sc), ledY, lr, lr, '#ee3318');
+  f(Math.round(d.x + 18*sc), ledY, lr, lr, '#eeaa00');
 
   // ── Desk legs (two, left and right) ───────────────────────────────────────
-  var legW = Math.max(2, Math.round(4 * sc));
+  var legW = Math.max(2, Math.round(6 * sc));
   var legY = surfY + surfH + panH;
   f(dx + Math.round(dw * 0.07), legY, legW, legH, '#0e1828');
   f(dx + dw - Math.round(dw * 0.07) - legW, legY, legW, legH, '#0e1828');
 
   // ── Monitor backs (sitting on desk top surface, we see the rear) ──────────
-  var mw  = Math.round(28 * sc), mh = Math.round(20 * sc);
+  var mw  = Math.round(42 * sc), mh = Math.round(30 * sc);
   // Left monitor
   var mlx = dx + Math.round(dw * 0.18);
   var mly = surfY - mh;
@@ -386,7 +391,7 @@ function drawDesk(d) {
     Math.round(mw*0.24), Math.round(3*sc), '#0e1620');
 
   // ── Keyboard on desk top ──────────────────────────────────────────────────
-  var kw = Math.round(30 * sc), kh = Math.max(1, Math.round(3 * sc));
+  var kw = Math.round(45 * sc), kh = Math.max(1, Math.round(5 * sc));
   f(Math.round(d.x - kw/2), surfY + surfH - kh - Math.max(1,Math.round(sc)),
     kw, kh, '#192636');
   f(Math.round(d.x - kw/2), surfY + surfH - kh - Math.max(1,Math.round(sc)),
@@ -396,7 +401,7 @@ function drawDesk(d) {
   if (d.label) {
     var labelY = mly - Math.round(4 * sc);
     ctx.save();
-    ctx.font         = 'bold ' + Math.round(Math.max(7, 8 * sc)) + 'px "Courier New",monospace';
+    ctx.font         = 'bold ' + Math.round(Math.max(8, 12 * sc)) + 'px "Courier New",monospace';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'bottom';
     // Subtle glow backing
@@ -806,6 +811,7 @@ function spawnQueueAgent() {
 
 // Take the front agent, assign it to a transcript, spawn a replacement
 function assignNextAgent() {
+  _dbgAssign++;
   if (agentQueue.length === 0) spawnQueueAgent();
   var a = agentQueue.shift();           // front (leftmost)
   agentQueue.forEach(function (qa, i) { // shift remaining left
@@ -813,7 +819,7 @@ function assignNextAgent() {
   });
   a.state = 'toComms';
   a.tx    = DESKS[0].x;
-  a.ty    = DESKS[0].y;
+  a.ty    = DESKS[0].y + DESK_STAND_OFFSET;
   pipelineAgents.push(a);
   spawnQueueAgent();                    // always keep queue populated
 }
@@ -821,19 +827,22 @@ function assignNextAgent() {
 // State ordering — used by advancePipeline to find agents that haven't arrived yet.
 var _STATE_ORDER = [
   'inQueue',
-  'toComms',    'atComms',
-  'toAnalysis', 'atAnalysis',
-  'toProjects', 'atProjects',
-  'toCode',     'atCode',
-  'toArchive',  'atArchive',
+  'toComms',      'atComms',
+  'toAnalysis',   'atAnalysis',
+  'toProjects',   'atProjects',
+  'toApproval',   'atApproval',   // Approval desk (was Claude Code)
+  'toClaude',     'atClaude',     // Claude Code desk (was QA)
+  'toArchive',    'atArchive',
   'leaving',
 ];
 
 // Advance whichever pipeline agent is AT or WALKING TOWARD fromState.
-// Matching both 'atComms' and 'toComms' means fast pipeline events (where
-// cleaning fires before the agent finishes walking to Comms) still advance
-// the agent correctly instead of being silently dropped.
+// If the agent is exactly at fromState it advances immediately.
+// If it is still en route (e.g. 'toComms' when fromState='atComms'), the
+// advance is stored as a pending intent (_nextState/_nextDesk) and applied
+// automatically the moment the agent arrives — so no event is ever dropped.
 function advancePipeline(fromState, toState, deskIdx) {
+  _dbgAdvance++;
   var fromIdx = _STATE_ORDER.indexOf(fromState);
   var best = null, bestIdx = -1;
 
@@ -848,11 +857,27 @@ function advancePipeline(fromState, toState, deskIdx) {
   }
 
   if (best) {
-    best.state      = toState;
-    best.stallTimer = 0;
-    best.status     = 'idle';
-    best.tx = DESKS[deskIdx].x;
-    best.ty = DESKS[deskIdx].y;
+    if (_STATE_ORDER.indexOf(best.state) === fromIdx) {
+      // Exactly at fromState — advance immediately
+      best.state      = toState;
+      best.stallTimer = 0;
+      best.status     = 'idle';
+      best.tx = DESKS[deskIdx].x;
+      best.ty = DESKS[deskIdx].y + DESK_STAND_OFFSET;
+    } else {
+      // Still walking toward fromState — queue for when it arrives
+      best._nextState = toState;
+      best._nextDesk  = deskIdx;
+    }
+  }
+}
+
+// Apply a queued pending advance immediately (called on desk arrival).
+function _applyPending(pa) {
+  if (pa._nextState) {
+    pa.state = pa._nextState; pa.stallTimer = 0; pa.status = 'idle';
+    pa.tx = DESKS[pa._nextDesk].x; pa.ty = DESKS[pa._nextDesk].y + DESK_STAND_OFFSET;
+    pa._nextState = null; pa._nextDesk = null;
   }
 }
 
@@ -865,11 +890,11 @@ function returnToQueue(pa) {
 }
 
 // ── Movement helpers ──────────────────────────────────────────────────────────
-var WALK_SPEED = 0.65; // base px/tick at perspScale=1.0
+var WALK_SPEED = 1.8; // base px/tick at perspScale=1.0
 
 function walkDir(vx, vy) {
   if (Math.abs(vy) > Math.abs(vx) * 0.5) {
-    return vy < 0 ? 'back' : 'front';
+    return 'front';  // always show front face — back sprites not used while walking
   }
   return vx < 0 ? 'left' : 'right';
 }
@@ -950,32 +975,48 @@ function updatePipelineAgents() {
     if (pa.state === 'toComms') {
       if (moveToward(pa, WALK_SPEED)) {
         pa.state = 'atComms'; pa.stallTimer = 0; pa.status = 'active';
+        _applyPending(pa);   // fire queued advance if pipeline event arrived early
       }
     } else if (pa.state === 'toAnalysis') {
       if (moveToward(pa, WALK_SPEED)) {
         pa.state = 'atAnalysis'; pa.stallTimer = 0; pa.status = 'active';
+        _applyPending(pa);
       }
     } else if (pa.state === 'toProjects') {
       if (moveToward(pa, WALK_SPEED)) {
         pa.state = 'atProjects'; pa.stallTimer = 0; pa.status = 'active';
+        _applyPending(pa);
       }
-    } else if (pa.state === 'toCode') {
+    } else if (pa.state === 'toApproval') {
       if (moveToward(pa, WALK_SPEED)) {
-        pa.state = 'atCode'; pa.stallTimer = 0; pa.status = 'active';
+        pa.state = 'atApproval'; pa.stallTimer = 0; pa.status = 'active';
+        _applyPending(pa);
+      }
+    } else if (pa.state === 'toClaude') {
+      if (moveToward(pa, WALK_SPEED)) {
+        pa.state = 'atClaude'; pa.stallTimer = 0; pa.status = 'active';
       }
     } else if (pa.state === 'toArchive') {
       if (moveToward(pa, WALK_SPEED)) {
         pa.state = 'atArchive'; pa.stallTimer = 0; pa.status = 'active';
       }
 
-    // ── Waiting states: increment stall timer; timeout → re-queue ────────────
+    // ── Waiting states: stand still; only move when advancePipeline() fires ──
     } else if (pa.state === 'atComms' || pa.state === 'atAnalysis' ||
-               pa.state === 'atProjects' || pa.state === 'atCode') {
+               pa.state === 'atProjects' || pa.state === 'atApproval' ||
+               pa.state === 'atClaude') {
       pa.vx = 0; pa.vy = 0;
-      pa.stallTimer++;
-      if (pa.stallTimer >= STALL_TIMEOUT) {
-        returnToQueue(pa); // re-queue at right end
+      // If a pending advance was queued (pipeline fired while still en route),
+      // dwell briefly at this desk then auto-apply it (~0.7 s at 60 fps).
+      if (pa._nextState) {
+        pa.stallTimer++;
+        if (pa.stallTimer >= 40) {
+          pa.state = pa._nextState; pa.stallTimer = 0; pa.status = 'idle';
+          pa.tx = DESKS[pa._nextDesk].x; pa.ty = DESKS[pa._nextDesk].y + DESK_STAND_OFFSET;
+          pa._nextState = null; pa._nextDesk = null;
+        }
       }
+      // No stall timeout — agents wait indefinitely for real pipeline events
 
     // ── Archive: brief celebration dwell → then leave ─────────────────────────
     } else if (pa.state === 'atArchive') {
@@ -1000,7 +1041,6 @@ function updatePipelineAgents() {
 
 // ── Draw a walking character using StandingA sprites ─────────────────────────
 function drawWalker(a) {
-  if (walkerLoaded === 0) return;
   var sc    = perspScale(a.y);
   var dir   = a.dir || 'front';
   var moving = Math.abs(a.vx) > 0.05 || Math.abs(a.vy) > 0.05;
@@ -1008,6 +1048,7 @@ function drawWalker(a) {
   var key   = moving ? (dir + wf)
             : (dir === 'back' ? 'backStand' : 'frontStand');
   var img   = WALKER[key] || WALKER['frontStand'];
+
   if (!img) return;
 
   var destH = Math.round(WALKER_BASE_H * sc);
@@ -1067,6 +1108,282 @@ function drawBubble(text, cx, ty, active, sc) {
   ctx.closePath(); ctx.fill();
 }
 
+// ── Diagnostic counters (shown as HUD) ────────────────────────────────────────
+var _dbgAssign   = 0;   // times assignNextAgent called
+var _dbgAdvance  = 0;   // times advancePipeline called
+var _dbgReady    = false; // did window.notifyReady() fire?
+window.notifyReady = function() { _dbgReady = true; };
+
+// ── Big Screen Slideshow ──────────────────────────────────────────────────────
+// Covers the three dark panels on the back wall (canvas coords in 960×648 space)
+var SCREEN = { x: 280, y: 48, w: 404, h: 244 }; // centre panel (exact coords)
+
+var _bsImgs    = [];
+var _bsLoaded  = 0;
+;(function () {
+  var files = [
+    './bigscreen/big1.png',
+    './bigscreen/big2.png',
+    './bigscreen/big3.png',
+  ];
+  files.forEach(function (f, i) {
+    var img = new Image();
+    img.onload  = function () { _bsImgs[i] = img; _bsLoaded++; };
+    img.onerror = function () { _bsLoaded++; }; // don't stall on missing file
+    img.src = f;
+  });
+})();
+
+var _bsCur   = 0;   // index of image currently on screen
+var _bsAlpha = 0;   // crossfade progress 0→1
+var _bsTick  = 0;   // ticks spent on this slide
+var BS_HOLD  = 240; // ticks to hold each image (~4s at 60fps)
+var BS_FADE  = 80;  // ticks to crossfade (~1.3s)
+
+function drawBigScreen() {
+  if (_bsLoaded === 0 || _bsImgs.length === 0) return;
+  var n = _bsImgs.length;
+
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  // Clip to screen area so nothing bleeds outside the panels
+  ctx.beginPath();
+  ctx.rect(SCREEN.x, SCREEN.y, SCREEN.w, SCREEN.h);
+  ctx.clip();
+
+  // Current image
+  var cur = _bsImgs[_bsCur % n];
+  if (cur && cur.complete) ctx.drawImage(cur, SCREEN.x, SCREEN.y, SCREEN.w, SCREEN.h);
+
+  // Fade in next image on top
+  if (_bsAlpha > 0) {
+    var nxt = _bsImgs[(_bsCur + 1) % n];
+    if (nxt && nxt.complete) {
+      ctx.globalAlpha = _bsAlpha;
+      ctx.drawImage(nxt, SCREEN.x, SCREEN.y, SCREEN.w, SCREEN.h);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Subtle scanline overlay so it feels like a screen, not a photo
+  ctx.fillStyle = 'rgba(0,0,0,0.08)';
+  for (var sy = SCREEN.y; sy < SCREEN.y + SCREEN.h; sy += 3) {
+    ctx.fillRect(SCREEN.x, sy, SCREEN.w, 1);
+  }
+
+  ctx.restore();
+
+  // Advance slide timer
+  _bsTick++;
+  if (_bsTick >= BS_HOLD) {
+    _bsAlpha = (_bsTick - BS_HOLD) / BS_FADE;
+    if (_bsAlpha >= 1) {
+      _bsCur   = (_bsCur + 1) % n;
+      _bsAlpha = 0;
+      _bsTick  = 0;
+    }
+  }
+}
+
+// ── Side Screen — Pipeline Status Panel ──────────────────────────────────────
+// Left panel of the back wall: top-left (104,48) → bottom-right (264,292)
+var SIDE_SCREEN = { x: 104, y: 48, w: 160, h: 244 };
+
+var PIPELINE_STAGES = [
+  { label: 'Queue',       states: ['inQueue'] },
+  { label: 'Comms',       states: ['toComms',    'atComms'] },
+  { label: 'Analysis',    states: ['toAnalysis', 'atAnalysis'] },
+  { label: 'Projects',    states: ['toProjects', 'atProjects'] },
+  { label: 'Approval',    states: ['toApproval', 'atApproval'] },
+  { label: 'Claude Code', states: ['toClaude',   'atClaude'] },
+  { label: 'Archive',     states: ['toArchive',  'atArchive', 'leaving'] },
+];
+
+var _ssPanelAgent = 0;  // index into agentQueue ++ pipelineAgents
+function _ssAll() { return agentQueue.concat(pipelineAgents); }
+
+function drawSideScreen() {
+  var ss  = SIDE_SCREEN;
+  var all = _ssAll();
+  ctx.save();
+
+  // Background
+  ctx.fillStyle = '#04080f';
+  ctx.fillRect(ss.x, ss.y, ss.w, ss.h);
+
+  // Scanlines
+  ctx.fillStyle = 'rgba(0,20,60,0.18)';
+  for (var sl = 0; sl < ss.h; sl += 3) {
+    ctx.fillRect(ss.x, ss.y + sl, ss.w, 1);
+  }
+
+  // Screen border
+  ctx.strokeStyle = '#0a2040';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(ss.x + 0.5, ss.y + 0.5, ss.w - 1, ss.h - 1);
+
+  // ── Header ───────────────────────────────────────────────────────────────────
+  ctx.fillStyle = 'rgba(100,180,255,0.10)';
+  ctx.fillRect(ss.x, ss.y, ss.w, 22);
+  ctx.font = 'bold 8px "Courier New",monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(100,190,255,0.85)';
+  ctx.fillText('PIPELINE STATUS', ss.x + ss.w / 2, ss.y + 11);
+  ctx.fillStyle = '#0a2040';
+  ctx.fillRect(ss.x, ss.y + 22, ss.w, 1);
+
+  // ── Agent selector ───────────────────────────────────────────────────────────
+  var selY = ss.y + 34;
+
+  if (all.length === 0) {
+    ctx.fillStyle = '#1a3a5a';
+    ctx.font = '8px "Courier New",monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('NO AGENTS', ss.x + ss.w / 2, selY);
+    ctx.restore();
+    return;
+  }
+
+  if (_ssPanelAgent >= all.length) _ssPanelAgent = 0;
+  var agent   = all[_ssPanelAgent];
+  var hasMany = all.length > 1;
+
+  // ◄ ► arrows
+  ctx.font = '11px "Courier New",monospace';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = hasMany ? 'rgba(68,170,255,0.90)' : 'rgba(40,70,110,0.35)';
+  ctx.textAlign = 'left';
+  ctx.fillText('\u25c4', ss.x + 7, selY);
+  ctx.textAlign = 'right';
+  ctx.fillText('\u25ba', ss.x + ss.w - 7, selY);
+
+  // Agent name
+  var agentName = agent.label || agent.name || ('Agent ' + (_ssPanelAgent + 1));
+  ctx.fillStyle = '#a0d0ff';
+  ctx.font = 'bold 8px "Courier New",monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(agentName, ss.x + ss.w / 2, selY);
+
+  // n / total
+  if (hasMany) {
+    ctx.fillStyle = 'rgba(60,100,160,0.8)';
+    ctx.font = '7px "Courier New",monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText((_ssPanelAgent + 1) + ' / ' + all.length, ss.x + ss.w / 2, selY + 11);
+  }
+
+  // ── Pipeline stages ───────────────────────────────────────────────────────────
+  var stagesTop = ss.y + (hasMany ? 53 : 47);
+  var stagesBot = ss.y + ss.h - 6;
+  var stageH    = Math.floor((stagesBot - stagesTop) / PIPELINE_STAGES.length);
+  var dotX      = ss.x + 18;
+
+  // Find active stage
+  var curStage = -1;
+  for (var si = 0; si < PIPELINE_STAGES.length; si++) {
+    if (PIPELINE_STAGES[si].states.indexOf(agent.state) >= 0) {
+      curStage = si; break;
+    }
+  }
+
+  for (var i = 0; i < PIPELINE_STAGES.length; i++) {
+    var stage    = PIPELINE_STAGES[i];
+    var isActive = (i === curStage);
+    var isPast   = (curStage > 0 && i < curStage);
+    var stageY   = stagesTop + i * stageH + Math.floor(stageH / 2);
+
+    // Connector line to next dot
+    if (i < PIPELINE_STAGES.length - 1) {
+      var nextDotY = stagesTop + (i + 1) * stageH + Math.floor(stageH / 2);
+      ctx.strokeStyle = isPast ? '#1a6040' : '#0a1828';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(dotX, stageY + 5);
+      ctx.lineTo(dotX, nextDotY - 5);
+      ctx.stroke();
+    }
+
+    // Pulsing glow halo on active dot
+    if (isActive) {
+      var pulse = 0.5 + 0.5 * Math.sin(tick * 0.08);
+      ctx.fillStyle = 'rgba(68,255,160,' + (0.12 + 0.10 * pulse) + ')';
+      ctx.beginPath();
+      ctx.arc(dotX, stageY, 9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Dot
+    ctx.fillStyle = isActive ? '#44ffaa' : isPast ? '#1a8050' : '#0c1a28';
+    ctx.beginPath();
+    ctx.arc(dotX, stageY, isActive ? 5 : 3, 0, Math.PI * 2);
+    ctx.fill();
+    if (isActive || isPast) {
+      ctx.strokeStyle = isActive ? '#44ffaa' : '#155535';
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+    }
+
+    // Stage label
+    ctx.font = isActive ? 'bold 8px "Courier New",monospace'
+                        : '8px "Courier New",monospace';
+    ctx.fillStyle    = isActive ? '#44ffaa' : isPast ? '#28805a' : '#1a3a5a';
+    ctx.textAlign    = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(stage.label, dotX + 13, stageY);
+
+    // Walking arrow → on right edge when en route to this stage
+    var atState = stage.states[stage.states.length - 1];
+    if (isActive && agent.state !== atState && agent.state !== 'inQueue') {
+      ctx.fillStyle = 'rgba(68,255,160,0.55)';
+      ctx.font = '8px "Courier New",monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText('\u2192', ss.x + ss.w - 7, stageY);
+    }
+  }
+
+  ctx.restore();
+}
+
+// mousedown handler for ◄ ► arrows on the side screen.
+// Left half of the selector row = prev agent, right half = next agent.
+canvas.addEventListener('mousedown', function (e) {
+  var rect = canvas.getBoundingClientRect();
+  var cx   = (e.clientX - rect.left) * (BG_W / rect.width);
+  var cy   = (e.clientY - rect.top)  * (BG_H / rect.height);
+  var ss   = SIDE_SCREEN;
+  var selY = ss.y + 34;
+  var n    = _ssAll().length;
+  if (n < 2) return;
+  // Entire side-screen width, generous ±16px vertical band around selY
+  if (cx < ss.x || cx > ss.x + ss.w) return;
+  if (cy < selY - 16 || cy > selY + 16) return;
+  var mid = ss.x + ss.w / 2;
+  if (cx < mid)
+    _ssPanelAgent = (_ssPanelAgent - 1 + n) % n;
+  else
+    _ssPanelAgent = (_ssPanelAgent + 1) % n;
+  e.preventDefault();
+});
+
+// Pointer cursor when hovering over the agent selector row
+canvas.addEventListener('mousemove', function (e) {
+  var rect = canvas.getBoundingClientRect();
+  var cx   = (e.clientX - rect.left) * (BG_W / rect.width);
+  var cy   = (e.clientY - rect.top)  * (BG_H / rect.height);
+  var ss   = SIDE_SCREEN;
+  var selY = ss.y + 34;
+  var inZone = cx >= ss.x && cx <= ss.x + ss.w &&
+               cy >= selY - 16 && cy <= selY + 16 &&
+               _ssAll().length > 1;
+  canvas.style.cursor = inZone ? 'pointer' : 'default';
+});
+
 // ── Main render loop ──────────────────────────────────────────────────────────
 var tick = 0;
 
@@ -1074,8 +1391,28 @@ function frame() {
   tick++;
   ctx.clearRect(0, 0, BG_W, BG_H);
 
+  // Back-wall screens — agents walk in front of them
+  drawBigScreen();
+  drawSideScreen();
+
   // Update pipeline agents
   updatePipelineAgents();
+
+  // ── HUD: debug status line ─────────────────────────────────────────────────
+  ctx.save();
+  ctx.font = '11px "Courier New",monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = _dbgReady ? 'rgba(50,255,100,0.85)' : 'rgba(255,100,50,0.85)';
+  ctx.fillText(
+    'ready:' + (_dbgReady ? 'Y' : 'N') +
+    ' q:' + agentQueue.length +
+    ' p:' + pipelineAgents.length +
+    ' assign:' + _dbgAssign +
+    ' advance:' + _dbgAdvance,
+    8, 8
+  );
+  ctx.restore();
 
   // Build draw list — desks always visible; all agents (queue + pipeline) sorted by y
   var drawList = [];
@@ -1107,11 +1444,31 @@ function frame() {
 
 requestAnimationFrame(frame);
 
+// Reset all pipeline agents back to the queue
+function resetPipeline() {
+  while (pipelineAgents.length > 0) {
+    returnToQueue(pipelineAgents[0]);
+  }
+}
+
 // Expose for console testing and Swift bridge
 window.spawnQueueAgent    = spawnQueueAgent;
 window.assignNextAgent    = assignNextAgent;
 window.advancePipeline    = advancePipeline;
 window.returnToQueue      = returnToQueue;
+window.resetPipeline      = resetPipeline;
+
+// Diagnostic dump — called by Swift after assignNextAgent to verify state
+window._dbgDump = function() {
+  return 'q:' + agentQueue.length +
+         ' p:' + pipelineAgents.length +
+         ' assign:' + _dbgAssign +
+         ' advance:' + _dbgAdvance +
+         ' sprites:' + walkerLoaded +
+         ' pStates:' + pipelineAgents.map(function(a){return a.state}).join(',') +
+         ' qPos:' + agentQueue.map(function(a){return Math.round(a.x)+','+Math.round(a.y)}).join('|') +
+         ' pPos:' + pipelineAgents.map(function(a){return Math.round(a.x)+','+Math.round(a.y)}).join('|');
+};
 
 // Pre-populate the queue with 3 waiting agents so the scene isn't empty
 setTimeout(function () {

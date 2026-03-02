@@ -34,7 +34,7 @@ enum WorldSubTab: String, CaseIterable, Identifiable {
 struct MainPanelView: View {
     @ObservedObject var appState: AppState
     @State private var selectedTab: PanelTab = .world
-    @State private var selectedWorldSubTab: WorldSubTab = .time
+    @State private var selectedWorldSubTab: WorldSubTab = .hq
 
     var body: some View {
         NavigationSplitView {

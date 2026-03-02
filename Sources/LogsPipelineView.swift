@@ -841,6 +841,28 @@ struct LogsPipelineView: View {
 
     private func transcriptColumn(group: PipelineGroup) -> some View {
         VStack(alignment: .leading, spacing: 3) {
+            // ↺ Rerun button — re-runs the full pipeline on this cleaned transcript
+            if let ct = appState.cleanedTranscripts.first(where: { $0.id == group.id }) {
+                Button {
+                    appState.rerunPipeline(cleanedTranscript: ct)
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 7))
+                        Text("Rerun")
+                            .font(.system(size: 8))
+                    }
+                    .foregroundColor(.purple)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.purple.opacity(0.14))
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
             ForEach(group.rawChunks) { chunk in
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {

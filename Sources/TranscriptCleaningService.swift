@@ -46,10 +46,9 @@ final class TranscriptCleaningService: @unchecked Sendable {
                 ))
             }
 
-            // If this is a continuation chunk (seq > 0), wait for more chunks
-            if sessionChunkSeq > 0 {
-                try? await Task.sleep(for: .seconds(mergeWindow))
-            }
+            // Always wait the merge window so consecutive force-flushed chunks (e.g. back-to-back
+            // 30s auto-chunks) can accumulate before we decide who merges them.
+            try? await Task.sleep(for: .seconds(mergeWindow))
 
             // Gather all pending chunks for this session
             let chunks = pendingLock.sync { pendingChunks[sid] ?? [] }

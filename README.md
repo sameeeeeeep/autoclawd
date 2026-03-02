@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="Resources/autoclawd-mascot.svg" width="100" alt="Clawd the lobster" />
+  <img src="Resources/autoclawd-logo.png" width="120" alt="AutoClawd" />
 
   # AutoClawd
 
@@ -19,16 +19,6 @@ AutoClawd runs in the background of your Mac and listens to your day. It underst
 You never open a chat window. You never type a prompt. You just work — and AutoClawd works in parallel.
 
 All audio processing and analysis runs on-device with local AI models. Nothing leaves your machine unless you choose it to.
-
----
-
-## Demo
-
-<div align="center">
-
-> 📹 **Demo video coming soon**
-
-</div>
 
 ---
 
@@ -73,12 +63,13 @@ AutoClawd includes a live pixel-world visualization of its own pipeline — a Mi
          │
     gets a transcript
          │
-    ┌────▼────┐    ┌──────────┐    ┌──────────┐    ┌─────────────┐    ┌─────────┐
-    │  Comms  │───▶│ Analysis │───▶│ Projects │───▶│ Claude Code │───▶│ Archive │
-    └─────────┘    └──────────┘    └──────────┘    └─────────────┘    └─────────┘
-                                                                             │
-                                                                      task complete
-                                                                      agent disappears
+    ┌────▼────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌─────────────┐    ┌─────────┐
+    │  Comms  │───▶│ Analysis │───▶│ Projects │───▶│ Approval │───▶│ Claude Code │───▶│ Archive │
+    └─────────┘    └──────────┘    └──────────┘    └──────────┘    └─────────────┘    └─────────┘
+                                                         │                                   │
+                                                    ask tasks                          task complete
+                                                    wait here                          agent disappears
+                                                    for approval
 ```
 
 Each agent waits at a desk until the real pipeline event fires — not a fixed timer. If a stage stalls (transcript with no actionable task, execution failure, timeout), the agent walks back and re-queues at the right end. The queue always fills itself in from the right.
@@ -187,7 +178,7 @@ AutoClawd.app (Swift/SwiftUI)
 └── PixelWorld (WebKit overlay)
       Mission Control HQ — live canvas visualization
       Agents queue at TV wall → walk desk-to-desk as pipeline fires
-      Desks: Comms · Analysis · Projects · Claude Code · QA · Archive
+      Desks: Comms · Analysis · Projects · Approval · Claude Code · Archive
 ```
 
 **Pipeline sources:**

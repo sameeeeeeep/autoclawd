@@ -42,11 +42,12 @@ window.acquireVsCodeApi = function() {
     postMessage: function(msg) {
       try {
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.worldBridge) {
-          window.webkit.messageHandlers.worldBridge.postMessage(JSON.stringify(msg))
+          window.webkit.messageHandlers.worldBridge.postMessage(msg)
         }
       } catch(e) {}
       if (msg && msg.type === 'webviewReady' && !_ready) {
         _ready = true
+        if (window.notifyReady) window.notifyReady()
         setTimeout(_initPixelWorld, 80)
       }
     },
@@ -216,3 +217,35 @@ window.focusOn = function(name) {
   var i = map[name && name.toLowerCase()]
   if (i) dispatch({ type:'agentSelected', id:i })
 }
+
+// ── 8. Location stub (called by Swift; no-op in current renderer) ─────────────
+window.setLocation = function(name) { /* future: update scene label */ }
+
+// ── 9. Auto-init ─────────────────────────────────────────────────────────────
+// The old VS Code extension webview had a React app that called
+// acquireVsCodeApi().postMessage({type:'webviewReady'}) to kick off init.
+// game.js is a pure canvas renderer and never calls that, so we auto-fire:
+//   • webviewReady → tells Swift to flush its buffered pipeline events
+//   • _initPixelWorld() → sets up agents[] for the tool-display side-channel
+// Delay 600 ms so game.js's 500 ms queue-spawn timer has already run first.
+;(function autoInit() {
+  function init() {
+    setTimeout(function () {
+      if (window.webkit &&
+          window.webkit.messageHandlers &&
+          window.webkit.messageHandlers.worldBridge) {
+        try {
+          window.webkit.messageHandlers.worldBridge.postMessage(
+            { type: 'webviewReady' }
+          )
+        } catch (e) {}
+      }
+      _initPixelWorld()
+    }, 600)
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init)
+  } else {
+    init()
+  }
+})()

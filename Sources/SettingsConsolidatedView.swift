@@ -259,9 +259,9 @@ struct SettingsConsolidatedView: View {
             }
 
             Section("Model Assignments") {
-                Picker("Transcription", selection: .constant("groq_whisper_v3")) {
-                    Text("Groq Whisper V3").tag("groq_whisper_v3")
-                    Text("Local Whisper").tag("local_whisper")
+                LabeledContent("Transcription") {
+                    Text(appState.transcriptionMode.displayName)
+                        .foregroundColor(.secondary)
                 }
 
                 LabeledContent("Cleaning") {
