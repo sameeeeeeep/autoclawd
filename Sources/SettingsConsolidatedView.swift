@@ -516,18 +516,58 @@ struct SettingsConsolidatedView: View {
     @ViewBuilder
     private func widgetSection() -> some View {
         Form {
-            Section {
-                Toggle("Show in menu bar", isOn: $appState.showAmbientWidget)
-                Toggle("Show waveform", isOn: $showWaveform)
-                Toggle("Recent transcripts", isOn: $showRecentTranscripts)
+            Section("Visibility") {
+                Toggle("Show widget", isOn: $appState.showAmbientWidget)
             }
 
-            Section {
-                Picker("Widget theme", selection: .constant("glassmorphic")) {
-                    Text("Glassmorphic").tag("glassmorphic")
-                    Text("Minimal").tag("minimal")
-                    Text("Solid").tag("solid")
+            Section("Glass Style") {
+                Picker("Base colour", selection: $appState.widgetBase) {
+                    ForEach(WidgetBase.allCases, id: \.self) { base in
+                        Text(base.label).tag(base)
+                    }
                 }
+                .pickerStyle(.segmented)
+
+                Picker("Material", selection: $appState.widgetStyle) {
+                    ForEach(WidgetStyle.allCases, id: \.self) { style in
+                        Text(style.label).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("Changes apply instantly to the floating widget.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section("Preview") {
+                HStack {
+                    Spacer()
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(appState.widgetBase == .dark
+                              ? Color.black.opacity(appState.widgetStyle == .solid ? 0.88 : 0.52)
+                              : Color.white.opacity(appState.widgetStyle == .solid ? 0.94 : 0.22))
+                        .frame(width: 160, height: 56)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(
+                                    LinearGradient(
+                                        colors: [.white.opacity(0.22), .white.opacity(0.05)],
+                                        startPoint: .top, endPoint: .bottom
+                                    ),
+                                    lineWidth: 1
+                                )
+                        )
+                        .overlay(
+                            Text("autoclawd")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(appState.widgetBase == .dark ? .white : Color(red: 0.08, green: 0.08, blue: 0.10))
+                        )
+                        .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+                    Spacer()
+                }
+                .padding(.vertical, 8)
+                .listRowBackground(Color.clear)
             }
         }
         .formStyle(.grouped)

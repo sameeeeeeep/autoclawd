@@ -23,7 +23,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.onShowSetup = { [weak self] in Task { @MainActor in self?.showSetupWindowSync() } }
 
         showPill()
-        pillWindow?.setWidgetHeight(Self.widgetHeight(for: appState.pillMode, codeStep: appState.codeWidgetStep))
 
         // Show first-run setup if dependencies are missing
         showSetupIfNeeded()
@@ -33,31 +32,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // recording attempt — preventing the first chunk from silently failing.
         requestPermissionsUpfront()
 
-        // Log toast subscription
-        AutoClawdLogger.toastPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] entry in self?.showToast(entry) }
-            .store(in: &cancellables)
-
-        // Resize pill window when mode changes — each mode has its own widget height
-        appState.$pillMode
-            .dropFirst()  // initial resize handled above
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] mode in
-                guard let self else { return }
-                let step = self.appState.codeWidgetStep
-                self.pillWindow?.setWidgetHeight(Self.widgetHeight(for: mode, codeStep: step))
-            }
-            .store(in: &cancellables)
-
-        // Resize when code widget step changes (project select vs copilot)
-        appState.$codeWidgetStep
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] step in
-                guard let self, self.appState.pillMode == .code else { return }
-                self.pillWindow?.setWidgetHeight(Self.widgetHeight(for: .code, codeStep: step))
-            }
-            .store(in: &cancellables)
+        // Toast window disabled — logs are now shown inline inside the widget.
+        // AutoClawdLogger.toastPublisher
+        //     .receive(on: DispatchQueue.main)
+        //     .sink { [weak self] entry in self?.showToast(entry) }
+        //     .store(in: &cancellables)
 
         // Show/hide pill + toast when setting changes
         appState.$showAmbientWidget
@@ -88,19 +67,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func defaultPillOrigin() -> NSPoint {
         guard let screen = NSScreen.main else { return .zero }
         return NSPoint(
-            x: screen.visibleFrame.maxX - 240,
-            y: screen.visibleFrame.maxY - 60
+            x: screen.visibleFrame.maxX - PillWindow.defaultWidth - 16,
+            y: screen.visibleFrame.maxY - WidgetCollapseLevel.full.height - 16
         )
     }
 
     private func showPill() {
         let pill = PillWindow()
         let content = PillContentView(
-            appState: appState,
-            onOpenPanel: { [weak self] in self?.showMainPanel() },
-            onTogglePause: { [weak self] in self?.appState.toggleListening() },
-            onOpenLogs: { [weak self] in self?.showMainPanel() },
-            onToggleMinimal: { [weak self] in self?.toggleMinimal() }
+            appState:            appState,
+            onOpenPanel:         { [weak self] in self?.showMainPanel() },
+            onTogglePause:       { [weak self] in self?.appState.toggleListening() },
+            onToggleLocalModel:  { [weak self] in self?.toggleLocalModel() },
+            onToggleCode:        { [weak self] in self?.toggleCodeMode() },
+            onToggleSpeakerMode: { [weak self] in self?.toggleSpeakerMode() },
+            onToggleMusicMode:   { [weak self] in self?.toggleMusicMode() },
+            onCollapseChange:    { [weak self] level in self?.pillWindow?.setCollapseLevel(level) }
         )
         pill.setContent(content)
         pill.menuProvider = { [weak self] in self?.makePillMenu() ?? NSMenu() }
@@ -109,18 +91,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.info(.ui, "Pill window shown")
     }
 
-    /// Widget panel height for each pill mode.
-    static func widgetHeight(for mode: PillMode, codeStep: CodeWidgetStep = .projectSelect) -> CGFloat {
-        switch mode {
-        case .ambientIntelligence: return 220  // map square
-        case .transcription:       return 140  // text + apply button
-        case .aiSearch:            return 150  // Q + A display
-        case .code:
-            switch codeStep {
-            case .projectSelect: return 120  // compact picker
-            case .copilot:       return 260  // session thread
-            }
-        }
+    /// Toggle Ollama analysis on/off independently of the current mode.
+    /// When off: transcripts are recorded + cleaned but Ollama skips analysis/tasks.
+    private func toggleLocalModel() {
+        appState.isOllamaEnabled.toggle()
+        Log.info(.ui, "Ollama analysis \(appState.isOllamaEnabled ? "enabled" : "disabled")")
+    }
+
+    /// Toggle Claude Code auto-execution on/off independently of the current mode.
+    /// When off: tasks are created by Ollama but never auto-executed.
+    private func toggleCodeMode() {
+        appState.isCodeExecutionEnabled.toggle()
+        Log.info(.ui, "Code execution \(appState.isCodeExecutionEnabled ? "enabled" : "disabled")")
+    }
+
+    /// Cycle single ↔ multiple speaker mode.
+    private func toggleSpeakerMode() {
+        appState.speakerMode = appState.speakerMode == .single ? .multiple : .single
+        Log.info(.ui, "Speaker mode → \(appState.speakerMode.rawValue)")
+    }
+
+    /// Toggle music detection (Shazam) on/off.
+    private func toggleMusicMode() {
+        appState.musicModeEnabled.toggle()
+        Log.info(.ui, "Music mode \(appState.musicModeEnabled ? "enabled" : "disabled")")
     }
 
     private func toggleMinimal() {
@@ -295,71 +289,322 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// MARK: - Pill Content (bridges AppState → PillView)
+// MARK: - Pill Content (bridges AppState → WidgetView)
 
 struct PillContentView: View {
     @ObservedObject var appState: AppState
-    let onOpenPanel: () -> Void
-    let onTogglePause: () -> Void
-    let onOpenLogs: () -> Void
-    let onToggleMinimal: () -> Void
+    let onOpenPanel:          () -> Void
+    let onTogglePause:        () -> Void
+    let onToggleLocalModel:   () -> Void
+    let onToggleCode:         () -> Void
+    let onToggleSpeakerMode:  () -> Void
+    let onToggleMusicMode:    () -> Void
+    let onCollapseChange:     (WidgetCollapseLevel) -> Void
 
-    // Periodic audio level update
-    @State private var displayLevel: Float = 0
+    @State private var collapseLevel:          WidgetCollapseLevel = .full
+    @State private var displayLevel:           Float = 0
+    @State private var logLines:               [(dot: Color, text: String, time: String)] = []
+    @State private var canvasSnapshots:        [CanvasSnapshot] = []
+    @State private var prevTranscript:         String = ""
+    @State private var prevQACount:            Int = 0
+    @State private var prevTaskCount:          Int = 0
+    /// True while the multi-speaker "who are you with?" prompt is active in the canvas.
+    @State private var showMultiSpeakerPrompt: Bool = false
+    /// True while the ambient session project-tagging prompt is shown in the canvas.
+    @State private var showAmbientTagging: Bool = false
+    /// Project selected via the ambient tagging prompt (nil = untagged).
+    @State private var ambientTaggedProject: Project? = nil
+
+    private static let logTimeFmt: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    private static let snapTimeFmt: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
 
     var body: some View {
-        VStack(spacing: 8) {
-            PillView(
-                state: appState.pillState,
-                audioLevel: displayLevel,
-                onOpenPanel: onOpenPanel,
-                onTogglePause: onTogglePause,
-                onOpenLogs: onOpenLogs,
-                onToggleMinimal: onToggleMinimal,
-                pillMode: appState.pillMode,
-                onCycleMode: { appState.cyclePillMode() },
-                appearanceMode: appState.appearanceMode,
-                onCollapse: onToggleMinimal
-            )
-
-            widgetForCurrentMode
-        }
-        .frame(width: 220) // consistent width across all modes
-        .animation(.easeInOut(duration: 0.22), value: appState.pillMode)
-        .onReceive(
-            Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
-        ) { _ in
+        WidgetView(
+            state:                  appState.pillState,
+            audioLevel:             displayLevel,
+            pillMode:               appState.pillMode,
+            collapseLevel:          $collapseLevel,
+            onOpenPanel:            onOpenPanel,
+            onTogglePause:          onTogglePause,
+            onCycleMode:            { appState.cyclePillMode() },
+            onSetMode: { mode in
+                appState.pillMode = mode
+                if mode != .code && !appState.isListening { appState.startListening() }
+            },
+            onToggleLocalModel:     onToggleLocalModel,
+            onToggleCode:           onToggleCode,
+            onToggleSpeakerMode:    onToggleSpeakerMode,
+            onToggleMusicMode:      onToggleMusicMode,
+            pipelineStages:         activePipelineStages,
+            isLocalModelEnabled:    isLocalModelEnabled,
+            isCodeEnabled:          isCodeEnabled,
+            isMultiSpeaker:         appState.speakerMode == .multiple,
+            isMusicMode:            appState.musicModeEnabled,
+            logLines:               logLines,
+            aiCanvasContent:        canvasForCurrentMode,
+            analysisIdleSubtitle:   analysisIdleSubtitle,
+            executionIdleSubtitle:  executionIdleSubtitle,
+            canvasSnapshots:        canvasSnapshots,
+            appearance:             WidgetAppearance(
+                                        base:  appState.widgetBase,
+                                        style: appState.widgetStyle
+                                    )
+        )
+        .onChange(of: collapseLevel) { level in onCollapseChange(level) }
+        .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
             displayLevel = appState.chunkManager.audioLevel
+        }
+        .onReceive(AutoClawdLogger.toastPublisher.receive(on: DispatchQueue.main)) { entry in
+            let time = Self.logTimeFmt.string(from: entry.timestamp)
+            let line = (dot: logDotColor(for: entry.component),
+                        text: entry.message,
+                        time: time)
+            logLines = Array(([line] + logLines).prefix(2))
+        }
+        // Canvas history: capture snapshot when transcript changes (ambient/transcription)
+        .onChange(of: appState.latestTranscriptChunk) { newChunk in
+            guard !prevTranscript.isEmpty, newChunk != prevTranscript else {
+                prevTranscript = newChunk
+                return
+            }
+            let label = "\(Self.snapTimeFmt.string(from: Date())) · \(appState.pillMode.shortLabel)"
+            let snapshot = CanvasSnapshot(
+                mode:    appState.pillMode,
+                label:   label,
+                content: AnyView(AmbientCanvasView(transcript: prevTranscript))
+            )
+            canvasSnapshots = Array(([snapshot] + canvasSnapshots).prefix(8))
+            prevTranscript = newChunk
+        }
+        // Canvas history: capture snapshot when a new QA answer arrives
+        .onChange(of: appState.qaStore.items.count) { count in
+            guard count > prevQACount, let item = appState.qaStore.items.first else {
+                prevQACount = count; return
+            }
+            let label = "\(Self.snapTimeFmt.string(from: Date())) · Q"
+            let snapshot = CanvasSnapshot(
+                mode:    .aiSearch,
+                label:   label,
+                content: AnyView(AISearchCanvasView(question: item.question, answer: item.answer))
+            )
+            canvasSnapshots = Array(([snapshot] + canvasSnapshots).prefix(8))
+            prevQACount = count
+        }
+        // Canvas history: capture snapshot when task list grows
+        .onChange(of: appState.pipelineTasks.count) { count in
+            guard count > prevTaskCount else { prevTaskCount = count; return }
+            let task = appState.pipelineTasks.last
+            let label = "\(Self.snapTimeFmt.string(from: Date())) · Task"
+            let snapshot = CanvasSnapshot(
+                mode:    appState.pillMode,
+                label:   label,
+                content: AnyView(TasksCanvasView(
+                    latestTaskTitle: task?.title ?? "",
+                    taskCount:       count,
+                    projectName:     appState.tasksSelectedProject?.name
+                        ?? appState.codeSelectedProject?.name
+                ))
+            )
+            canvasSnapshots = Array(([snapshot] + canvasSnapshots).prefix(8))
+            prevTaskCount = count
+        }
+        // Smart prompt: show multi-speaker "who are you with?" when switching to multi
+        .onChange(of: appState.speakerMode) { mode in
+            showMultiSpeakerPrompt = (mode == .multiple)
+        }
+        // Ambient tagging: show "what are you working on?" when listening starts in ambient mode
+        .onChange(of: appState.isListening) { listening in
+            if listening && appState.pillMode == .ambientIntelligence && !appState.projects.isEmpty {
+                ambientTaggedProject = nil
+                showAmbientTagging = true
+            } else if !listening {
+                showAmbientTagging = false
+            }
         }
     }
 
-    // MARK: - Mode-Specific Widget
+    // MARK: - Log dot colour
 
-    @ViewBuilder
-    private var widgetForCurrentMode: some View {
+    private func logDotColor(for component: LogComponent) -> Color {
+        switch component {
+        case .audio:                 return .green
+        case .transcribe:            return Color(red: 0.2,  green: 0.78, blue: 0.56)
+        case .cleaning:              return Color(red: 1.0,  green: 0.7,  blue: 0.1)
+        case .pipeline:              return Color(red: 1.0,  green: 0.5,  blue: 0.1)
+        case .analysis, .taskCreate: return Color(red: 0.49, green: 0.37, blue: 0.98)
+        case .taskExec:              return Color(red: 0.58, green: 0.2,  blue: 0.92)
+        case .qa:                    return Color(red: 0.2,  green: 0.6,  blue: 1.0)
+        default:                     return Color.white.opacity(0.45)
+        }
+    }
+
+    // MARK: - Toggle state helpers
+
+    /// Reflects the Ollama toggle — independent of mode.
+    private var isLocalModelEnabled: Bool { appState.isOllamaEnabled }
+
+    /// Reflects the code execution toggle — independent of mode.
+    private var isCodeEnabled: Bool { appState.isCodeExecutionEnabled }
+
+    // MARK: - Idle subtitle helpers
+
+    /// Text shown on the Analysis row when Ollama is ON but not actively processing.
+    private var analysisIdleSubtitle: String {
+        let tasks = appState.pipelineTasks.count
+        let analyses = appState.transcriptAnalyses.count
+        if tasks > 0 {
+            return "\(tasks) task\(tasks == 1 ? "" : "s") found"
+        } else if analyses > 0 {
+            return "\(analyses) transcript\(analyses == 1 ? "" : "s") processed"
+        }
+        return "Ready"
+    }
+
+    /// Text shown on the Execution row when code exec is ON but nothing is running.
+    private var executionIdleSubtitle: String {
+        let running = appState.pipelineTasks.filter { $0.status == .ongoing }.count
+        let queued  = appState.pipelineTasks.filter {
+            $0.status == .upcoming || $0.status == .pending_approval
+        }.count
+        if running > 0 && queued > 0 { return "\(running) running · \(queued) queued" }
+        if running > 0               { return "\(running) running" }
+        if queued > 0                { return "\(queued) task\(queued == 1 ? "" : "s") queued" }
+        let done = appState.pipelineTasks.filter { $0.status == .completed }.count
+        if done > 0                  { return "\(done) completed" }
+        return "Ready"
+    }
+
+    // MARK: - Live pipeline stage rows (matched by .kind)
+
+    private var activePipelineStages: [WidgetStageRow] {
+        var rows: [WidgetStageRow] = []
+
+        if case .processing = appState.pillState {
+            rows.append(WidgetStageRow(
+                kind:  .analysis,
+                icon:  "brain",
+                color: Color(red: 0.25, green: 0.55, blue: 1.0),
+                title: "Analysing",
+                sub1:  "Llama 3.2B · LOCAL",
+                sub2:  ""
+            ))
+        }
+
+        if appState.codeIsStreaming {
+            rows.append(WidgetStageRow(
+                kind:  .execution,
+                icon:  "chevron.left.forwardslash.chevron.right",
+                color: Color(red: 0.58, green: 0.2, blue: 0.92),
+                title: "Claude Code",
+                sub1:  appState.codeCurrentToolName ?? "Running…",
+                sub2:  appState.codeSelectedProject?.name ?? ""
+            ))
+        }
+
+        return rows
+    }
+
+    // MARK: - Dynamic canvas content  (mode state machine)
+    //
+    // The canvas is the primary interaction layer. Each mode has multiple states and
+    // the AI can push arbitrary content here. Smart prompts (e.g. multi-speaker)
+    // take priority and temporarily overlay the mode's normal content.
+
+    private var canvasForCurrentMode: AnyView? {
+
+        // ── Smart prompt: ambient session tagging "what are you working on?" ────
+        if showAmbientTagging && appState.pillMode == .ambientIntelligence {
+            return AnyView(AmbientTaggingCanvasView(
+                projects: appState.projects,
+                onSelect: { project in
+                    ambientTaggedProject = project
+                    showAmbientTagging = false
+                },
+                onSkip: { showAmbientTagging = false }
+            ))
+        }
+
+        // ── Smart prompt: multi-speaker "who are you with?" ──────────────────────
+        if showMultiSpeakerPrompt {
+            return AnyView(MultiSpeakerPromptCanvasView(
+                people:      appState.people,
+                onSelect: { person in
+                    appState.currentSpeakerID = person.id
+                    showMultiSpeakerPrompt = false
+                },
+                onAddPerson: onOpenPanel,
+                onSkip:      { showMultiSpeakerPrompt = false }
+            ))
+        }
+
+        // ── Mode-specific state machines ─────────────────────────────────────────
         switch appState.pillMode {
+
         case .ambientIntelligence:
-            AmbientMapView(appState: appState)
-                .transition(.opacity.combined(with: .offset(y: -6)))
+            return AnyView(AmbientCanvasView(transcript: appState.latestTranscriptChunk))
 
         case .transcription:
-            TranscriptionWidgetView(
-                latestText: appState.latestTranscriptChunk,
-                isListening: appState.isListening,
+            return AnyView(TranscriptCanvasView(
+                text:    appState.latestTranscriptChunk,
                 onApply: { appState.applyLatestTranscript() }
-            )
-            .transition(.opacity.combined(with: .offset(y: -6)))
+            ))
 
         case .aiSearch:
-            QAWidgetView(
-                latestItem: appState.qaStore.items.first,
-                isListening: appState.isListening
-            )
-            .transition(.opacity.combined(with: .offset(y: -6)))
+            let item = appState.qaStore.items.first
+            return AnyView(AISearchCanvasView(
+                question: item?.question ?? "",
+                answer:   item?.answer   ?? ""
+            ))
+
+        case .tasks:
+            // State 1: no project → picker
+            guard let proj = appState.tasksSelectedProject else {
+                return AnyView(ProjectPickerCanvasView(
+                    projects: appState.projects,
+                    title:    "Select project · Tasks",
+                    onSelect: { appState.tasksSelectedProject = $0 }
+                ))
+            }
+            // State 2: project selected → active tasks view
+            let task = appState.pipelineTasks.last
+            return AnyView(TasksCanvasView(
+                latestTaskTitle: task?.title ?? "",
+                taskCount:       appState.pipelineTasks.count,
+                projectName:     proj.name
+            ))
 
         case .code:
-            CodeWidgetView(appState: appState)
-                .transition(.opacity.combined(with: .offset(y: -6)))
+            switch appState.codeWidgetStep {
+            case .projectSelect:
+                // State 1: no project → picker
+                guard let proj = appState.codeSelectedProject else {
+                    return AnyView(ProjectPickerCanvasView(
+                        projects: appState.projects,
+                        title:    "Select project · Code",
+                        onSelect: { appState.codeSelectedProject = $0 }
+                    ))
+                }
+                // State 2: project chosen → confirm + auto/ask + start
+                return AnyView(CodeSetupCanvasView(
+                    project:             proj,
+                    skipPermissions:     appState.codeSkipPermissions,
+                    onTogglePermissions: { appState.codeSkipPermissions.toggle() },
+                    onStart:             { appState.startCodeSession() },
+                    onChangeProject:     { appState.codeSelectedProject = nil }
+                ))
+            case .copilot:
+                // State 3: session running → streaming status
+                return AnyView(CodeCanvasView(appState: appState))
+            }
         }
     }
 }

@@ -8,6 +8,12 @@
       "port": 0
     },
     {
+      "name": "pixel-world-preview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "7777", "--directory", "Resources/PixelWorld"],
+      "port": 7777
+    },
+    {
       "name": "ollama",
       "runtimeExecutable": "ollama",
       "runtimeArgs": ["serve"],

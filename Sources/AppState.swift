@@ -73,11 +73,46 @@ final class AppState: ObservableObject {
         didSet {
             UserDefaults.standard.set(pillMode.rawValue, forKey: "pillMode")
             chunkManager.pillMode = pillMode
+            // Force a new audio chunk on mode change so the new mode gets clean context.
+            chunkManager.forceNewChunk()
             if oldValue == .code && pillMode != .code {
                 resetCodeWidget()
             }
             Log.info(.system, "Pill mode → \(pillMode.rawValue)")
         }
+    }
+
+    // MARK: - Pipeline Control Toggles
+
+    /// When false, Ollama analysis/task-creation stages are skipped after cleaning.
+    @Published var isOllamaEnabled: Bool {
+        didSet { SettingsManager.shared.isOllamaEnabled = isOllamaEnabled }
+    }
+
+    /// When false, auto tasks are created but never sent to Claude Code for execution.
+    @Published var isCodeExecutionEnabled: Bool {
+        didSet { SettingsManager.shared.isCodeExecutionEnabled = isCodeExecutionEnabled }
+    }
+
+    // MARK: - Conversation Context
+
+    /// How many speakers are expected — informs cleaning/analysis prompts.
+    enum SpeakerMode: String { case single, multiple }
+
+    @Published var speakerMode: SpeakerMode {
+        didSet {
+            SettingsManager.shared.speakerMode = speakerMode.rawValue
+            // Clear active speaker when returning to single-speaker mode
+            if speakerMode == .single { currentSpeakerID = nil }
+        }
+    }
+
+    /// Project selected for Tasks mode (nil = show project picker in canvas).
+    @Published var tasksSelectedProject: Project? = nil
+
+    /// Whether background music is likely present (enables Shazam detection).
+    @Published var musicModeEnabled: Bool {
+        didSet { SettingsManager.shared.musicModeEnabled = musicModeEnabled }
     }
 
     @Published var showAmbientWidget: Bool {
@@ -94,6 +129,14 @@ final class AppState: ObservableObject {
 
     @Published var fontSizePreference: FontSizePreference {
         didSet { SettingsManager.shared.fontSizePreference = fontSizePreference }
+    }
+
+    @Published var widgetBase: WidgetBase {
+        didSet { SettingsManager.shared.widgetBase = widgetBase }
+    }
+
+    @Published var widgetStyle: WidgetStyle {
+        didSet { SettingsManager.shared.widgetStyle = widgetStyle }
     }
 
     // MARK: - People roster & speaker tagging
@@ -229,16 +272,22 @@ final class AppState: ObservableObject {
     init() {
         let settings = SettingsManager.shared
 
-        transcriptionMode   = settings.transcriptionMode
-        micEnabled          = settings.micEnabled
-        audioRetentionDays  = settings.audioRetentionDays
-        groqAPIKey          = settings.groqAPIKey
+        transcriptionMode      = settings.transcriptionMode
+        micEnabled             = settings.micEnabled
+        audioRetentionDays     = settings.audioRetentionDays
+        groqAPIKey             = settings.groqAPIKey
         synthesizeThreshold    = settings.synthesizeThreshold
         autonomousTaskRules    = settings.autonomousTaskRules
-        showAmbientWidget    = settings.showAmbientWidget
-        showToasts           = settings.showToasts
-        appearanceMode      = settings.appearanceMode
-        fontSizePreference  = settings.fontSizePreference
+        showAmbientWidget      = settings.showAmbientWidget
+        showToasts             = settings.showToasts
+        appearanceMode         = settings.appearanceMode
+        fontSizePreference     = settings.fontSizePreference
+        widgetBase             = settings.widgetBase
+        widgetStyle            = settings.widgetStyle
+        isOllamaEnabled        = settings.isOllamaEnabled
+        isCodeExecutionEnabled = settings.isCodeExecutionEnabled
+        speakerMode            = SpeakerMode(rawValue: settings.speakerMode) ?? .single
+        musicModeEnabled       = settings.musicModeEnabled
         self.people       = AppState.init_loadPeople()
         self.locationName = UserDefaults.standard.string(forKey: "autoclawd.locationName") ?? "My Room"
 
