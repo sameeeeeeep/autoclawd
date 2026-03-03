@@ -10,6 +10,8 @@ enum PipelineSource: String, Codable {
     case ambient
     /// Transcription mode (copy-paste / dictation) → clean only, no task creation
     case transcription
+    /// Tasks mode → clean → analyze → task creation only; NO auto-execution
+    case tasks
     /// Code co-pilot widget → save transcript + Claude Code task; skip LLM analysis
     case code
     /// WhatsApp self-chat → full pipeline + QA reply

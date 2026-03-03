@@ -47,7 +47,10 @@
       "Bash(curl -sL \"https://raw.githubusercontent.com/qwibitai/nanoclaw/main/src/container-runner.ts\")",
       "Bash(curl -sL \"https://raw.githubusercontent.com/qwibitai/nanoclaw/main/container/agent-runner/src/index.ts\")",
       "Bash(curl -sL \"https://raw.githubusercontent.com/qwibitai/nanoclaw/main/src/env.ts\")",
-      "Bash(curl -sL \"https://raw.githubusercontent.com/qwibitai/nanoclaw/main/container/Dockerfile\")"
+      "Bash(curl -sL \"https://raw.githubusercontent.com/qwibitai/nanoclaw/main/container/Dockerfile\")",
+      "Bash(for branch in claude/blissful-lewin claude/bold-faraday claude/busy-mayer claude/eager-banach claude/eloquent-hopper claude/friendly-chatelet claude/modest-shannon claude/pedantic-proskuriakova)",
+      "Bash(do echo \"=== $branch ===\" git log main..$branch --oneline)",
+      "Bash(do echo \"=== $branch ===\" git diff main...$branch --stat)"
     ]
   }
 }

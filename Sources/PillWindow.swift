@@ -15,12 +15,14 @@ final class PillWindow: NSPanel {
     /// Called when the user right-clicks the pill. Return an NSMenu to show.
     var menuProvider: (() -> NSMenu)?
 
-    static let pillWidth: CGFloat = 220
-    static let pillHeight: CGFloat = 44
+    /// Default widget width — icon mode uses 52 pt, everything else 240 pt.
+    static let defaultWidth: CGFloat = 240
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: Self.pillWidth, height: Self.pillHeight),
+            contentRect: NSRect(x: 0, y: 0,
+                                width: Self.defaultWidth,
+                                height: WidgetCollapseLevel.full.height),
             styleMask: [.borderless, .nonactivatingPanel, .utilityWindow],
             backing: .buffered,
             defer: false
@@ -31,7 +33,7 @@ final class PillWindow: NSPanel {
     private func configure() {
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false          // SwiftUI liquidGlass applies its own shadow
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         isMovableByWindowBackground = false
@@ -39,8 +41,8 @@ final class PillWindow: NSPanel {
 
         // Default position: top-right corner
         if let screen = NSScreen.main {
-            let x = screen.visibleFrame.maxX - Self.pillWidth - 20
-            let y = screen.visibleFrame.maxY - 60
+            let x = screen.visibleFrame.maxX - Self.defaultWidth - 20
+            let y = screen.visibleFrame.maxY - WidgetCollapseLevel.full.height - 20
             setFrameOrigin(NSPoint(x: x, y: y))
         }
     }
@@ -49,6 +51,10 @@ final class PillWindow: NSPanel {
         let hosting = NSHostingView(rootView: AnyView(view))
         hosting.frame = contentView?.bounds ?? .zero
         hosting.autoresizingMask = [.width, .height]
+        // Clear all default backgrounds so the SwiftUI layer is the only visual layer
+        hosting.wantsLayer = true
+        hosting.layer?.backgroundColor = CGColor.clear
+        hosting.layer?.isOpaque = false
         contentView = hosting
         hostingView = hosting
     }
@@ -121,19 +127,23 @@ final class PillWindow: NSPanel {
         NSMenu.popUpContextMenu(menu, with: event, for: view)
     }
 
-    // MARK: - Widget panel expansion
+    // MARK: - Collapse-level resize
 
-    /// Resize the window to accommodate a widget panel below the pill.
-    /// Pass 0 to collapse. Keeps the top edge pinned so the pill stays in place.
-    func setWidgetHeight(_ widgetHeight: CGFloat) {
-        let totalH = Self.pillHeight + (widgetHeight > 0 ? 8 + widgetHeight : 0)
-        guard abs(frame.height - totalH) > 1 else { return }
-        let delta = totalH - frame.height
+    /// Animate the window frame to match a WidgetCollapseLevel.
+    /// Top edge and right edge are pinned — the widget grows downward / inward.
+    func setCollapseLevel(_ level: WidgetCollapseLevel) {
+        let newW = level.width
+        let newH = level.height
+        guard abs(frame.width - newW) > 1 || abs(frame.height - newH) > 1 else { return }
+        let deltaH = newH - frame.height
+        let deltaW = newW - frame.width
         var r = frame
-        r.origin.y -= delta   // lower origin to keep top edge pinned
-        r.size.height = totalH
+        r.origin.y -= deltaH    // keep top edge pinned
+        r.origin.x -= deltaW    // keep right edge pinned
+        r.size.width  = newW
+        r.size.height = newH
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.25
+            ctx.duration = 0.36
             ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             ctx.allowsImplicitAnimation = true
             self.animator().setFrame(r, display: true)

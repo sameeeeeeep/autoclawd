@@ -55,6 +55,29 @@ enum FontSizePreference: String, CaseIterable {
     }
 }
 
+// MARK: - Widget Appearance
+
+/// Base colour tone for the floating widget shell and all tiles within it.
+enum WidgetBase: String, CaseIterable {
+    case dark  = "dark"
+    case light = "light"
+    var label: String { rawValue == "dark" ? "Dark" : "Light" }
+}
+
+/// How much the desktop bleeds through the widget glass.
+enum WidgetStyle: String, CaseIterable {
+    case solid       = "solid"
+    case frosted     = "frosted"
+    case transparent = "transparent"
+    var label: String {
+        switch self {
+        case .solid:       return "Solid"
+        case .frosted:     return "Frosted"
+        case .transparent: return "Transparent"
+        }
+    }
+}
+
 enum ColorSchemeSetting: String, CaseIterable {
     case system = "system"
     case light  = "light"
@@ -91,7 +114,9 @@ final class SettingsManager: @unchecked Sendable {
     private let kLogLevel          = "log_level"
     private let kGroqAPIKey        = "groq_api_key_storage"
     private let kShowAmbientWidget = "show_ambient_widget"
-    private let kAppearanceMode = "appearance_mode"
+    private let kAppearanceMode  = "appearance_mode"
+    private let kWidgetBase      = "widget_base"
+    private let kWidgetStyle     = "widget_style"
     private let kHotWordConfigs = "hotWordConfigs"
     private let kColorScheme    = "color_scheme_setting"
     private let kShowToasts     = "show_toasts"
@@ -101,6 +126,10 @@ final class SettingsManager: @unchecked Sendable {
     private let kWhatsAppMyJID = "whatsapp_my_jid"
     private let kFontSizePreference  = "font_size_preference"
     private let kAutonomousTaskRules = "autonomous_task_rules"
+    private let kIsOllamaEnabled      = "is_ollama_enabled"
+    private let kIsCodeExecEnabled    = "is_code_exec_enabled"
+    private let kSpeakerMode          = "speaker_mode"
+    private let kMusicModeEnabled     = "music_mode_enabled"
 
     // MARK: - Properties
 
@@ -179,6 +208,22 @@ final class SettingsManager: @unchecked Sendable {
         set { defaults.set(newValue.rawValue, forKey: kAppearanceMode) }
     }
 
+    var widgetBase: WidgetBase {
+        get {
+            let raw = defaults.string(forKey: kWidgetBase) ?? WidgetBase.dark.rawValue
+            return WidgetBase(rawValue: raw) ?? .dark
+        }
+        set { defaults.set(newValue.rawValue, forKey: kWidgetBase) }
+    }
+
+    var widgetStyle: WidgetStyle {
+        get {
+            let raw = defaults.string(forKey: kWidgetStyle) ?? WidgetStyle.frosted.rawValue
+            return WidgetStyle(rawValue: raw) ?? .frosted
+        }
+        set { defaults.set(newValue.rawValue, forKey: kWidgetStyle) }
+    }
+
 
     var hotWordConfigs: [HotWordConfig] {
         get {
@@ -241,6 +286,36 @@ final class SettingsManager: @unchecked Sendable {
     var autonomousTaskRules: [String] {
         get { defaults.stringArray(forKey: kAutonomousTaskRules) ?? [] }
         set { defaults.set(newValue, forKey: kAutonomousTaskRules) }
+    }
+
+    // MARK: - Pipeline Control
+
+    /// Whether the local Ollama model (Llama 3.2B) runs analysis, task creation.
+    /// When false, transcripts are still recorded and cleaned but Ollama stages are skipped.
+    var isOllamaEnabled: Bool {
+        get { defaults.object(forKey: kIsOllamaEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: kIsOllamaEnabled) }
+    }
+
+    /// Whether auto tasks are sent to Claude Code for execution.
+    /// When false, tasks are created by Ollama but never executed — even .auto ones.
+    var isCodeExecutionEnabled: Bool {
+        get { defaults.object(forKey: kIsCodeExecEnabled) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: kIsCodeExecEnabled) }
+    }
+
+    // MARK: - Conversation Context
+
+    /// "single" or "multiple" — how many speakers the pipeline should expect.
+    var speakerMode: String {
+        get { defaults.string(forKey: kSpeakerMode) ?? "single" }
+        set { defaults.set(newValue, forKey: kSpeakerMode) }
+    }
+
+    /// Whether music is playing in the background (enables Shazam integration).
+    var musicModeEnabled: Bool {
+        get { defaults.object(forKey: kMusicModeEnabled) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: kMusicModeEnabled) }
     }
 
     private init() {}

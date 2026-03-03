@@ -48,6 +48,7 @@ final class ChunkManager: ObservableObject {
     private var previousChunkTrail: String = ""
 
     private var chunkTimer: Task<Void, Never>?
+    private var forceFlushNext: Bool = false   // set by forceNewChunk()
     private var transcriptionService: (any Transcribable)?
     private var extractionService: ExtractionService?
     private var pipelineOrchestrator: PipelineOrchestrator?
@@ -92,6 +93,14 @@ final class ChunkManager: ObservableObject {
     // MARK: - Public API
 
     var audioLevel: Float { audioRecorder.audioLevel }
+
+    /// Force the current chunk to flush immediately and begin a new one.
+    /// Called when the user changes mode so the next chunk starts with clean context.
+    func forceNewChunk() {
+        guard case .listening = state else { return }
+        forceFlushNext = true
+        Log.info(.audio, "ChunkManager: force-flush requested (mode change)")
+    }
 
     func startListening() {
         guard case .stopped = state else { return }
@@ -265,11 +274,13 @@ final class ChunkManager: ObservableObject {
             let silenceDuration = silenceStart.map { Date().timeIntervalSince($0) } ?? 0
             let shouldFlushForSilence = elapsed >= minChunkSeconds && silenceDuration >= silenceGapSeconds
             let shouldForceFlush = elapsed >= maxChunkSeconds
+            let modeFlush = forceFlushNext
 
-            if shouldFlushForSilence || shouldForceFlush {
-                let reason = shouldForceFlush
-                    ? "force(\(Int(elapsed))s)"
-                    : "silence(\(String(format: "%.1f", elapsed))s)"
+            if shouldFlushForSilence || shouldForceFlush || modeFlush {
+                if modeFlush { forceFlushNext = false }
+                let reason = modeFlush        ? "mode-change(\(String(format: "%.1f", elapsed))s)"
+                           : shouldForceFlush ? "force(\(Int(elapsed))s)"
+                           :                   "silence(\(String(format: "%.1f", elapsed))s)"
                 Log.info(.audio, "Chunk \(index): flushing — \(reason)")
                 break
             }
@@ -491,6 +502,21 @@ final class ChunkManager: ObservableObject {
                 }
             } catch {
                 Log.error(.qa, "QA failed: \(error.localizedDescription)")
+            }
+
+        case .tasks:
+            // Tasks mode: full ambient pipeline but execution is suppressed at the orchestrator level.
+            if let pipelineOrchestrator, let tid = transcriptID {
+                Log.info(.pipeline, "Chunk \(index) [sess:\(label)]: entering pipeline [tasks]")
+                await pipelineOrchestrator.processTranscript(
+                    text: transcript,
+                    transcriptID: tid,
+                    sessionID: currentSID,
+                    sessionChunkSeq: sessionChunkSeq,
+                    durationSeconds: duration,
+                    speakerName: speakerName,
+                    source: .tasks
+                )
             }
 
         case .code:
