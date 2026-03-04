@@ -156,6 +156,7 @@ struct WidgetView: View {
     let onToggleCode:         () -> Void
     let onToggleSpeakerMode:  () -> Void
     let onToggleMusicMode:    () -> Void
+    let onToggleWhatsApp:     () -> Void
 
     /// Live pipeline stage rows — matched by .kind
     var pipelineStages:      [WidgetStageRow] = []
@@ -163,6 +164,7 @@ struct WidgetView: View {
     var isCodeEnabled:       Bool = false
     var isMultiSpeaker:      Bool = false
     var isMusicMode:         Bool = false
+    var isWhatsAppEnabled:   Bool = false
     /// Live log lines (max 2) from AutoClawdLogger
     var logLines: [(dot: Color, text: String, time: String)] = []
     /// Current AI canvas content
@@ -192,7 +194,27 @@ struct WidgetView: View {
 
     // MARK: - Icon
 
+    @ViewBuilder
     private var iconWidget: some View {
+#if NATIVE_GLASS_AVAILABLE
+        if #available(macOS 26, *) {
+            logoMark(size: 34, radius: 14)
+                .frame(width: 52, height: 52)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1))
+                .shadow(color: .black.opacity(0.5), radius: 20, y: 6)
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation { collapseLevel = collapseLevel.prev() } }
+        } else {
+            iconWidgetLegacy
+        }
+#else
+        iconWidgetLegacy
+#endif
+    }
+
+    private var iconWidgetLegacy: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.ultraThinMaterial)
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -258,11 +280,16 @@ struct WidgetView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            logoMark(size: 28, radius: 9)
-            Text("autoclawd")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(appearance.textPrimary)
-                .kerning(-0.4)
+            Button(action: onOpenPanel) {
+                HStack(spacing: 8) {
+                    logoMark(size: 28, radius: 9)
+                    Text("autoclawd")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(appearance.textPrimary)
+                        .kerning(-0.4)
+                }
+            }
+            .buttonStyle(.plain)
             Spacer()
             // Expand button (only if not already at expanded)
             if collapseLevel != .expanded {
@@ -663,11 +690,12 @@ struct WidgetView: View {
 
             Rectangle().fill(appearance.dockSeparator).frame(width: 1, height: 20)
 
-            // Open panel
-            dockCircle(
-                color:  Color(hex: "3B82F6"),
-                icon:   "chart.bar.fill",
-                action: onOpenPanel
+            // WhatsApp toggle
+            dockToggle(
+                icon:   "message.fill",
+                active: isWhatsAppEnabled,
+                color:  Color(red: 0.07, green: 0.73, blue: 0.40),
+                action: onToggleWhatsApp
             )
         }
         .frame(height: 50)
@@ -799,10 +827,74 @@ struct LiquidGlass: ViewModifier {
 }
 
 extension View {
+    @ViewBuilder
     func liquidGlass(cornerRadius: CGFloat, appearance: WidgetAppearance = .default) -> some View {
-        modifier(LiquidGlass(cornerRadius: cornerRadius, appearance: appearance))
+#if NATIVE_GLASS_AVAILABLE
+        if #available(macOS 26, *) {
+            self.nativeGlass(cornerRadius: cornerRadius, appearance: appearance)
+        } else {
+            self.modifier(LiquidGlass(cornerRadius: cornerRadius, appearance: appearance))
+        }
+#else
+        self.modifier(LiquidGlass(cornerRadius: cornerRadius, appearance: appearance))
+#endif
     }
 }
+
+#if NATIVE_GLASS_AVAILABLE
+// Native Liquid Glass — macOS 26+ only. Replaces the custom LiquidGlass modifier with
+// the system .glassEffect() API which correctly samples the compositor, handles
+// accessibility (reduced transparency, high contrast) and adapts to the OS appearance.
+@available(macOS 26, *)
+private extension View {
+    @ViewBuilder
+    func nativeGlass(cornerRadius: CGFloat, appearance: WidgetAppearance) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let shadowRadius: CGFloat = appearance.base == .dark ? 36 : 22
+        let shadowY:      CGFloat = appearance.base == .dark ? 18 : 10
+        let shadowOpacity: Double = appearance.base == .dark ? 0.50 : 0.20
+        if appearance.style == .solid {
+            // Solid mode: no blur, just the opaque fill with the same border + shadow.
+            self
+                .background(shape.fill(appearance.shellSolidFill))
+                .overlay {
+                    shape.stroke(
+                        LinearGradient(colors: [appearance.borderHigh, appearance.borderLow],
+                                       startPoint: .top, endPoint: .bottom),
+                        lineWidth: 1
+                    )
+                }
+                .clipShape(shape)
+                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, y: shadowY)
+                .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+        } else if appearance.style == .transparent {
+            // Transparent: no background at all — content floats, only border + shadow.
+            self
+                .overlay {
+                    shape.stroke(
+                        LinearGradient(colors: [appearance.borderHigh, appearance.borderLow],
+                                       startPoint: .top, endPoint: .bottom),
+                        lineWidth: 1
+                    )
+                }
+                .shadow(color: .black.opacity(shadowOpacity * 0.5), radius: shadowRadius * 0.5, y: shadowY * 0.5)
+        } else {
+            // Frosted: native compositor glass.
+            self
+                .glassEffect(Glass.regular, in: shape)
+                .overlay {
+                    shape.stroke(
+                        LinearGradient(colors: [appearance.borderHigh, appearance.borderLow],
+                                       startPoint: .top, endPoint: .bottom),
+                        lineWidth: 1
+                    )
+                }
+                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, y: shadowY)
+                .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+        }
+    }
+}
+#endif
 
 // MARK: - Intelligence Glow Effect
 

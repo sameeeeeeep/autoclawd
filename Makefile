@@ -22,6 +22,14 @@ SWIFT_FLAGS = \
 	-lsqlite3 \
 	-framework ShazamKit
 
+# Auto-enable native Liquid Glass APIs (glassEffect) when building with macOS 26+ SDK (Tahoe).
+# On older SDKs (< 26) the flag is absent and the legacy ultraThinMaterial path compiles instead.
+_SDK_MAJOR := $(shell xcrun --show-sdk-version 2>/dev/null | awk -F. '{printf "%d", $$1}')
+ifeq ($(shell test "$(_SDK_MAJOR)" -ge 26 2>/dev/null && echo yes),yes)
+SWIFT_FLAGS     += -DNATIVE_GLASS_AVAILABLE
+MCP_SWIFT_FLAGS += -DNATIVE_GLASS_AVAILABLE
+endif
+
 VERSION ?= 0.1.0
 DMG_NAME = $(APP_NAME)-$(VERSION).dmg
 DMG_STAGING = $(BUILD_DIR)/dmg-staging

@@ -23,7 +23,7 @@ final class NowPlayingService: ObservableObject {
             forName: NSNotification.Name("com.apple.Music.playerInfo"),
             object: nil, queue: .main
         ) { [weak self] note in
-            self?.handleAppleMusic(note)
+            MainActor.assumeIsolated { self?.handleAppleMusic(note) }
         }
 
         // Legacy iTunes name (still fires on some macOS versions)
@@ -31,7 +31,7 @@ final class NowPlayingService: ObservableObject {
             forName: NSNotification.Name("com.apple.iTunes.playerInfo"),
             object: nil, queue: .main
         ) { [weak self] note in
-            self?.handleAppleMusic(note)
+            MainActor.assumeIsolated { self?.handleAppleMusic(note) }
         }
 
         // Spotify
@@ -39,7 +39,7 @@ final class NowPlayingService: ObservableObject {
             forName: NSNotification.Name("com.spotify.client.PlaybackStateChanged"),
             object: nil, queue: .main
         ) { [weak self] note in
-            self?.handleSpotify(note)
+            MainActor.assumeIsolated { self?.handleSpotify(note) }
         }
 
         observers = [musicObs, itunesObs, spotifyObs]

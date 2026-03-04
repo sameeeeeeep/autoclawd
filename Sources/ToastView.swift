@@ -48,16 +48,25 @@ struct ToastView: View {
         }
     }
 
+    @ViewBuilder
     private var glassBackground: some View {
-        ZStack {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-            // Specular sheen: white → clear top-to-center
-            LinearGradient(
-                colors: [Color.white.opacity(0.10), Color.clear],
-                startPoint: .top,
-                endPoint: .center
-            )
+#if NATIVE_GLASS_AVAILABLE
+        if #available(macOS 26, *) {
+            Color.clear.glassEffect(.regular, in: Rectangle())
+        } else {
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                LinearGradient(colors: [Color.white.opacity(0.10), Color.clear],
+                               startPoint: .top, endPoint: .center)
+            }
         }
+#else
+        ZStack {
+            Rectangle().fill(.ultraThinMaterial)
+            // Specular sheen: white → clear top-to-center
+            LinearGradient(colors: [Color.white.opacity(0.10), Color.clear],
+                           startPoint: .top, endPoint: .center)
+        }
+#endif
     }
 }

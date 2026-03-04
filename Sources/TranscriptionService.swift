@@ -145,6 +145,12 @@ final class LocalTranscriptionService: @unchecked Sendable, Transcribable {
 
     var modelName: String { "local/SFSpeechRecognizer" }
 
+    private let taskLock = NSLock()
+    /// Tracks the active SFSpeechRecognitionTask so we can cancel it before
+    /// starting a new one — prevents concurrent on-device requests that stall
+    /// each other on Tahoe (manifests as "no speech detected" for older chunks).
+    private var activeRecognitionTask: SFSpeechRecognitionTask?
+
     /// Request speech recognition permission. Returns true if granted.
     static func requestAuthorization() async -> Bool {
         await withCheckedContinuation { cont in
@@ -155,6 +161,14 @@ final class LocalTranscriptionService: @unchecked Sendable, Transcribable {
     }
 
     func transcribe(fileURL: URL) async throws -> String {
+        // Cancel any in-flight task before starting a new one.
+        // On Tahoe the on-device ASR model stalls when two requests run at the
+        // same time — cancelling the old one keeps recognition strictly serial.
+        taskLock.withLock {
+            activeRecognitionTask?.cancel()
+            activeRecognitionTask = nil
+        }
+
         // Ensure permission
         let status = SFSpeechRecognizer.authorizationStatus()
         if status != .authorized {
@@ -169,11 +183,15 @@ final class LocalTranscriptionService: @unchecked Sendable, Transcribable {
 
         let request = SFSpeechURLRecognitionRequest(url: fileURL)
         request.shouldReportPartialResults = false
-        request.requiresOnDeviceRecognition = true   // no data leaves the device
+        // Require on-device only when the recognizer actually supports it.
+        // On Tahoe beta the on-device model may not be loaded yet, causing false
+        // "no speech detected" errors; falling back to server keeps data local
+        // whenever possible while gracefully handling that case.
+        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
 
         return try await withCheckedThrowingContinuation { cont in
             var resumed = false
-            recognizer.recognitionTask(with: request) { result, error in
+            let sfTask = recognizer.recognitionTask(with: request) { result, error in
                 guard !resumed else { return }
                 if let error {
                     resumed = true
@@ -187,6 +205,7 @@ final class LocalTranscriptionService: @unchecked Sendable, Transcribable {
                     cont.resume(returning: text)
                 }
             }
+            self.taskLock.withLock { self.activeRecognitionTask = sfTask }
         }
     }
 }

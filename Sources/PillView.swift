@@ -223,17 +223,36 @@ struct PillView: View {
 
     // MARK: - Background & Border (Clean macOS style)
 
+    @ViewBuilder
     private var pillBackground: some View {
-        ZStack {
+#if NATIVE_GLASS_AVAILABLE
+        if #available(macOS 26, *) {
             switch appearanceMode {
             case .frosted:
+                Color.clear
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            case .solid:
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(Color(NSColor.windowBackgroundColor))
+            }
+        } else {
+            switch appearanceMode {
+            case .frosted:
+                RoundedRectangle(cornerRadius: 22, style: .continuous).fill(.ultraThinMaterial)
             case .solid:
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .fill(Color(NSColor.windowBackgroundColor))
             }
         }
+#else
+        switch appearanceMode {
+        case .frosted:
+            RoundedRectangle(cornerRadius: 22, style: .continuous).fill(.ultraThinMaterial)
+        case .solid:
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color(NSColor.windowBackgroundColor))
+        }
+#endif
     }
 
     private var pillBorder: some View {

@@ -7,14 +7,28 @@ struct WidgetGlassBackground: View {
     var isActive: Bool = true
 
     var body: some View {
+#if NATIVE_GLASS_AVAILABLE
+        if #available(macOS 26, *) {
+            Color.clear
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        } else {
+            ZStack {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        }
+#else
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(.ultraThinMaterial)
-
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+#endif
     }
 }
 
