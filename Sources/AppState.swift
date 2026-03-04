@@ -78,6 +78,9 @@ final class AppState: ObservableObject {
             if oldValue == .code && pillMode != .code {
                 resetCodeWidget()
             }
+            // Transcript accumulates across all modes within a session.
+            // clearSessionTranscript() is called only on silence-based session end,
+            // not on mode changes — so text stays visible when the user switches modes.
             Log.info(.system, "Pill mode → \(pillMode.rawValue)")
         }
     }
@@ -180,6 +183,12 @@ final class AppState: ObservableObject {
 
     // Widget live data — latest transcript chunk for the floating widget
     @Published var latestTranscriptChunk: String = ""
+    /// Committed chunk text that is awaiting Ollama cleaning (shown at medium opacity).
+    /// Cleared when the cleaned version arrives via appendToLiveTranscript().
+    @Published var pendingRawSegment: String = ""
+    /// Accumulated CLEANED transcript text for the current transcription session.
+    /// Resets when the pill leaves transcription mode.
+    @Published var liveTranscriptText: String = ""
 
     // Code widget state
     @Published var codeWidgetStep: CodeWidgetStep = .projectSelect
@@ -519,10 +528,63 @@ final class AppState: ObservableObject {
         pillMode = pillMode.next()
     }
 
-    /// Re-paste the latest transcript chunk into the active text field.
+    /// Paste the full accumulated transcript (cleaned + any pending raw) into the active text field.
     func applyLatestTranscript() {
-        guard !latestTranscriptChunk.isEmpty else { return }
-        pasteService.paste(text: latestTranscriptChunk)
+        var parts: [String] = []
+        if !liveTranscriptText.isEmpty { parts.append(liveTranscriptText) }
+        if !pendingRawSegment.isEmpty  { parts.append(pendingRawSegment)  }
+        if parts.isEmpty && !latestTranscriptChunk.isEmpty { parts.append(latestTranscriptChunk) }
+        let text = parts.joined(separator: " ")
+        guard !text.isEmpty else { return }
+        pasteService.paste(text: text)
+    }
+
+    /// Append a cleaned chunk to the live transcript accumulator.
+    /// Called by the pipeline after every cleaning stage (all modes).
+    /// Clears pendingRawSegment — the cleaned text has now replaced it.
+    func appendToLiveTranscript(_ text: String) {
+        let separator = liveTranscriptText.isEmpty ? "" : " "
+        liveTranscriptText += separator + text
+        pendingRawSegment = ""   // cleaned version has arrived — drop the raw placeholder
+        // Do NOT touch latestTranscriptChunk — it may already be accumulating the next chunk
+    }
+
+    /// Clears the accumulated session transcript.
+    /// Called on session end (10 s+ silence detected by ChunkManager) or explicit Clear button.
+    /// NOT called on mode changes — transcript survives across mode switches within a session.
+    func clearSessionTranscript() {
+        liveTranscriptText = ""
+        pendingRawSegment = ""
+        latestTranscriptChunk = ""
+        Log.info(.ui, "Session transcript cleared (new session)")
+    }
+
+    /// Called at the chunk boundary: freezes the current streaming partial as a pending
+    /// raw segment (visible while Ollama cleans it), then resets the streaming partial
+    /// so the next chunk starts fresh.
+    func freezeCurrentChunkAsRaw() {
+        if !latestTranscriptChunk.isEmpty {
+            // Append to any existing pending segment — multiple commits can queue up
+            let sep = pendingRawSegment.isEmpty ? "" : " "
+            pendingRawSegment += sep + latestTranscriptChunk
+        }
+        latestTranscriptChunk = ""
+    }
+
+    /// Re-route a task to a different skill + workflow and execute it.
+    func rerouteTask(id: String, skillID: String) {
+        guard let task = pipelineTasks.first(where: { $0.id == id }) else { return }
+        let skill = skills.first(where: { $0.id == skillID })
+        let workflowID = skill?.workflowID ?? "autoclawd-claude-code"
+        pipelineStore.updateTaskSkillAndWorkflow(id: id, skillID: skillID, workflowID: workflowID)
+        refreshPipeline()
+        // Accept + execute with new routing
+        pipelineStore.updateTaskStatus(id: id, status: .ongoing, startedAt: Date())
+        refreshPipeline()
+        let updated = pipelineTasks.first(where: { $0.id == id }) ?? task
+        Task { [pipelineOrchestrator] in
+            await pipelineOrchestrator.executeAcceptedTask(updated)
+        }
     }
 
     // MARK: - Code Widget Actions
@@ -1082,6 +1144,13 @@ final class AppState: ObservableObject {
 
         pipelineOrchestrator.onPipelineUpdated = { [weak self] in
             self?.refreshPipeline()
+        }
+
+        pipelineOrchestrator.onTranscriptionCleaned = { [weak self] cleanedText in
+            guard let self else { return }
+            Task { @MainActor in
+                self.appendToLiveTranscript(cleanedText)
+            }
         }
 
         // Observe audio level changes

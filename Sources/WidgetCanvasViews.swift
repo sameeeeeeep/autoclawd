@@ -2,17 +2,27 @@ import SwiftUI
 
 // MARK: - Ambient Intelligence Canvas
 
-/// Shows live transcript text while the pipeline is running;
-/// falls back to a minimal "listening" idle state otherwise.
+/// Shows accumulated session transcript text across all modes.
+/// Three opacity layers: cleaned (bright) → pending-raw (medium) → live partial (faint).
+/// Falls back to a minimal "listening" idle state when nothing has been spoken yet.
 struct AmbientCanvasView: View {
-    let transcript: String
+    /// Accumulated cleaned chunks for this session — full opacity.
+    let cleanedText:  String
+    /// Latest committed chunk awaiting Ollama cleaning — medium opacity.
+    let pendingText:  String
+    /// Current streaming partial (word-by-word from SFSpeech) — faint.
+    let incomingText: String
+
+    private var hasContent: Bool {
+        !cleanedText.isEmpty || !pendingText.isEmpty || !incomingText.isEmpty
+    }
 
     var body: some View {
         Group {
-            if transcript.isEmpty {
-                idleState
-            } else {
+            if hasContent {
                 liveState
+            } else {
+                idleState
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -35,14 +45,37 @@ struct AmbientCanvasView: View {
     }
 
     private var liveState: some View {
-        ScrollView(showsIndicators: false) {
-            Text(transcript)
-                .font(.system(size: 10, weight: .regular))
-                .foregroundColor(.white.opacity(0.55))
-                .lineSpacing(3)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        ScrollViewReader { proxy in
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    // One continuous inline text run: cleaned → pending → streaming
+                    (
+                        Text(cleanedText)
+                            .foregroundColor(.white.opacity(0.82))
+                        +
+                        Text(pendingText.isEmpty ? "" : (cleanedText.isEmpty ? "" : " ") + pendingText)
+                            .foregroundColor(.white.opacity(0.52))
+                            .italic()
+                        +
+                        Text(incomingText.isEmpty ? "" : (cleanedText.isEmpty && pendingText.isEmpty ? "" : " ") + incomingText)
+                            .foregroundColor(.white.opacity(0.28))
+                            .italic()
+                    )
+                    .font(.system(size: 10, weight: .regular))
+                    .lineSpacing(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Color.clear.frame(height: 1).id("bottom")
+                }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
+            }
+            .onChange(of: incomingText) { _ in
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: cleanedText) { _ in
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
         }
     }
 }
@@ -138,46 +171,145 @@ struct AmbientTaggingCanvasView: View {
 
 // MARK: - Transcription Canvas
 
-/// Streams the latest clean transcript chunk with an inline "Apply" button.
+/// Live transcription canvas — shows accumulated cleaned text with raw incoming preview.
 struct TranscriptCanvasView: View {
-    let text:    String
+    /// Accumulated cleaned transcript chunks — full opacity.
+    let cleanedText: String
+    /// Committed chunk awaiting Ollama cleaning — medium opacity (never disappears between chunks).
+    let pendingText: String
+    /// Latest streaming partial (word-by-word from SFSpeech) — faint.
+    let incomingText: String
     let onApply: () -> Void
+    let onClear: () -> Void
+
+    @State private var scrollID = "bottom"
+
+    private var totalWordCount: Int {
+        let all = [cleanedText, pendingText, incomingText].joined(separator: " ")
+        return all.split(separator: " ").count
+    }
+
+    private var hasContent: Bool { !cleanedText.isEmpty || !pendingText.isEmpty || !incomingText.isEmpty }
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView(showsIndicators: false) {
-                Text(text.isEmpty ? "Transcription will appear here…" : text)
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundColor(text.isEmpty ? .white.opacity(0.18) : .white.opacity(0.65))
-                    .lineSpacing(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
-                    .padding(.bottom, text.isEmpty ? 10 : 4)
+            // ── Header row ──────────────────────────────────────────────────
+            HStack(spacing: 6) {
+                Image(systemName: "text.cursor")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.accentColor)
+                Text("LIVE TRANSCRIPT")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.45))
+                Spacer()
+                if totalWordCount > 0 {
+                    Text("\(totalWordCount) words")
+                        .font(.system(size: 8, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.28))
+                }
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
 
-            if !text.isEmpty {
-                Button(action: onApply) {
-                    Text("Apply to cursor")
-                        .font(.system(size: 10, weight: .semibold))
+            Divider().opacity(0.12)
+
+            // ── Scrolling transcript body ────────────────────────────────────
+            // All three layers rendered as one continuous flowing text block.
+            // cleaned (bright) → pending-raw (medium, italic) → streaming (faint, italic)
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if hasContent {
+                            // Build one inline run: cleaned + pending + streaming
+                            (
+                                Text(cleanedText)
+                                    .foregroundColor(.white.opacity(0.82))
+                                +
+                                Text(pendingText.isEmpty ? "" : (cleanedText.isEmpty ? "" : " ") + pendingText)
+                                    .foregroundColor(.white.opacity(0.52))
+                                    .italic()
+                                +
+                                Text(incomingText.isEmpty ? "" : (cleanedText.isEmpty && pendingText.isEmpty ? "" : " ") + incomingText)
+                                    .foregroundColor(.white.opacity(0.28))
+                                    .italic()
+                            )
+                            .font(.system(size: 10, weight: .regular))
+                            .lineSpacing(4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Text("Speak to transcribe…")
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.18))
+                                .italic()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        // Anchor for auto-scroll
+                        Color.clear.frame(height: 1).id("bottom")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
+                .frame(maxHeight: .infinity)
+                .onChange(of: incomingText) { _ in
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
+                .onChange(of: pendingText) { _ in
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
+                .onChange(of: cleanedText) { _ in
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
+            }
+            .frame(maxHeight: .infinity)
+
+            // ── Action row ──────────────────────────────────────────────────
+            if hasContent {
+                HStack(spacing: 6) {
+                    Button(action: onClear) {
+                        Text("Clear")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.white.opacity(0.45))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 28)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(Color.white.opacity(0.07))
+                            )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: onApply) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "text.insert")
+                                .font(.system(size: 9))
+                            Text("Paste")
+                        }
+                        .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 30)
+                        .frame(height: 28)
                         .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.white.opacity(0.12))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                                )
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.75))
                         )
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(.easeInOut(duration: 0.2), value: hasContent)
     }
 }
 

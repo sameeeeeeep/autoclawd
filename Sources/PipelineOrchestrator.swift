@@ -17,6 +17,9 @@ final class PipelineOrchestrator: @unchecked Sendable {
     private let taskExecutionService: TaskExecutionService
 
     var onPipelineUpdated: (() -> Void)?
+    /// Called after cleaning completes for transcription-mode chunks.
+    /// Receives the cleaned text so AppState can accumulate it for the live transcript display.
+    var onTranscriptionCleaned: ((String) -> Void)?
 
     /// Serial queue — never runs two Ollama calls in parallel.
     private var jobQueue: SerialJobQueue!
@@ -104,7 +107,13 @@ final class PipelineOrchestrator: @unchecked Sendable {
 
         await notifyUpdate()
 
-        // Transcription mode: clean only — no task analysis or creation.
+        // Always fire the cleaned callback so the transcript widget accumulates text for all modes.
+        // This enables session-long transcript retention regardless of pill mode.
+        if !cleaned.cleanedText.isEmpty {
+            onTranscriptionCleaned?(cleaned.cleanedText)
+        }
+
+        // Transcription mode: clean only — stop here.
         if source == .transcription {
             Log.info(.pipeline, "Pipeline[transcription]: stopping after cleaning stage")
             return

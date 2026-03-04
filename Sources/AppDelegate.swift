@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppFonts.registerAll()   // register custom fonts before any views render
         NSApp.setActivationPolicy(.accessory)
         appState.applicationDidFinishLaunching()
         appState.onShowSetup = { [weak self] in Task { @MainActor in self?.showSetupWindowSync() } }
@@ -387,7 +388,11 @@ struct PillContentView: View {
             let snapshot = CanvasSnapshot(
                 mode:    appState.pillMode,
                 label:   label,
-                content: AnyView(AmbientCanvasView(transcript: prevTranscript))
+                content: AnyView(AmbientCanvasView(
+                    cleanedText:  appState.liveTranscriptText,
+                    pendingText:  "",
+                    incomingText: prevTranscript
+                ))
             )
             canvasSnapshots = Array(([snapshot] + canvasSnapshots).prefix(8))
             prevTranscript = newChunk
@@ -557,12 +562,19 @@ struct PillContentView: View {
         switch appState.pillMode {
 
         case .ambientIntelligence:
-            return AnyView(AmbientCanvasView(transcript: appState.latestTranscriptChunk))
+            return AnyView(AmbientCanvasView(
+                cleanedText:  appState.liveTranscriptText,
+                pendingText:  appState.pendingRawSegment,
+                incomingText: appState.latestTranscriptChunk
+            ))
 
         case .transcription:
             return AnyView(TranscriptCanvasView(
-                text:    appState.latestTranscriptChunk,
-                onApply: { appState.applyLatestTranscript() }
+                cleanedText:  appState.liveTranscriptText,
+                pendingText:  appState.pendingRawSegment,
+                incomingText: appState.latestTranscriptChunk,
+                onApply: { appState.applyLatestTranscript() },
+                onClear: { appState.clearSessionTranscript() }
             ))
 
         case .aiSearch:
