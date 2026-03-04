@@ -35,22 +35,25 @@ This is the shift from *AI as a tool you pick up* to *AI as infrastructure that 
 ## How It Works
 
 ```
-Mic → Transcription → Cleaning → Analysis → Task Creation → Execution
-                         │                        │
-                    (local Whisper)         (local Llama 3.2)
+Mic → Live Streaming → Chunked Transcription → Cleaning → Analysis → Task Creation → Execution
+           │                    │                   │                        │
+    (word-by-word)        (Groq Whisper or      (local Llama 3.2)     (Claude Code)
+    (SFSpeech local)       Apple SFSpeech)
 ```
 
-**1. Listen** — Always-on mic captures audio in 30-second chunks. Processing starts immediately.
+**1. Listen** — Always-on mic captures audio continuously. Processing starts immediately, with live word-by-word streaming shown in the widget as you speak.
 
-**2. Transcribe** — Groq Whisper for low-latency cloud transcription, or Apple SFSpeechRecognizer for fully local operation. Your choice.
+**2. Transcribe** — Every 30 seconds, the committed audio chunk is transcribed. Groq Whisper for low-latency cloud transcription, or Apple SFSpeechRecognizer for fully local operation. Your choice.
 
-**3. Clean** — A local Llama 3.2 pass merges overlapping chunks, removes filler, and resolves speaker context into a clean transcript.
+**3. Clean** — A local Llama 3.2 pass merges overlapping chunks, removes filler, and resolves speaker context into a clean transcript. The cleaned text accumulates in the pill widget for the duration of your speaking session — switching modes doesn't reset it.
 
 **4. Analyze** — A second local LLM pass classifies content: facts, decisions, tasks, projects, people. Builds and updates your world model.
 
 **5. Create Tasks** — Actionable items become structured tasks with priority, project assignment, and execution mode (`auto` / `ask` / `user`).
 
 **6. Execute** — Auto tasks run immediately via Claude Code in the correct project folder. Ask tasks surface in the dashboard for your approval. Streamed output. No context switching.
+
+**Session awareness** — Text accumulates across all modes (ambient, transcription, etc.) throughout a single speaking session. After 10 seconds of silence, the session ends and the transcript resets, ready for a fresh start.
 
 ---
 
@@ -80,16 +83,41 @@ The visualization runs as a WebKit overlay inside the macOS app, powered by a ca
 
 ## Features
 
+### Ambient Intelligence
 - **Always-on mic** — captures audio continuously in the background; toggle with `⌃Z`
+- **Live streaming transcript** — word-by-word text appears in the pill as you speak, before the chunk is even committed
+- **Session-persistent transcript** — text accumulates across the full speaking session; 10s of silence starts a new session
 - **Local AI processing** — Llama 3.2 3B for cleaning and analysis; runs on M1+ without internet
 - **Multi-source pipeline** — ambient mic, WhatsApp self-chat, voice notes, or direct transcription mode
 - **World model** — persistent markdown knowledge base per project, updated from every conversation
+- **World model graph** — interactive node graph visualization of the world model, auto-laid out
+
+### Task Execution
 - **Auto-execution** — configurable rules for which tasks run autonomously via Claude Code
 - **Task approval queue** — tasks requiring confirmation surface in the dashboard with full context
-- **WhatsApp integration** — send yourself a voice note or message; it becomes a task
+- **Skills** — built-in and custom skills that trigger on specific voice patterns
+- **Hot-word detection** — say a configured hotword to create and execute a task by voice
+- **Structured todos** — persistent task queue with history and status tracking
+
+### Context Awareness
+- **People tagging** — identifies people mentioned in transcripts and links them across sessions
+- **Location awareness** — detects your current place and weaves it into context
+- **Now Playing** — ShazamKit detects what song is playing and captures it as an episode
+- **Screenshot context** — optional periodic screen capture for richer ambient understanding
+- **Clipboard monitoring** — clipboard changes captured as context
+- **Extractions** — structured facts, decisions, and entities pulled from every transcript
+
+### Integrations
+- **WhatsApp self-chat** — send yourself a voice note or message; it becomes a task
+- **MCP servers** — configure MCP servers for Claude Code to use during task execution
+- **Transcription-to-clipboard** — instantly paste a cleaned transcript into any app
+
+### UI
 - **Mission Control HQ** — live pixel-art visualization of the pipeline running in real time
-- **Hot-word detection** — say `hot <keyword> for project <N> <task>` to create and execute by voice
 - **Multi-mode pill** — ambient intelligence, transcription-only, AI search, or voice-driven Claude Code co-pilot
+- **Appearance modes** — frosted glass or solid, light/dark/system, custom fonts
+- **Session timeline** — history of past speaking sessions with extractions and tasks
+- **Q&A** — ask questions against your accumulated context
 
 ---
 
@@ -128,6 +156,10 @@ cd WhatsAppSidecar && npm install && npm start
 
 Set `GROQ_API_KEY` in `~/.zshenv` or via the Settings panel.
 
+**Optional — Claude Code execution:**
+
+Set `ANTHROPIC_API_KEY` in `~/.zshenv` or via the Settings panel.
+
 ---
 
 ## Shortcuts
@@ -140,7 +172,6 @@ Set `GROQ_API_KEY` in `~/.zshenv` or via the Settings panel.
 | `⌃3` | AI Search mode |
 | `⌃4` | Claude Code co-pilot mode |
 | Right-click pill | Full context menu |
-| `hot <kw> for project <N> <task>` | Create todo via voice |
 
 ---
 
@@ -150,30 +181,52 @@ Set `GROQ_API_KEY` in `~/.zshenv` or via the Settings panel.
 AutoClawd.app (Swift/SwiftUI)
 │
 ├── PillWindow          floating NSPanel (always on top, snap-to-edge)
-├── MainPanelWindow     dashboard — pipeline log, tasks, settings
+├── MainPanelWindow     dashboard — pipeline log, tasks, world model, settings
 ├── ToastWindow         non-intrusive execution feedback
 │
-├── AudioRecorder       30-second chunks from always-on mic
+├── AudioRecorder       always-on AVAudioEngine (stays hot between chunks)
+│        │
+│        ├── StreamingLocalTranscriber   live word-by-word SFSpeech partials
+│        │
+│        ▼
+├── ChunkManager        30s chunk cycle, session lifecycle (10s silence = new session)
 │        │
 │        ▼
 ├── PipelineOrchestrator
 │        │
 │        ├── Stage 1: TranscriptCleaningService   (local Llama 3.2)
 │        │     merge overlapping chunks, denoise, resolve speakers
+│        │     → fires onTranscriptionCleaned for ALL pipeline sources
 │        │
 │        ├── Stage 2: TranscriptAnalysisService   (local Llama 3.2)
 │        │     project detection, priority, tags, task extraction
+│        │     → updates world model, extracts people/facts/decisions
 │        │
 │        ├── Stage 3: TaskCreationService
 │        │     structured tasks with mode: auto / ask / user
+│        │     → TodoFramingService cleans titles against README/CLAUDE.md
 │        │
 │        └── Stage 4: TaskExecutionService        (Claude Code)
 │              autonomous execution, streamed output
 │
+├── Context capture (parallel to pipeline)
+│     ├── ScreenshotService       periodic screen capture
+│     ├── ClipboardMonitor        clipboard change events
+│     ├── LocationService         Core Location place detection
+│     ├── ShazamKitService        now-playing song detection
+│     └── PeopleTaggingService    person extraction from transcripts
+│
 ├── WhatsAppPoller      polls local sidecar every 2s, self-chat only
+├── QAService           AI search against accumulated context
+├── SkillStore          built-in + custom skills
+├── WorldModelService   per-project markdown knowledge base
+├── WorldModelGraph*    graph parser, layout, and visualization
 ├── TranscriptStore     SQLite persistence
 ├── PipelineStore       pipeline record persistence
+├── StructuredTodoStore task queue with status history
+├── SessionStore        speaking session timeline
 ├── SettingsManager     UserDefaults + Keychain API keys
+├── MCPConfigManager    MCP server configuration
 │
 └── PixelWorld (WebKit overlay)
       Mission Control HQ — live canvas visualization
@@ -210,6 +263,11 @@ All data lives in `~/.autoclawd/` — SQLite databases and markdown files, fully
   transcripts.db        raw and cleaned transcripts
   pipeline.db           pipeline stage records
   structured_todos.db   task queue with status history
+  qa.db                 Q&A session history
+  extractions.db        structured facts and decisions
+  sessions.db           speaking session timeline
+  context.db            clipboard and screenshot context
+  skills.db             built-in and custom skills
 ```
 
 ---
@@ -217,17 +275,28 @@ All data lives in `~/.autoclawd/` — SQLite databases and markdown files, fully
 ## Roadmap
 
 - [ ] Phone call transcription via Bluetooth mic
-- [ ] Screen context — periodic screenshot for richer extraction
-- [ ] MCP server — expose AutoClawd memory to any MCP-compatible tool
+- [ ] Scheduled tasks — assign times, show on system calendar
 - [ ] Multi-language transcription
 - [ ] Execution history and re-run support
-- [ ] Scheduled tasks — assign times, show on system calendar
-- [ ] Location and people tagging in world model
+- [ ] Shared world model across devices
 - [x] Auto-project matching
 - [x] WhatsApp self-chat integration
 - [x] Mission Control HQ pipeline visualization
 - [x] Multi-mode pill (ambient / transcription / search / code)
 - [x] Configurable autonomous task rules
+- [x] Live streaming word-by-word transcript
+- [x] Session-persistent transcript (accumulates across modes, resets on silence)
+- [x] Skills system (built-in + custom)
+- [x] People tagging in world model
+- [x] Location and place awareness
+- [x] ShazamKit now-playing detection
+- [x] Screenshot and clipboard context capture
+- [x] World model graph visualization
+- [x] MCP server configuration
+- [x] Session timeline
+- [x] Structured todos with history
+- [x] Q&A against transcript context
+- [x] Appearance system (frosted/solid, light/dark, custom fonts)
 
 ---
 

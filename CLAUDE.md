@@ -4,11 +4,12 @@ AutoClawd is a macOS ambient AI agent. It runs as a floating pill widget with an
 
 ## Core Concept
 
-- **Always-on mic** → captures 30-second audio chunks continuously
+- **Always-on mic** → captures 30-second audio chunks continuously with live word-by-word streaming
 - **Always-on intelligence** → local Llama 3.2 cleans and analyzes every transcript
 - **Zero-prompt execution** → tasks are created and auto-run based on what was said, not what was asked
 - **World model** → persistent per-project knowledge base built from every conversation
 - **Mission Control HQ** → live pixel-art visualization of the pipeline (agents queue, walk desk-to-desk, reflect real events)
+- **Session-aware transcript** → text accumulates across all modes for the duration of a speaking session; 10s of silence = new session
 
 ## Build & Run
 
@@ -48,28 +49,29 @@ WhatsApp Sidecar (Node.js/Express on localhost:7891)
 ### Pipeline Flow
 ```
 [Mic] → AudioRecorder → ChunkManager → PipelineOrchestrator
-                                              │
-                                    ┌─────────▼─────────┐
-                                    │ Stage 1: Cleaning  │  TranscriptCleaningService
-                                    │  local Llama 3.2   │  merge chunks, denoise,
-                                    │                    │  resolve speaker context
-                                    └─────────┬──────────┘
-                                              │  (transcription mode stops here)
-                                    ┌─────────▼──────────┐
-                                    │ Stage 2: Analysis  │  TranscriptAnalysisService
-                                    │  local Llama 3.2   │  project, priority, tags,
-                                    │                    │  tasks, world model update
-                                    └─────────┬──────────┘
-                                              │
-                                    ┌─────────▼──────────┐
-                                    │ Stage 3: Task      │  TaskCreationService
-                                    │  Creation          │  mode: auto / ask / user
-                                    └─────────┬──────────┘
-                                              │  (code mode stops here)
-                                    ┌─────────▼──────────┐
-                                    │ Stage 4: Execution │  TaskExecutionService
-                                    │  Claude Code SDK   │  streamed output, auto tasks
-                                    └────────────────────┘
+                               │                   │
+                    StreamingLocalTranscriber  ┌────▼──────────────┐
+                    (live partials via         │ Stage 1: Cleaning  │  TranscriptCleaningService
+                     SFSpeechRecognizer)       │  local Llama 3.2   │  merge chunks, denoise,
+                                               │                    │  resolve speaker context
+                                               └────────┬───────────┘
+                                                        │  fires onTranscriptionCleaned for ALL sources
+                                                        │  (transcription mode stops here)
+                                               ┌────────▼───────────┐
+                                               │ Stage 2: Analysis  │  TranscriptAnalysisService
+                                               │  local Llama 3.2   │  project, priority, tags,
+                                               │                    │  tasks, world model update
+                                               └────────┬───────────┘
+                                                        │
+                                               ┌────────▼───────────┐
+                                               │ Stage 3: Task      │  TaskCreationService
+                                               │  Creation          │  mode: auto / ask / user
+                                               └────────┬───────────┘
+                                                        │  (code mode stops here)
+                                               ┌────────▼───────────┐
+                                               │ Stage 4: Execution │  TaskExecutionService
+                                               │  Claude Code SDK   │  streamed output, auto tasks
+                                               └────────────────────┘
 ```
 
 ### Pipeline Sources (PipelineSource enum)
@@ -79,11 +81,28 @@ Each transcript carries a source tag that controls which stages run:
 - `.code` — save transcript + Claude Code task; skip LLM analysis
 - `.whatsapp` — full pipeline (same as ambient, with QA reply)
 
+### Transcript Session State (AppState)
+
+Three layers of live transcript text accumulate in the widget across ALL modes:
+
+| Property | Source | Opacity |
+|----------|--------|---------|
+| `liveTranscriptText` | cleaned chunks from Ollama (all sources) | full |
+| `pendingRawSegment` | committed audio not yet through Ollama | medium |
+| `latestTranscriptChunk` | live SFSpeech streaming partial | faint/italic |
+
+Session lifecycle:
+- `onTranscriptionCleaned` fires for ALL pipeline sources (not just `.transcription`), appending to `liveTranscriptText`
+- `lastSpeechTime` (ChunkManager) is updated whenever a non-empty streaming partial arrives
+- After each chunk cycle, if `Date().timeIntervalSince(lastSpeechTime) >= 10.0`, session ends: `clearSessionTranscript()` is called and the chunk cycle pauses waiting for new speech
+- Mode changes do NOT clear the transcript — only silence-end and the manual Clear button do
+
 ### Local AI Model Usage
 
 | Stage | Model | Provider | Purpose |
 |-------|-------|----------|---------|
-| Transcription | Whisper | Groq (cloud) or Apple SFSpeech (local) | Speech → text |
+| Transcription (streaming) | SFSpeechRecognizer | Apple (local) | Live word-by-word partials |
+| Transcription (committed) | Whisper | Groq (cloud) or Apple SFSpeech (local) | Final chunk text |
 | Cleaning | Llama 3.2 3B | Ollama (local) | Merge, denoise, resolve context |
 | Analysis | Llama 3.2 3B | Ollama (local) | Extract tasks, update world model |
 | Task framing | Llama 3.2 3B | Ollama (local) | Clean task titles from README/CLAUDE.md |
@@ -93,27 +112,153 @@ Groq is optional and used only for transcription speed. All analysis runs locall
 
 ### Key Files
 
+#### Core App
 | File | Purpose |
 |------|---------|
 | `App.swift` | SwiftUI `@main` entry point (headless — no default window) |
 | `AppDelegate.swift` | NSApplicationDelegate; creates all windows, wires subscriptions |
 | `AppState.swift` | Central `ObservableObject` — all shared state, service singletons |
+| `AppFonts.swift` | Custom font registration and font accessors |
+| `AppTheme.swift` | Appearance system — frosted/solid modes, color scheme, theme tokens |
+| `Logger.swift` | Structured logging with subsystems: `.pipeline`, `.system`, `.audio`, `.ui` |
+
+#### Pipeline
+| File | Purpose |
+|------|---------|
 | `PipelineOrchestrator.swift` | Routes transcripts through the 4-stage pipeline |
 | `PipelineModels.swift` | Core value types: `CleanedTranscript`, `TranscriptAnalysis`, `PipelineTaskRecord` |
 | `PipelineStore.swift` | Persistence layer for pipeline data |
-| `ChunkManager.swift` | Buffers audio chunks, calls PipelineOrchestrator |
-| `SettingsManager.swift` | All user settings via UserDefaults + API keys |
-| `KeychainStorage.swift` | API key storage (Keychain + env var fallback) |
-| `TranscriptStore.swift` | SQLite transcript persistence |
-| `TaskExecutionService.swift` | Streams Claude Code sessions for auto tasks |
+| `PipelineGroup.swift` | Groups related pipeline records for display |
+| `ChunkManager.swift` | Buffers audio chunks, manages session lifecycle, calls PipelineOrchestrator |
+| `StreamingLocalTranscriber.swift` | Live word-by-word SFSpeechRecognizer streaming; fires `onPartial` callbacks |
+| `TranscriptCleaningService.swift` | Stage 1: Ollama Llama 3.2 transcript cleaning |
+| `TranscriptAnalysisService.swift` | Stage 2: Ollama Llama 3.2 analysis, task extraction, world model update |
+| `TaskCreationService.swift` | Stage 3: structured task creation with mode assignment |
+| `TaskExecutionService.swift` | Stage 4: streams Claude Code sessions for auto tasks |
 | `ClaudeCodeRunner.swift` | Low-level Claude Code SDK streaming client |
-| `WhatsAppPoller.swift` | Polls sidecar, filters to self-chat, routes to pipeline |
+| `WorkflowRegistry.swift` | Registered execution workflows (e.g. `autoclawd-claude-code`) |
+
+#### Audio & Transcription
+| File | Purpose |
+|------|---------|
+| `AudioRecorder.swift` | Always-on AVAudioEngine capture; engine stays hot between chunks |
+| `SpeechService.swift` | Groq / Apple SFSpeech transcription of committed audio chunks |
+| `TranscriptionService.swift` | Transcription orchestration |
+| `TranscriptionPasteService.swift` | Paste cleaned transcript to frontmost app |
+
+#### Storage & Persistence
+| File | Purpose |
+|------|---------|
+| `TranscriptStore.swift` | SQLite transcript persistence |
+| `PipelineStore.swift` | Pipeline record persistence |
+| `StructuredTodoStore.swift` | Task queue with status history |
+| `QAStore.swift` | Q&A session persistence |
+| `ExtractionStore.swift` | Extraction result persistence |
+| `ContextCaptureStore.swift` | Clipboard and screenshot context persistence |
+| `SessionStore.swift` | Speaking session timeline persistence |
+| `ProjectStore.swift` | Project list and metadata |
+| `SkillStore.swift` | Built-in and custom skills persistence |
+| `FileStorageManager.swift` | Attachment and file storage management |
+
+#### World Model & Intelligence
+| File | Purpose |
+|------|---------|
+| `WorldModelService.swift` | Builds and updates per-project markdown world model |
+| `WorldModelGraph.swift` | Graph data model parsed from world model markdown |
+| `WorldModelGraphParser.swift` | Parses markdown world model into graph nodes/edges |
+| `WorldModelGraphLayout.swift` | Force-directed layout for world model graph |
+| `WorldModelGraphView.swift` | SwiftUI canvas graph visualization |
+| `ExtractionService.swift` | Extracts structured facts, decisions, people from transcripts |
+| `ExtractionItem.swift` | Extraction result value type |
+| `Episode.swift` | A discrete event (song, place, person) captured in context |
+| `NowPlayingService.swift` | ShazamKit song detection; creates Episodes |
+| `PeopleTaggingService.swift` | Identifies and tags people mentioned in transcripts |
+| `Person.swift` | Person value type |
+
+#### Context Capture
+| File | Purpose |
+|------|---------|
+| `ScreenshotService.swift` | Periodic screen capture for ambient context |
+| `ClipboardMonitor.swift` | Monitors clipboard changes for context enrichment |
+| `LocationService.swift` | Core Location — current place detection |
+| `PlaceDetail.swift` | Place value type |
+
+#### Q&A & Skills
+| File | Purpose |
+|------|---------|
+| `QAService.swift` | Handles AI search / Q&A queries against transcript context |
+| `QAView.swift` | Q&A results UI |
+| `Skill.swift` | Skill value type (built-in + custom) |
+| `SkillStore.swift` | Skill persistence, seeding built-in skills on install |
+
+#### Todo & Task Management
+| File | Purpose |
+|------|---------|
+| `TodoService.swift` | Todo list management |
+| `TodoFramingService.swift` | Frames task titles using README/CLAUDE.md for context |
+| `StructuredTodoStore.swift` | Persists structured task queue |
+
+#### UI — Windows & Shell
+| File | Purpose |
+|------|---------|
 | `PillView.swift` | Floating widget SwiftUI view |
 | `PillWindow.swift` | NSPanel wrapper with drag, snap-to-edge, height animation |
+| `PillMode.swift` | `PillMode` enum and transitions |
 | `MainPanelView.swift` | Main dashboard shell |
+| `MainPanelWindow.swift` | NSWindow wrapper for dashboard |
+| `ToastView.swift` | Non-intrusive execution feedback toast |
+| `ToastWindow.swift` | Floating NSPanel for toasts |
+| `SetupView.swift` | First-run dependency setup UI |
+
+#### UI — Panel Views
+| File | Purpose |
+|------|---------|
 | `LogsPipelineView.swift` | Pipeline stage visualizer (column view) |
 | `SettingsConsolidatedView.swift` | All settings UI |
-| `WorkflowRegistry.swift` | Registered execution workflows (e.g. `autoclawd-claude-code`) |
+| `IntelligenceView.swift` | Intelligence/context dashboard |
+| `IntelligenceConsolidatedView.swift` | Consolidated intelligence panel |
+| `SkillsView.swift` | Skills management UI |
+| `QAView.swift` | Q&A results panel |
+| `CodeWidgetView.swift` | Voice-driven Claude Code co-pilot widget |
+| `SessionTimelineView.swift` | Session history timeline |
+| `UserProfileChatView.swift` | User profile and chat context view |
+| `TagView.swift` | Tag display component |
+
+#### UI — Widget Canvas
+| File | Purpose |
+|------|---------|
+| `WidgetView.swift` | Pill widget root view |
+| `WidgetCanvasViews.swift` | Per-mode canvas content (AmbientCanvasView, TranscriptCanvasView, etc.) |
+| `WidgetPanelViews.swift` | Expanded pill panel views |
+
+#### UI — World Views
+| File | Purpose |
+|------|---------|
+| `WorldView.swift` | World model overview |
+| `WorldSpaceView.swift` | Geographic space visualization |
+| `WorldTimeView.swift` | Temporal timeline of episodes |
+| `AmbientMapView.swift` | Live location map for ambient context |
+| `MapEditorView.swift` | Map annotation editor |
+
+#### Integrations & System
+| File | Purpose |
+|------|---------|
+| `WhatsAppPoller.swift` | Polls sidecar, filters to self-chat, routes to pipeline |
+| `WhatsAppService.swift` | WhatsApp message handling and reply logic |
+| `WhatsAppSidecar.swift` | Sidecar connection management |
+| `ShazamKitService.swift` | ShazamKit audio fingerprinting for now-playing detection |
+| `MCPConfigManager.swift` | MCP server configuration management |
+| `GlobalHotkeyMonitor.swift` | System-wide keyboard shortcut monitoring |
+| `HotWordDetector.swift` | Real-time hotword detection in audio stream |
+| `HotWordConfig.swift` | Hotword configuration |
+| `ClipboardMonitor.swift` | Clipboard change monitoring |
+| `UserProfileService.swift` | User profile and preferences |
+| `SettingsManager.swift` | All user settings via UserDefaults + API keys |
+| `KeychainStorage.swift` | API key storage (Keychain + env var fallback) |
+| `DependencyInstaller.swift` | First-run Ollama/dependency setup |
+| `CleanupService.swift` | Audio file retention cleanup |
+| `Attachment.swift` | File attachment value type for tasks |
+| `PixelWorldView.swift` | WebKit wrapper for Mission Control HQ |
 
 ### PixelWorld — Mission Control HQ
 
@@ -170,8 +315,8 @@ inQueue → toComms → atComms → toAnalysis → atAnalysis → toProjects
 - Desk labels (Comms, Analysis, Projects, Claude Code, QA, Archive) rendered in cyan above monitors
 
 ### Pill Modes (PillMode enum)
-- `.ambientIntelligence` — always-on mic → full pipeline
-- `.transcription` — mic → clean transcript only (copy-paste friendly)
+- `.ambientIntelligence` — always-on mic → full pipeline; shows three-layer session transcript
+- `.transcription` — mic → clean transcript only (copy-paste friendly); same three-layer display
 - `.aiSearch` — hotword-triggered QA queries
 - `.code` — voice-driven Claude Code co-pilot (streams to CodeWidgetView)
 
@@ -182,6 +327,9 @@ inQueue → toComms → atComms → toAnalysis → atAnalysis → toProjects
 
 ### Task Autonomous Execution
 Tasks are auto-executed when `task.mode == .auto`. What qualifies is configurable via `SettingsManager.autonomousTaskRules`. Rules are plain-English descriptions of the category of task that can run autonomously (e.g., "Send emails", "Create GitHub issues"). The analysis LLM uses these rules when assigning task modes.
+
+### Skills System
+Built-in skills are seeded into `SkillStore` on first launch (`isBuiltin = true`). Each skill has a trigger, prompt template, and execution mode. Custom skills can be created via `SkillsView`. On updates, built-in skills are re-seeded (overwriting by ID) so changes propagate to existing installs.
 
 ## API Keys & Environment
 
@@ -218,6 +366,10 @@ All settings live in `SettingsManager.shared`:
 | `fontSizePreference` | `.small` / `.medium` / `.large` | Enum |
 | `colorSchemeSetting` | `.system` / `.light` / `.dark` | Enum |
 | `appearanceMode` | `.frosted` / `.solid` | Enum |
+| `mcpServers` | list of MCP server configs | [MCPServer] |
+| `locationEnabled` | — | Bool |
+| `screenshotContextEnabled` | — | Bool |
+| `shazamEnabled` | — | Bool |
 
 ## Development Conventions
 
@@ -228,6 +380,8 @@ All settings live in `SettingsManager.shared`:
 - **Single source of truth**: `AppState` holds all published state. Don't duplicate state across views.
 - **Avoid huge files**: If a view exceeds ~300 lines, split into subviews.
 - **PixelWorld events**: Emit pipeline events from Swift via `WKWebView.evaluateJavaScript("receiveEvent('type', data)")` — do not bypass the adapter.js routing layer.
+- **Session transcript**: Use `appState.clearSessionTranscript()` to reset. Never directly nil `liveTranscriptText` outside `AppState`.
+- **Streaming transcriber**: `StreamingLocalTranscriber` is started/stopped by `ChunkManager`. Do not start it elsewhere.
 
 ## Common Tasks
 
@@ -247,6 +401,11 @@ All settings live in `SettingsManager.shared`:
 1. Implement `WorkflowExecutor` protocol
 2. Register in `WorkflowRegistry.shared`
 3. The `workflowID` string in `PipelineTaskRecord` routes to it
+
+### Add a built-in skill
+1. Add the skill definition in `SkillStore.seedBuiltinSkills()`
+2. Give it a stable UUID and `isBuiltin = true`
+3. On next launch it will be seeded (and overwritten on existing installs to pick up changes)
 
 ### Trigger a pipeline manually (testing)
 ```swift
@@ -276,3 +435,6 @@ advancePipeline('atComms', 'toAnalysis', 1)
 // Manually spawn a queue agent
 spawnQueueAgent()
 ```
+
+### Test session transcript accumulation
+Speak for >30s and verify `liveTranscriptText` grows continuously. Stop speaking for 10s and verify `clearSessionTranscript()` fires (all three text layers reset). Resume speaking and verify a fresh session begins.
