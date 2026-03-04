@@ -36,6 +36,8 @@ AI has given us an opportunity to fundamentally rethink that UX — to go beyond
 
 That's what AutoClawd is. **You never give it a prompt. You just work.**
 
+The logical conclusion of that idea: **AutoClawd improves itself the same way.** Every conversation about what it should do next is captured, batched at the end of the day, and handed to Claude Code — which thinks through specs, designs the flow, writes a tech plan, and ships the change. AutoClawd is a system that builds itself from the conversations happening around it.
+
 ---
 
 ## What It Does
@@ -50,6 +52,8 @@ AutoClawd runs an always-on mic in the background. As you talk — in meetings, 
 Tasks can be anything. Ship a feature. Send an email. Create a design. File an issue. Summarize a document. Whatever your connected tools can do — AutoClawd can trigger it from speech alone.
 
 With **MCP support**, every integration you plug in expands what AutoClawd can act on. Work tasks, life tasks, creative work — all of it.
+
+And when you talk about AutoClawd itself — ideas, bugs, things it should do — it captures those too, and uses them to improve itself overnight.
 
 ---
 
@@ -93,6 +97,7 @@ You talk
 - Claude Code runs tasks in the correct project folder with streamed output
 - MCP server support — plug in any tool or workflow
 - Skills system — built-in and custom triggers that fire on specific voice patterns
+- **Self-evolution** — ideas about AutoClawd itself are captured, batched end-of-day, and executed as a full specs → design → plan → code cycle
 
 **Context Awareness**
 - People tagging — identifies and tracks who you mention across sessions
@@ -112,6 +117,27 @@ You talk
 - Mission Control HQ — live pixel-art room where pipeline agents walk desk-to-desk in real time
 - Appearance modes: frosted glass or solid, light/dark/system, custom fonts
 - Session timeline, Q&A against your context, structured todo queue
+
+---
+
+## Self-Evolution
+
+AutoClawd is designed to build itself.
+
+When you talk about AutoClawd — what it should do, what's broken, ideas for features — it recognises those as tasks for itself and captures them alongside everything else. At the end of each day, it batches all pending self-improvement tasks and kicks off an autonomous planning and execution cycle:
+
+```
+Captured ideas across the day
+  │
+  ├─ Product thinking    — what problem does this solve, what's the right behaviour
+  ├─ Flow + design       — how it fits into the existing UX and pipeline
+  ├─ Tech plan           — what files change, what new services are needed
+  └─ Execution           — Claude Code implements, builds, and commits the change
+```
+
+The result: AutoClawd ships a new version of itself every day, driven entirely by the conversations happening around it. No roadmap meetings. No ticket grooming. Just talk.
+
+This is the recursive form of the core idea — ambient intelligence that removes friction not just from your work, but from its own development.
 
 ---
 
@@ -229,6 +255,7 @@ Everything lives in `~/.autoclawd/` — SQLite and markdown, fully local.
 
 ## Roadmap
 
+- [ ] Self-evolution — daily batched self-improvement cycle (capture ideas → specs → design → tech plan → execute)
 - [ ] Phone call transcription via Bluetooth mic
 - [ ] Scheduled tasks and calendar integration
 - [ ] Multi-language transcription
