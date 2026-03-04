@@ -145,12 +145,7 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
         // invalidate the installed tap — processBuffer() stops being called
         // and the audio file contains only headers (empty). This causes
         // SFSpeechRecognizer to return "no speech detected" on timer chunks.
-        let _diagState = audioEngine == nil ? "nil" : (audioEngine!.isRunning ? "running" : "stopped")
-        Log.info(.audio, "DIAG startRecording: engine=\(_diagState)")
-
         if audioEngine == nil || currentDeviceUID != deviceUID || audioEngine?.isRunning == false {
-            let _diagReason = audioEngine == nil ? "nil" : currentDeviceUID != deviceUID ? "devChanged" : "wasStopped"
-            Log.info(.audio, "DIAG startRecording: recreating engine — \(_diagReason)")
             audioEngine?.inputNode.removeTap(onBus: 0)
             audioEngine?.stop()
             audioEngine = nil
@@ -188,7 +183,6 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
 
         if let engine = audioEngine, !engine.isRunning {
             try engine.start()
-            Log.info(.audio, "DIAG startRecording: engine.start() → isRunning=\(engine.isRunning)")
         }
 
         guard let inputFormat = storedInputFormat else {
@@ -231,8 +225,6 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
     func stopRecording() -> URL? {
         _recording.withLock { $0 = false }
         audioFileQueue.sync { audioFile = nil }
-        // Log after queue drain — totalFrames is stable at this point
-        Log.info(.audio, "DIAG stopRecording: totalFrames=\(totalFrames) silentFrames=\(silentFrames) silenceRatio=\(String(format: "%.2f", silenceRatio))")
         audioEngine?.stop()
         DispatchQueue.main.async {
             self.isRecording = false
@@ -259,9 +251,6 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
         }
 
         totalFrames += frames
-        if totalFrames == frames {  // first buffer of this chunk
-            Log.info(.audio, "DIAG processBuffer: tap ✓ first buffer frames=\(frames) rms=\(String(format: "%.5f", rms))")
-        }
         if rms < silenceThreshold { silentFrames += frames }
         let nowSilent = rms < silenceThreshold
         DispatchQueue.main.async { self.isSilentNow = nowSilent }
