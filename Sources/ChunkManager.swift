@@ -123,7 +123,7 @@ final class ChunkManager: ObservableObject {
         // End the session
         if let sid = currentSessionID {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
-            if let store = transcriptStore {
+            if transcriptStore != nil {
                 Task { [weak self] in
                     self?.transcriptStore?.mergeSessionChunks(sessionID: sid)
                 }
@@ -148,7 +148,7 @@ final class ChunkManager: ObservableObject {
         // End the session on pause
         if let sid = currentSessionID {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
-            if let store = transcriptStore {
+            if transcriptStore != nil {
                 Task { [weak self] in
                     self?.transcriptStore?.mergeSessionChunks(sessionID: sid)
                 }

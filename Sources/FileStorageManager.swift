@@ -45,7 +45,7 @@ final class FileStorageManager: @unchecked Sendable {
 
     func audioFile(date: Date) -> URL {
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd-HHmm"
+        formatter.dateFormat = "yyyy-MM-dd-HHmmss-SSS"
         let name = formatter.string(from: date) + ".wav"
         return audioDirectory.appendingPathComponent(name)
     }

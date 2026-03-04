@@ -301,6 +301,8 @@ struct PillContentView: View {
     let onToggleMusicMode:    () -> Void
     let onCollapseChange:     (WidgetCollapseLevel) -> Void
 
+    @State private var isWhatsAppEnabled: Bool = SettingsManager.shared.whatsAppEnabled
+
     @State private var collapseLevel:          WidgetCollapseLevel = .full
     @State private var displayLevel:           Float = 0
     @State private var logLines:               [(dot: Color, text: String, time: String)] = []
@@ -344,11 +346,16 @@ struct PillContentView: View {
             onToggleCode:           onToggleCode,
             onToggleSpeakerMode:    onToggleSpeakerMode,
             onToggleMusicMode:      onToggleMusicMode,
+            onToggleWhatsApp: {
+                SettingsManager.shared.whatsAppEnabled.toggle()
+                isWhatsAppEnabled = SettingsManager.shared.whatsAppEnabled
+            },
             pipelineStages:         activePipelineStages,
             isLocalModelEnabled:    isLocalModelEnabled,
             isCodeEnabled:          isCodeEnabled,
             isMultiSpeaker:         appState.speakerMode == .multiple,
             isMusicMode:            appState.musicModeEnabled,
+            isWhatsAppEnabled:      isWhatsAppEnabled,
             logLines:               logLines,
             aiCanvasContent:        canvasForCurrentMode,
             analysisIdleSubtitle:   analysisIdleSubtitle,

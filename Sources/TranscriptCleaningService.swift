@@ -13,7 +13,7 @@ final class TranscriptCleaningService: @unchecked Sendable {
     /// Tracks pending chunks per session for continued transcript merging.
     /// Key: sessionID, Value: list of (transcriptID, chunkSeq, text, duration, speakerName).
     private var pendingChunks: [String: [(id: Int64, seq: Int, text: String, duration: Int, speaker: String?)]] = [:]
-    private let pendingLock = DispatchQueue(label: "com.autoclawd.cleaning.pending")
+    private let pendingLock = NSLock()
 
     /// How long to wait for more chunks before processing (seconds).
     private let mergeWindow: TimeInterval = 3.0
@@ -39,7 +39,7 @@ final class TranscriptCleaningService: @unchecked Sendable {
     ) async -> CleanedTranscript? {
         // If this chunk is part of a session, check for continuation
         if let sid = sessionID {
-            pendingLock.sync {
+            pendingLock.withLock {
                 pendingChunks[sid, default: []].append((
                     id: transcriptID, seq: sessionChunkSeq,
                     text: text, duration: durationSeconds, speaker: speakerName
@@ -51,7 +51,7 @@ final class TranscriptCleaningService: @unchecked Sendable {
             try? await Task.sleep(for: .seconds(mergeWindow))
 
             // Gather all pending chunks for this session
-            let chunks = pendingLock.sync { pendingChunks[sid] ?? [] }
+            let chunks = pendingLock.withLock { pendingChunks[sid] ?? [] }
 
             // If more chunks arrived after us, a later chunk will handle the merge
             let maxSeq = chunks.max(by: { $0.seq < $1.seq })?.seq ?? 0
@@ -60,7 +60,7 @@ final class TranscriptCleaningService: @unchecked Sendable {
             }
 
             // We're the latest chunk — merge and clean
-            pendingLock.sync { pendingChunks.removeValue(forKey: sid) }
+            _ = pendingLock.withLock { pendingChunks.removeValue(forKey: sid) }
 
             let sortedChunks = chunks.sorted { $0.seq < $1.seq }
             let isContinued = sortedChunks.count > 1

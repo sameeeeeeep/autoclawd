@@ -59,9 +59,7 @@ final class TaskExecutionService: @unchecked Sendable {
 
     /// Send a follow-up message to an active Claude session (with optional attachments).
     func sendMessage(taskID: String, message: String, attachments: [Attachment] = []) {
-        sessionsLock.lock()
-        let session = activeSessions[taskID]
-        sessionsLock.unlock()
+        let session = sessionsLock.withLock { activeSessions[taskID] }
 
         guard let session = session, session.isRunning else {
             Log.warn(.taskExec, "Task \(taskID): no active session for follow-up")
@@ -77,17 +75,13 @@ final class TaskExecutionService: @unchecked Sendable {
 
     /// Stop an active session.
     func stopSession(taskID: String) {
-        sessionsLock.lock()
-        let session = activeSessions.removeValue(forKey: taskID)
-        sessionsLock.unlock()
+        let session = sessionsLock.withLock { activeSessions.removeValue(forKey: taskID) }
         session?.stop()
     }
 
     /// Check if a task has an active session.
     func hasActiveSession(taskID: String) -> Bool {
-        sessionsLock.lock()
-        defer { sessionsLock.unlock() }
-        return activeSessions[taskID]?.isRunning == true
+        return sessionsLock.withLock { activeSessions[taskID]?.isRunning == true }
     }
 
     // MARK: - Claude Code Execution (Interactive Streaming)
@@ -117,9 +111,7 @@ final class TaskExecutionService: @unchecked Sendable {
         }
 
         // Store session for follow-up messages
-        sessionsLock.lock()
-        activeSessions[task.id] = session
-        sessionsLock.unlock()
+        sessionsLock.withLock { activeSessions[task.id] = session }
 
         var stepIdx = 2
         var currentToolName: String? = nil
@@ -229,9 +221,7 @@ final class TaskExecutionService: @unchecked Sendable {
         }
 
         // Clean up session
-        sessionsLock.lock()
-        activeSessions.removeValue(forKey: task.id)
-        sessionsLock.unlock()
+        _ = sessionsLock.withLock { activeSessions.removeValue(forKey: task.id) }
     }
 
     // MARK: - Helpers

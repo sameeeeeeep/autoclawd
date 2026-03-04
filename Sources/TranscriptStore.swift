@@ -88,11 +88,15 @@ final class TranscriptStore: @unchecked Sendable {
             let totalDuration = chunks.map(\.durationSeconds).reduce(0, +)
             let earliest = chunks.map(\.timestamp).min() ?? Date()
             let projectID = chunks.first?.projectID
-            for chunk in chunks { deleteInternal(id: chunk.id) }
+            // Do NOT delete the originals — CleanedTranscript.sourceTranscriptIDs in the
+            // pipeline database references these by ID. Deleting them causes the pipeline
+            // view to fall back to "(transcript N)" labels after the merge fires.
+            // The merged record is additive: it provides a combined full-text for session
+            // timeline display, while the original chunk records remain valid for pipeline lookups.
             insertTranscript(text: mergedText, duration: totalDuration, path: "",
                              sessionID: sessionID, sessionChunkSeq: 0,
                              projectID: projectID, timestamp: earliest)
-            Log.info(.system, "Merged \(chunks.count) transcript chunks for session \(sessionID)")
+            Log.info(.system, "Merged \(chunks.count) transcript chunks for session \(sessionID) (originals preserved)")
         }
     }
 
