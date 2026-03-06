@@ -188,6 +188,8 @@ struct WidgetView: View {
     var sessionLifecycle: SessionLifecycleState = .undefined
     /// Live log lines (max 2) from AutoClawdLogger
     var logLines: [(dot: Color, text: String, time: String)] = []
+    /// True while session-end cleaning is in progress (drives canvas border glow).
+    var isSessionProcessing: Bool = false
     /// Current AI canvas content
     var aiCanvasContent: AnyView? = nil
     /// Subtitle shown on Analysis row when enabled but idle (e.g. "14 tasks found")
@@ -201,6 +203,7 @@ struct WidgetView: View {
     /// Camera feed view (shown below the canvas when camera is enabled)
     var cameraFeedContent: AnyView? = nil
     @State private var historyIndex: Int = 0
+    @State private var processingGlowOpacity: Double = 0.3
 
     private var showsCameraFeed: Bool { cameraFeedContent != nil }
 
@@ -653,42 +656,15 @@ struct WidgetView: View {
                 ? canvasSnapshots[historyIndex - 1].content
                 : nil)
 
-        return ZStack(alignment: .topTrailing) {
+        return ZStack {
             // Canvas content
-            ZStack {
-                if let content = shownContent {
-                    content
-                } else {
-                    idlePlaceholder
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // History navigation pill — shown whenever there's at least one past snapshot
-            if !canvasSnapshots.isEmpty {
-                HStack(spacing: 4) {
-                    // ← go further back
-                    if historyIndex < canvasSnapshots.count {
-                        navButton(icon: "chevron.left") {
-                            withAnimation { historyIndex += 1 }
-                        }
-                    }
-                    Text(showingLive ? "Now" : canvasSnapshots[historyIndex - 1].label)
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundColor(appearance.textSecondary.opacity(showingLive ? 1.0 : 0.70))
-                    // → come forward
-                    if historyIndex > 0 {
-                        navButton(icon: "chevron.right") {
-                            withAnimation { historyIndex -= 1 }
-                        }
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(appearance.logBg))
-                .padding(6)
+            if let content = shownContent {
+                content
+            } else {
+                idlePlaceholder
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Reset to live whenever new content arrives
         .onChange(of: canvasSnapshots.count) { _ in
             historyIndex = 0
@@ -709,7 +685,26 @@ struct WidgetView: View {
                     .stroke(appearance.borderOff.opacity(0.5), lineWidth: 0.8)
             }
         }
+        .overlay {
+            // Processing glow — pulsing cyan border while cleaning is in progress
+            if isSessionProcessing {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.cyan.opacity(processingGlowOpacity), lineWidth: 1.5)
+                    .shadow(color: .cyan.opacity(processingGlowOpacity * 0.5), radius: 6)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onChange(of: isSessionProcessing) { processing in
+            if processing {
+                withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                    processingGlowOpacity = 0.7
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.4)) {
+                    processingGlowOpacity = 0.0
+                }
+            }
+        }
         .padding(.horizontal, 12)
         .padding(.bottom, 6)
     }

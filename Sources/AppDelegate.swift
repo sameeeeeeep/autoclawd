@@ -387,6 +387,7 @@ struct PillContentView: View {
             isWhatsAppEnabled:      isWhatsAppEnabled,
             sessionLifecycle:       appState.sessionLifecycle,
             logLines:               logLines,
+            isSessionProcessing:    appState.isSessionProcessing,
             aiCanvasContent:        canvasForCurrentMode,
             analysisIdleSubtitle:   analysisIdleSubtitle,
             executionIdleSubtitle:  executionIdleSubtitle,
@@ -603,6 +604,17 @@ struct PillContentView: View {
         // ── Face linking canvas (auto-triggered or manual) ────────────────────────
         if appState.showFaceLinkingOverlay {
             return AnyView(FaceLinkingCanvasView(appState: appState))
+        }
+
+        // ── Cleaning level picker (post-session transcript quality) ─────────────
+        if appState.showCleaningPicker {
+            return AnyView(CleaningPickerCanvasView(
+                results: appState.cleaningResults,
+                selected: appState.selectedCleaningLevel,
+                isProcessing: appState.isSessionProcessing,
+                onSelect: { level in appState.selectCleaningLevel(level) },
+                onDismiss: { appState.dismissCleaningPicker() }
+            ))
         }
 
         // ── Smart prompt: multi-speaker "who are you with?" ──────────────────────

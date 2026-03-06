@@ -1,5 +1,49 @@
 import Foundation
 
+// MARK: - CleaningLevel
+
+/// Controls how aggressively transcript text is cleaned.
+enum CleaningLevel: String, CaseIterable, Identifiable {
+    case raw = "raw"
+    case minimal = "minimal"
+    case polished = "polished"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .raw:      return "Raw"
+        case .minimal:  return "Clean"
+        case .polished: return "Polished"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .raw:      return "Unprocessed transcript"
+        case .minimal:  return "Grammar fixed, fillers removed"
+        case .polished: return "Coherent, well-structured"
+        }
+    }
+
+    var index: Int {
+        switch self {
+        case .raw:      return 1
+        case .minimal:  return 2
+        case .polished: return 3
+        }
+    }
+
+    static func fromIndex(_ i: Int) -> CleaningLevel? {
+        switch i {
+        case 1: return .raw
+        case 2: return .minimal
+        case 3: return .polished
+        default: return nil
+        }
+    }
+}
+
 // MARK: - TranscriptCleaningService
 
 /// Stage 1: Detects continued transcripts, merges chunks, and cleans text via LLM.
@@ -27,6 +71,19 @@ final class TranscriptCleaningService: @unchecked Sendable {
     }
 
     // MARK: - Public API
+
+    /// Clean raw text at a specific quality level. Used for multi-pass transcript cleaning.
+    /// Returns the cleaned text (or raw text on failure).
+    func cleanAtLevel(rawText: String, level: CleaningLevel) async -> String {
+        switch level {
+        case .raw:
+            return rawText
+        case .minimal:
+            return await cleanWithLLM(rawText: rawText)
+        case .polished:
+            return await cleanPolished(rawText: rawText)
+        }
+    }
 
     /// Process a new transcript chunk. Handles continued detection and cleaning.
     func processNewTranscript(
@@ -128,6 +185,33 @@ final class TranscriptCleaningService: @unchecked Sendable {
         Log.info(.cleaning, "Stage 1 done: \(label), \(cleanedText.count) chars cleaned")
 
         return ct
+    }
+
+    private func cleanPolished(rawText: String) async -> String {
+        let prompt = """
+            Rewrite this spoken transcript as a polished, well-structured document. \
+            Create coherent paragraphs with proper flow. Fix all grammar, remove all filler words, \
+            and improve clarity while preserving ALL meaning and key details. \
+            Output ONLY the polished text, nothing else.
+
+            RAW TRANSCRIPT:
+            \(rawText)
+
+            POLISHED:
+            """
+
+        do {
+            let response = try await ollama.generate(prompt: prompt, numPredict: 1024)
+            let cleaned = response.trimmingCharacters(in: .whitespacesAndNewlines)
+            if cleaned.count < 5 {
+                Log.warn(.cleaning, "Polished cleaning returned too short, using raw text")
+                return rawText
+            }
+            return cleaned
+        } catch {
+            Log.error(.cleaning, "Polished cleaning failed: \(error.localizedDescription), using raw text")
+            return rawText
+        }
     }
 
     private func cleanWithLLM(rawText: String) async -> String {

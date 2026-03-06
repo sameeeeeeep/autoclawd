@@ -230,6 +230,9 @@ final class AppState: ObservableObject {
     @Published var availableOptions: [String] = []
     @Published var showFaceLinkingOverlay: Bool = false
     @Published var showSessionProjectPicker: Bool = false
+    @Published var showCleaningPicker: Bool = false
+    @Published var cleaningResults: [CleaningLevel: String] = [:]
+    @Published var selectedCleaningLevel: CleaningLevel = .minimal
     private var onOptionSelected: ((Int) -> Void)?
     private var faceLinkingQueue: [FaceTracker.TrackedFace] = []
     @Published private(set) var faceLinkingIndex: Int = 0
@@ -274,6 +277,7 @@ final class AppState: ObservableObject {
     let skillStore: SkillStore
     private(set) var pipelineOrchestrator: PipelineOrchestrator
     private let taskExecutionService: TaskExecutionService
+    private var cleaningService: TranscriptCleaningService!
 
     // MARK: - Derived Content (refreshed on demand)
 
@@ -400,6 +404,7 @@ final class AppState: ObservableObject {
             pipelineStore: pStore, claudeCodeRunner: claudeCodeRunner,
             projectStore: projectStore, skillStore: sStore
         )
+        cleaningService = cleaningSvc
         taskExecutionService = taskExecSvc
         pipelineOrchestrator = PipelineOrchestrator(
             cleaningService: cleaningSvc,
@@ -690,7 +695,10 @@ final class AppState: ObservableObject {
 
         case .rightThumbsUp:
             // Dismiss overlays or end session
-            if showSessionProjectPicker {
+            if showCleaningPicker {
+                showCleaningPicker = false
+                Log.info(.camera, "Gesture: dismissed cleaning picker (thumbs up)")
+            } else if showSessionProjectPicker {
                 showSessionProjectPicker = false
                 Log.info(.camera, "Gesture: dismissed project picker (thumbs up)")
             } else if showFaceLinkingOverlay {
@@ -711,7 +719,12 @@ final class AppState: ObservableObject {
             }
 
         case .leftFingerCount(let count):
-            if showSessionProjectPicker {
+            if showCleaningPicker {
+                if let level = CleaningLevel.fromIndex(count) {
+                    selectCleaningLevel(level)
+                }
+                Log.info(.camera, "Gesture: cleaning level \(count) selected")
+            } else if showSessionProjectPicker {
                 selectSessionProject(index: count)
                 Log.info(.camera, "Gesture: session project \(count) selected")
             } else if showFaceLinkingOverlay {
@@ -780,7 +793,7 @@ final class AppState: ObservableObject {
         }
 
         let face = faceLinkingQueue[faceLinkingIndex]
-        let nonSpecialPeople = people.filter { !$0.isMe && !$0.isMusic }
+        let nonSpecialPeople = people.filter { !$0.isMusic }
         guard selectedOption >= 1, selectedOption <= nonSpecialPeople.count else { return }
 
         let person = nonSpecialPeople[selectedOption - 1]
@@ -795,11 +808,13 @@ final class AppState: ObservableObject {
     }
 
     /// Auto-detect new unlinked faces and trigger face linking on the canvas.
-    /// Called from `onFaceCountChanged` handler — only during active sessions.
+    /// Called from `onFaceCountChanged` handler — triggers during active sessions
+    /// or when idle (no session) so users can link faces anytime camera is on.
     private func checkForUnlinkedFaces() {
-        guard sessionLifecycle == .active else { return }
+        // Allow during active session OR when idle (no session, no overlays)
         guard !showFaceLinkingOverlay else { return }
         guard !showSessionProjectPicker else { return }
+        guard !showCleaningPicker else { return }
 
         let now = Date()
         guard now.timeIntervalSince(lastAutoFaceLinkingTime) >= autoFaceLinkingCooldown else { return }
@@ -809,8 +824,11 @@ final class AppState: ObservableObject {
         }
         guard !unlinkedFaces.isEmpty else { return }
 
-        let linkablePeople = people.filter { !$0.isMe && !$0.isMusic }
-        guard !linkablePeople.isEmpty else { return }
+        let linkablePeople = people.filter { !$0.isMusic }
+        guard !linkablePeople.isEmpty else {
+            Log.info(.camera, "Unlinked face(s) detected but no linkable people exist — skipping")
+            return
+        }
 
         lastAutoFaceLinkingTime = now
         faceLinkingQueue = unlinkedFaces
@@ -900,6 +918,8 @@ final class AppState: ObservableObject {
         sessionConfig = config
         sessionLifecycle = .active
         clearSessionTranscript()
+        showCleaningPicker = false
+        cleaningResults.removeAll()
 
         // Derive pill mode from context — default to ambient intelligence
         if pillMode != .ambientIntelligence && pillMode != .transcription && pillMode != .tasks {
@@ -960,10 +980,11 @@ final class AppState: ObservableObject {
             }
             Log.info(.system, "User session stopped — dispatching session-level processing (\(fullRawText.count) chars)")
 
-            // Transcription mode: auto-paste the raw text to the frontmost app immediately.
-            // The cleaned version will arrive later via onTranscriptionCleaned.
+            // Transcription mode: show cleaning level chooser on canvas
             if capturedPillMode == .transcription {
+                // Paste raw immediately — will be upgraded after cleaning
                 pasteService.paste(text: fullRawText)
+                showCleaningLevelChooser(rawText: fullRawText)
             }
         } else {
             Log.info(.system, "User session stopped — no transcript to process")
@@ -973,6 +994,79 @@ final class AppState: ObservableObject {
         sessionLifecycle = .undefined
         sessionConfig = nil
         dismissedFaceTrackIDs.removeAll()
+    }
+
+    // MARK: - Cleaning Level Chooser
+
+    private var pendingCleaningRawText: String = ""
+
+    /// Show the cleaning level chooser: auto-run minimal cleaning first, then let user
+    /// pick level 2/3 if unsatisfied. Thumbs up dismisses.
+    private func showCleaningLevelChooser(rawText: String) {
+        pendingCleaningRawText = rawText
+        cleaningResults = [.raw: rawText]
+        selectedCleaningLevel = .minimal
+        showCleaningPicker = true
+
+        // Auto-run minimal cleaning immediately
+        let svc = cleaningService!
+        isSessionProcessing = true
+        Task.detached {
+            let result = await svc.cleanAtLevel(rawText: rawText, level: .minimal)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.isSessionProcessing = false
+                self.cleaningResults[.minimal] = result
+                self.liveTranscriptText = result
+                self.pasteService.paste(text: result)
+                Log.info(.cleaning, "Auto-cleaned minimal: \(result.count) chars")
+            }
+        }
+    }
+
+    /// User chose a different cleaning level — run that pass and show result.
+    /// Does NOT close the picker — thumbs up dismisses.
+    func selectCleaningLevel(_ level: CleaningLevel) {
+        selectedCleaningLevel = level
+
+        let rawText = pendingCleaningRawText
+        guard !rawText.isEmpty else { return }
+
+        // If already cached, just show it
+        if let cached = cleaningResults[level] {
+            liveTranscriptText = cached
+            pasteService.paste(text: cached)
+            Log.info(.cleaning, "Cleaning level \(level.displayName) (cached): \(cached.count) chars")
+            return
+        }
+
+        // Raw is always available
+        if level == .raw {
+            liveTranscriptText = rawText
+            pasteService.paste(text: rawText)
+            Log.info(.cleaning, "Cleaning level: raw")
+            return
+        }
+
+        // Run the chosen cleaning pass
+        let svc = cleaningService!
+        isSessionProcessing = true
+        Task.detached {
+            let result = await svc.cleanAtLevel(rawText: rawText, level: level)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.isSessionProcessing = false
+                self.cleaningResults[level] = result
+                self.liveTranscriptText = result
+                self.pasteService.paste(text: result)
+                Log.info(.cleaning, "Cleaning level \(level.displayName): \(result.count) chars")
+            }
+        }
+    }
+
+    /// Dismiss the cleaning picker (thumbs up).
+    func dismissCleaningPicker() {
+        showCleaningPicker = false
     }
 
     /// Called at the chunk boundary: freezes the current streaming partial as a pending
