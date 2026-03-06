@@ -715,7 +715,7 @@ struct FaceLinkingCanvasView: View {
     }
 
     private var peopleOptions: [Person] {
-        appState.people.filter { !$0.isMe && !$0.isMusic }
+        appState.people.filter { !$0.isMusic }
     }
 
     var body: some View {
@@ -884,5 +884,101 @@ struct SessionProjectPickerCanvasView: View {
         .padding(.top, 12)
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - Cleaning Picker Canvas
+
+/// Shown after a transcription session ends. Shows the actual transcript text
+/// Shows the cleaned transcript with level tabs. Auto-runs minimal first;
+/// user can gesture 1-3 to re-clean at a different level, thumbs up to dismiss.
+struct CleaningPickerCanvasView: View {
+    let results: [CleaningLevel: String]
+    let selected: CleaningLevel
+    let isProcessing: Bool
+    let onSelect: (CleaningLevel) -> Void
+    let onDismiss: () -> Void
+
+    private var currentText: String {
+        results[selected] ?? ""
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // ── Level tabs ────────────────────────────────────────────────
+            HStack(spacing: 0) {
+                ForEach(CleaningLevel.allCases) { level in
+                    let isActive = level == selected
+                    let available = results[level] != nil
+
+                    Button { onSelect(level) } label: {
+                        HStack(spacing: 3) {
+                            Text("\(level.index)")
+                                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                                .foregroundColor(isActive ? .cyan : .white.opacity(0.3))
+                            Text(level.displayName)
+                                .font(.system(size: 9, weight: isActive ? .semibold : .regular))
+                                .foregroundColor(isActive ? .white.opacity(0.85) : .white.opacity(available ? 0.40 : 0.18))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(isActive ? Color.cyan.opacity(0.12) : Color.clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer()
+
+                Button { onDismiss() } label: {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.25))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+
+            Divider().opacity(0.12)
+
+            // ── Transcript text ───────────────────────────────────────────
+            ScrollView(showsIndicators: false) {
+                if currentText.isEmpty && isProcessing {
+                    HStack(spacing: 6) {
+                        ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
+                        Text("Cleaning…")
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.25))
+                            .italic()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                } else {
+                    Text(currentText)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundColor(.white.opacity(0.82))
+                        .lineSpacing(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .id(selected)
+                        .transition(.opacity)
+                }
+            }
+            .frame(maxHeight: .infinity)
+            .animation(.easeInOut(duration: 0.2), value: selected)
+
+            // ── Hint ──────────────────────────────────────────────────────
+            Text("\u{270B} 1-3 · \u{1F44D} done")
+                .font(.system(size: 7, design: .monospaced))
+                .foregroundColor(.white.opacity(0.18))
+                .padding(.bottom, 6)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
