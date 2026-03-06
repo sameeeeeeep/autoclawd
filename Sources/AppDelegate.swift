@@ -313,10 +313,6 @@ struct PillContentView: View {
     @State private var prevTaskCount:          Int = 0
     /// True while the multi-speaker "who are you with?" prompt is active in the canvas.
     @State private var showMultiSpeakerPrompt: Bool = false
-    /// True while the ambient session project-tagging prompt is shown in the canvas.
-    @State private var showAmbientTagging: Bool = false
-    /// Project selected via the ambient tagging prompt (nil = untagged).
-    @State private var ambientTaggedProject: Project? = nil
 
     private static let logTimeFmt: DateFormatter = {
         let f = DateFormatter()
@@ -351,12 +347,28 @@ struct PillContentView: View {
                 SettingsManager.shared.whatsAppEnabled.toggle()
                 isWhatsAppEnabled = SettingsManager.shared.whatsAppEnabled
             },
+            onSessionConfigure:     { appState.configureSession() },
+            onSessionPlay: {
+                switch appState.sessionLifecycle {
+                case .ready:
+                    if let config = appState.sessionConfig {
+                        appState.startUserSession(config: config)
+                    }
+                case .paused:
+                    appState.resumeUserSession()
+                default:
+                    break
+                }
+            },
+            onSessionPause:         { appState.pauseUserSession() },
+            onSessionStop:          { appState.stopUserSession() },
             pipelineStages:         activePipelineStages,
             isLocalModelEnabled:    isLocalModelEnabled,
             isCodeEnabled:          isCodeEnabled,
             isMultiSpeaker:         appState.speakerMode == .multiple,
             isMusicMode:            appState.musicModeEnabled,
             isWhatsAppEnabled:      isWhatsAppEnabled,
+            sessionLifecycle:       appState.sessionLifecycle,
             logLines:               logLines,
             aiCanvasContent:        canvasForCurrentMode,
             analysisIdleSubtitle:   analysisIdleSubtitle,
@@ -433,15 +445,6 @@ struct PillContentView: View {
         .onChange(of: appState.speakerMode) { mode in
             showMultiSpeakerPrompt = (mode == .multiple)
         }
-        // Ambient tagging: show "what are you working on?" when listening starts in ambient mode
-        .onChange(of: appState.isListening) { listening in
-            if listening && appState.pillMode == .ambientIntelligence && !appState.projects.isEmpty {
-                ambientTaggedProject = nil
-                showAmbientTagging = true
-            } else if !listening {
-                showAmbientTagging = false
-            }
-        }
     }
 
     // MARK: - Log dot colour
@@ -500,7 +503,7 @@ struct PillContentView: View {
     private var activePipelineStages: [WidgetStageRow] {
         var rows: [WidgetStageRow] = []
 
-        if case .processing = appState.pillState {
+        if appState.isSessionProcessing {
             rows.append(WidgetStageRow(
                 kind:  .analysis,
                 icon:  "brain",
@@ -533,15 +536,14 @@ struct PillContentView: View {
 
     private var canvasForCurrentMode: AnyView? {
 
-        // ── Smart prompt: ambient session tagging "what are you working on?" ────
-        if showAmbientTagging && appState.pillMode == .ambientIntelligence {
-            return AnyView(AmbientTaggingCanvasView(
-                projects: appState.projects,
-                onSelect: { project in
-                    ambientTaggedProject = project
-                    showAmbientTagging = false
-                },
-                onSkip: { showAmbientTagging = false }
+        // ── Session config panel (highest priority overlay) ─────────────────────
+        if appState.sessionLifecycle == .configuring {
+            return AnyView(SessionConfigView(
+                appState: appState,
+                appearance: WidgetAppearance(
+                    base:  appState.widgetBase,
+                    style: appState.widgetStyle
+                )
             ))
         }
 

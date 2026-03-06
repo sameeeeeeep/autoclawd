@@ -369,6 +369,21 @@ final class PipelineStore: @unchecked Sendable {
         }
     }
 
+    func updateTaskSkillAndWorkflow(id: String, skillID: String, workflowID: String) {
+        queue.async { [self] in
+            let sql = "UPDATE pipeline_tasks SET skill_id = ?, workflow_id = ? WHERE id = ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, skillID, -1, SQLITE_TRANSIENT_PS)
+            sqlite3_bind_text(stmt, 2, workflowID, -1, SQLITE_TRANSIENT_PS)
+            sqlite3_bind_text(stmt, 3, id, -1, SQLITE_TRANSIENT_PS)
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                Log.error(.pipeline, "PipelineStore updateTaskSkillAndWorkflow failed for \(id)")
+            }
+        }
+    }
+
     func fetchRecentTasks(limit: Int = 100) -> [PipelineTaskRecord] {
         queue.sync { _fetchRecentTasks(limit: limit) }
     }

@@ -415,21 +415,104 @@ struct SettingsConsolidatedView: View {
 
     @ViewBuilder
     private func skillsSection() -> some View {
-        VStack(spacing: 16) {
-            Spacer()
-            Image(systemName: "wrench.and.screwdriver")
-                .font(.system(size: 28))
-                .foregroundColor(.secondary)
-            Text("Skills — Coming Soon")
-                .font(.headline)
-            Text("MCP-based skills like web browsing, file management, and calendar integration will be available in a future update.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 300)
-            Spacer()
+        Form {
+            Section("OpenClaw Skills") {
+                Toggle("Enable OpenClaw Skills", isOn: Binding(
+                    get: { SettingsManager.shared.isOpenClawEnabled },
+                    set: { SettingsManager.shared.isOpenClawEnabled = $0 }
+                ))
+
+                HStack {
+                    Text("Skills Directory")
+                    Spacer()
+                    let dir = SkillStore.openClawDirectory().path
+                    Text(dir)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                let openClawSkills = appState.skillStore.availableOpenClawSkills()
+                let allOpenClaw = appState.skillStore.all().filter { $0.isOpenClaw == true }
+
+                HStack {
+                    Text("Loaded Skills")
+                    Spacer()
+                    Text("\(openClawSkills.count) available / \(allOpenClaw.count) total")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Button("Refresh Skills") {
+                    appState.skillStore.refreshOpenClawSkills()
+                    appState.refreshSkills()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button("Open Skills Folder") {
+                    let dir = SkillStore.openClawDirectory()
+                    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    NSWorkspace.shared.open(dir)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            Section("How to Add Skills") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Place OpenClaw-compatible skill folders in the skills directory. Each folder should contain a SKILL.md file with YAML frontmatter and markdown instructions.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Text("Example SKILL.md:")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+
+                    Text("""
+                    ---
+                    name: Web Search
+                    description: Search the web
+                    requires:
+                      bins:
+                        - curl
+                    category: search
+                    ---
+                    # Instructions...
+                    """)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .padding(8)
+                    .background(Color.black.opacity(0.05))
+                    .cornerRadius(6)
+                }
+            }
+
+            Section("Built-in Skills") {
+                let builtinSkills = appState.skillStore.allBuiltin().filter { $0.category != .pipeline }
+                ForEach(builtinSkills, id: \.id) { skill in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(skill.name)
+                                .font(.body)
+                            Text(skill.description)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                        }
+                        Spacer()
+                        Text(skill.category.rawValue)
+                            .font(.caption2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.15))
+                            .cornerRadius(4)
+                    }
+                }
+            }
         }
-        .frame(maxWidth: .infinity)
+        .formStyle(.grouped)
     }
 
     // MARK: - Connections Section

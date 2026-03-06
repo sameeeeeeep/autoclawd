@@ -33,7 +33,7 @@ final class ChunkManager: ObservableObject {
     private let storage = FileStorageManager.shared
     private let settings = SettingsManager.shared
 
-    private var currentSessionID: String?
+    private(set) var currentSessionID: String?
     private let sessionStore = SessionStore.shared
     private let locationService = LocationService.shared
 
@@ -115,16 +115,16 @@ final class ChunkManager: ObservableObject {
         Log.info(.audio, "ChunkManager: force-flush requested (mode change)")
     }
 
-    func startListening() {
+    func startListening(sessionConfig: SessionConfig? = nil) {
         guard case .stopped = state else { return }
         Log.info(.system, "ChunkManager: startListening() called")
         sessionChunkSeq = 0
         previousChunkTrail = ""
         startStreamingTranscriberIfNeeded()
         beginChunkCycle()
-        // Begin a new session row
+        // Begin a new session row (with optional user-defined config)
         let ssid = locationService.currentSSID
-        currentSessionID = sessionStore.beginSession(wifiSSID: ssid)
+        currentSessionID = sessionStore.beginSession(wifiSSID: ssid, config: sessionConfig)
         // Tell ClipboardMonitor about our session so captures get tagged
         ClipboardMonitor.shared.currentSessionID = currentSessionID
     }
@@ -135,7 +135,7 @@ final class ChunkManager: ObservableObject {
         chunkTimer = nil
         audioRecorder.shutdown()   // fully release CoreAudio tap
         ClipboardMonitor.shared.currentSessionID = nil
-        // End the session
+        // Finalise the session row in SessionStore
         if let sid = currentSessionID {
             sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
             if transcriptStore != nil {
@@ -143,7 +143,6 @@ final class ChunkManager: ObservableObject {
                     self?.transcriptStore?.mergeSessionChunks(sessionID: sid)
                 }
             }
-            currentSessionID = nil
             // Tag people mentioned in this session
             let taggingService = PeopleTaggingService()
             taggingService.apiKey = SettingsManager.shared.groqAPIKey
@@ -152,6 +151,7 @@ final class ChunkManager: ObservableObject {
             Task.detached {
                 await taggingService.tagPeople(sessionID: capturedSID, transcript: fullTranscript)
             }
+            currentSessionID = nil
         }
         transcriptBuffer.removeAll()
         state = .stopped
@@ -160,17 +160,7 @@ final class ChunkManager: ObservableObject {
 
     func pause() {
         guard case .listening(let index) = state else { return }
-        // End the session on pause
-        if let sid = currentSessionID {
-            sessionStore.endSession(id: sid, transcriptSnippet: latestTranscriptSnippet())
-            if transcriptStore != nil {
-                Task { [weak self] in
-                    self?.transcriptStore?.mergeSessionChunks(sessionID: sid)
-                }
-            }
-            currentSessionID = nil
-        }
-        transcriptBuffer.removeAll()
+        // Pause does NOT end the session — session stays open until user stops.
         stopStreamingTranscriber()
         let silenceRatio = audioRecorder.silenceRatio
         let duration = Int(Date().timeIntervalSince(chunkStartTime ?? Date()))
@@ -227,12 +217,8 @@ final class ChunkManager: ObservableObject {
 
     func resume() {
         guard case .paused = state else { return }
-        Log.info(.system, "ChunkManager: resuming")
-        sessionChunkSeq = 0
-        previousChunkTrail = ""
-        // Start a fresh session on resume
-        let ssid = locationService.currentSSID
-        currentSessionID = sessionStore.beginSession(wifiSSID: ssid)
+        Log.info(.system, "ChunkManager: resuming (session \(currentSessionID ?? "none") continues)")
+        // Session stays open across pause/resume — no new session created.
         startStreamingTranscriberIfNeeded()
         beginChunkCycle()
     }
@@ -299,25 +285,8 @@ final class ChunkManager: ObservableObject {
                 guard let self else { return }
                 await self.runOneChunk()
                 guard !Task.isCancelled else { return }
-
-                // Session-end: if 10s+ have passed since the last spoken word (streaming mode only),
-                // clear the accumulated transcript and wait for new speech before starting next chunk.
-                if self.streamingTranscriber != nil,
-                   let lastSpeech = self.lastSpeechTime {
-                    let sinceLastSpeech = Date().timeIntervalSince(lastSpeech)
-                    if sinceLastSpeech >= 10.0 {
-                        Log.info(.audio, "ChunkManager: session end (\(Int(sinceLastSpeech))s silence) — clearing transcript")
-                        self.appState?.clearSessionTranscript()
-                        self.lastSpeechTime = nil   // require new speech before resuming
-
-                        // Suspend chunk cycle until new speech is detected.
-                        while !Task.isCancelled && self.lastSpeechTime == nil {
-                            try? await Task.sleep(for: .milliseconds(200))
-                        }
-                        guard !Task.isCancelled else { return }
-                        Log.info(.audio, "ChunkManager: new speech detected — starting fresh session")
-                    }
-                }
+                // Session boundaries are now user-controlled (play/pause/stop).
+                // No automatic 10s silence detection — chunks just keep cycling.
             }
         }
     }
@@ -360,23 +329,12 @@ final class ChunkManager: ObservableObject {
             let shouldFlushForSilence = elapsed >= minChunkSeconds && silenceDuration >= silenceGapSeconds
             let shouldForceFlush = elapsed >= maxChunkSeconds
             let modeFlush = forceFlushNext
-            // Session-end: 10s since last spoken word (streaming mode only).
-            // lastSpeechTime == nil means never spoken → not a session end.
-            let isSessionEndFlush: Bool
-            var sinceLastSpeech: TimeInterval = 0
-            if let lastSpeech = lastSpeechTime, streamingTranscriber != nil {
-                sinceLastSpeech = Date().timeIntervalSince(lastSpeech)
-                isSessionEndFlush = sinceLastSpeech >= 10.0
-            } else {
-                isSessionEndFlush = false
-            }
 
-            if shouldFlushForSilence || shouldForceFlush || modeFlush || isSessionEndFlush {
+            if shouldFlushForSilence || shouldForceFlush || modeFlush {
                 if modeFlush { forceFlushNext = false }
-                let reason = modeFlush          ? "mode-change(\(String(format: "%.1f", elapsed))s)"
-                           : isSessionEndFlush  ? "session-end(\(Int(sinceLastSpeech))s silence)"
-                           : shouldForceFlush   ? "force(\(Int(elapsed))s)"
-                           :                      "silence(\(String(format: "%.1f", elapsed))s)"
+                let reason = modeFlush        ? "mode-change(\(String(format: "%.1f", elapsed))s)"
+                           : shouldForceFlush ? "force(\(Int(elapsed))s)"
+                           :                    "silence(\(String(format: "%.1f", elapsed))s)"
                 Log.info(.audio, "Chunk \(index): flushing — \(reason)")
                 break
             }
@@ -391,14 +349,16 @@ final class ChunkManager: ObservableObject {
         // Groq mode: streamedTranscript is nil — processChunk transcribes the audio file instead.
         let streamedTranscript: String?
         if let streamer = streamingTranscriber {
-            // Freeze the current partial BEFORE committing so it stays visible in the widget
-            // while Ollama cleans it. The next chunk's streaming partials will appear after.
-            appState?.freezeCurrentChunkAsRaw()
             let t = await streamer.commitAndReset()
             streamedTranscript = t.isEmpty ? nil : t
             if streamedTranscript == nil {
                 Log.info(.audio, "Chunk \(index): empty streaming transcript, skipping")
                 return
+            }
+            // Append committed text directly to accumulated transcript and clear live partial.
+            // No intermediate "pending" layer — session model accumulates raw text continuously.
+            if let committed = streamedTranscript {
+                appState?.appendChunkToSession(committed)
             }
         } else {
             streamedTranscript = nil
@@ -533,8 +493,8 @@ final class ChunkManager: ObservableObject {
             SessionStore.shared.updateSessionPlace(id: sid, placeID: pid)
         }
 
-        // Save transcript with session linking (sync to get row ID for pipeline)
-        let transcriptID = transcriptStore?.saveSync(
+        // Save transcript chunk for history (pipeline processes at session end, not per-chunk)
+        _ = transcriptStore?.saveSync(
             text: transcript,
             durationSeconds: duration,
             audioFilePath: audioURL.path,
@@ -557,59 +517,23 @@ final class ChunkManager: ObservableObject {
         }
 
         switch pillMode {
-        case .ambientIntelligence:
-            // New multi-stage pipeline (preferred)
-            if let pipelineOrchestrator, let tid = transcriptID {
-                Log.info(.pipeline, "Chunk \(index) [sess:\(label)]: entering pipeline")
-                await pipelineOrchestrator.processTranscript(
-                    text: transcript,
-                    transcriptID: tid,
-                    sessionID: currentSID,
-                    sessionChunkSeq: sessionChunkSeq,
-                    durationSeconds: duration,
-                    speakerName: speakerName,
-                    source: .ambient
-                )
-            } else if let extractionService {
-                // Legacy fallback
-                Log.info(.extract, "Chunk \(index) [sess:\(label)]: starting extraction (Pass 1)")
-                let items = await extractionService.classifyChunk(
-                    transcript: transcript,
-                    chunkIndex: index,
-                    sessionChunkSeq: sessionChunkSeq,
-                    previousChunkTrail: previousChunkTrail
-                )
-                await MainActor.run { self.onItemsClassified?(items) }
-            } else {
-                Log.warn(.extract, "No extraction or pipeline service configured")
-            }
-
-        case .transcription:
-            // File-based (Groq) mode only: show raw chunk immediately as a preview.
-            // In streaming mode the transcript was already shown word-by-word via onPartial,
-            // so overwriting latestTranscriptChunk here would clobber the next chunk's live partial.
+        case .ambientIntelligence, .transcription, .tasks:
+            // Session model: per-chunk text is already accumulated in liveTranscriptText
+            // via appendChunkToSession() above. No per-chunk pipeline processing.
+            // Full pipeline runs at session-end via processSessionEnd().
+            //
+            // For file-based (Groq) mode: also append to liveTranscriptText since there's
+            // no streaming partial — the file transcription IS the raw text.
             if streamedTranscript == nil {
                 await MainActor.run {
-                    self.appState?.latestTranscriptChunk = transcript
+                    self.appState?.appendChunkToSession(transcript)
                 }
             }
-            // Run through cleaning stage — cleaned text is pushed to liveTranscriptText via callback.
-            if let pipelineOrchestrator, let tid = transcriptID {
-                await pipelineOrchestrator.processTranscript(
-                    text: transcript,
-                    transcriptID: tid,
-                    sessionID: currentSID,
-                    sessionChunkSeq: sessionChunkSeq,
-                    durationSeconds: duration,
-                    speakerName: speakerName,
-                    source: .transcription
-                )
-            }
+            Log.info(.pipeline, "Chunk \(index) [sess:\(label)]: raw text accumulated (pipeline deferred to session end)")
 
         case .aiSearch:
             guard let qaService, let qaStore else { break }
             do {
-                // Build rich context from AppState if available, otherwise fall back to basic
                 let answer: String
                 if let appState = self.appState {
                     let context = await appState.buildQAContext()
@@ -628,23 +552,7 @@ final class ChunkManager: ObservableObject {
                 Log.error(.qa, "QA failed: \(error.localizedDescription)")
             }
 
-        case .tasks:
-            // Tasks mode: full ambient pipeline but execution is suppressed at the orchestrator level.
-            if let pipelineOrchestrator, let tid = transcriptID {
-                Log.info(.pipeline, "Chunk \(index) [sess:\(label)]: entering pipeline [tasks]")
-                await pipelineOrchestrator.processTranscript(
-                    text: transcript,
-                    transcriptID: tid,
-                    sessionID: currentSID,
-                    sessionChunkSeq: sessionChunkSeq,
-                    durationSeconds: duration,
-                    speakerName: speakerName,
-                    source: .tasks
-                )
-            }
-
         case .code:
-            // Feed voice transcription into the active co-pilot session
             await MainActor.run {
                 self.appState?.feedVoiceToCodeSession(transcript)
             }

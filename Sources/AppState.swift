@@ -181,14 +181,23 @@ final class AppState: ObservableObject {
     @Published var pipelineTasks: [PipelineTaskRecord] = []
     @Published var skills: [Skill] = []
 
+    /// True while session-end pipeline processing is active (cleaning or analysis).
+    /// Used by the widget to glow the Analysis status row.
+    @Published var isSessionProcessing = false
+
     // Widget live data — latest transcript chunk for the floating widget
     @Published var latestTranscriptChunk: String = ""
     /// Committed chunk text that is awaiting Ollama cleaning (shown at medium opacity).
-    /// Cleared when the cleaned version arrives via appendToLiveTranscript().
+    /// Cleared when the cleaned version arrives via appendRawTranscript().
     @Published var pendingRawSegment: String = ""
-    /// Accumulated CLEANED transcript text for the current transcription session.
-    /// Resets when the pill leaves transcription mode.
+    /// Accumulated RAW transcript text for the current session.
+    /// No Ollama cleaning per-chunk — raw text accumulates during recording.
+    /// Cleaned once at session end via processSessionEnd().
     @Published var liveTranscriptText: String = ""
+
+    // MARK: - User-Defined Session State
+    @Published var sessionLifecycle: SessionLifecycleState = .undefined
+    @Published var sessionConfig: SessionConfig?
 
     // Code widget state
     @Published var codeWidgetStep: CodeWidgetStep = .projectSelect
@@ -355,7 +364,7 @@ final class AppState: ObservableObject {
         )
         let taskExecSvc = TaskExecutionService(
             pipelineStore: pStore, claudeCodeRunner: claudeCodeRunner,
-            projectStore: projectStore
+            projectStore: projectStore, skillStore: sStore
         )
         taskExecutionService = taskExecSvc
         pipelineOrchestrator = PipelineOrchestrator(
@@ -493,6 +502,10 @@ final class AppState: ObservableObject {
         chunkManager.startListening()
         isListening = true
         pillState = .listening
+        // Sync session lifecycle — recording started outside user-defined flow
+        if sessionLifecycle == .undefined {
+            sessionLifecycle = .active
+        }
         Log.info(.ui, "Mic started")
     }
 
@@ -501,6 +514,10 @@ final class AppState: ObservableObject {
         chunkManager.stopListening()
         isListening = false
         pillState = .paused
+        // Sync session lifecycle
+        if sessionLifecycle == .active || sessionLifecycle == .paused {
+            sessionLifecycle = .undefined
+        }
         Log.info(.ui, "Mic stopped")
     }
 
@@ -510,6 +527,7 @@ final class AppState: ObservableObject {
             chunkManager.pause()
             isListening = false
             pillState = .paused
+            if sessionLifecycle == .active { sessionLifecycle = .paused }
             Log.info(.ui, "Mic paused")
         } else {
             // Resume: restart chunk cycle (resume from paused, or start fresh)
@@ -520,6 +538,9 @@ final class AppState: ObservableObject {
             }
             isListening = true
             pillState = .listening
+            if sessionLifecycle == .paused || sessionLifecycle == .undefined {
+                sessionLifecycle = .active
+            }
             Log.info(.ui, "Mic resumed")
         }
     }
@@ -539,14 +560,24 @@ final class AppState: ObservableObject {
         pasteService.paste(text: text)
     }
 
-    /// Append a cleaned chunk to the live transcript accumulator.
-    /// Called by the pipeline after every cleaning stage (all modes).
-    /// Clears pendingRawSegment — the cleaned text has now replaced it.
-    func appendToLiveTranscript(_ text: String) {
+    /// Append raw transcribed text to the live transcript accumulator.
+    /// Called per-chunk after transcription (SFSpeech/Groq). No Ollama cleaning per-chunk.
+    /// Clears pendingRawSegment — the transcribed text has now replaced it.
+    func appendRawTranscript(_ text: String) {
         let separator = liveTranscriptText.isEmpty ? "" : " "
         liveTranscriptText += separator + text
-        pendingRawSegment = ""   // cleaned version has arrived — drop the raw placeholder
+        pendingRawSegment = ""   // transcribed version has arrived — drop the raw placeholder
         // Do NOT touch latestTranscriptChunk — it may already be accumulating the next chunk
+    }
+
+    /// Session model: append committed chunk text directly to the accumulated transcript.
+    /// No intermediate "pending" layer — text flows: streaming partial → committed → accumulated.
+    /// Clears the live streaming partial so the next chunk starts fresh.
+    func appendChunkToSession(_ text: String) {
+        let separator = liveTranscriptText.isEmpty ? "" : " "
+        liveTranscriptText += separator + text
+        latestTranscriptChunk = ""   // next chunk's streaming will start fresh
+        pendingRawSegment = ""       // no pending layer in session model
     }
 
     /// Clears the accumulated session transcript.
@@ -557,6 +588,94 @@ final class AppState: ObservableObject {
         pendingRawSegment = ""
         latestTranscriptChunk = ""
         Log.info(.ui, "Session transcript cleared (new session)")
+    }
+
+    // MARK: - User-Defined Session Lifecycle
+
+    /// Open the session config panel.
+    func configureSession() {
+        sessionLifecycle = .configuring
+        sessionConfig = SessionConfig()
+    }
+
+    /// Dismiss the config panel without starting.
+    func dismissSessionConfig() {
+        sessionLifecycle = .undefined
+        sessionConfig = nil
+    }
+
+    /// Start recording with the given session config.
+    func startUserSession(config: SessionConfig) {
+        sessionConfig = config
+        sessionLifecycle = .active
+        clearSessionTranscript()
+
+        // Derive pill mode from context — default to ambient intelligence
+        if pillMode != .ambientIntelligence && pillMode != .transcription && pillMode != .tasks {
+            pillMode = .ambientIntelligence
+        }
+
+        chunkManager.startListening(sessionConfig: config)
+        Log.info(.system, "User session started (project: \(config.projectName ?? "none"))")
+    }
+
+    /// Pause the active recording session.
+    func pauseUserSession() {
+        guard sessionLifecycle == .active else { return }
+        sessionLifecycle = .paused
+        chunkManager.pause()
+        Log.info(.system, "User session paused")
+    }
+
+    /// Resume a paused recording session.
+    func resumeUserSession() {
+        guard sessionLifecycle == .paused else { return }
+        sessionLifecycle = .active
+        chunkManager.resume()
+        Log.info(.system, "User session resumed")
+    }
+
+    /// Stop the session and trigger full pipeline processing on accumulated text.
+    func stopUserSession() {
+        guard sessionLifecycle == .active || sessionLifecycle == .paused else { return }
+
+        // Capture the full accumulated raw text BEFORE stopping
+        let fullRawText = liveTranscriptText
+        let capturedConfig = sessionConfig
+        let capturedSessionID = chunkManager.currentSessionID
+        let capturedPillMode = pillMode
+
+        // Stop recording
+        chunkManager.stopListening()
+
+        // Determine pipeline source based on current mode
+        let source: PipelineSource
+        switch capturedPillMode {
+        case .tasks:          source = .tasks
+        case .transcription:  source = .transcription
+        default:              source = .ambient
+        }
+
+        // Dispatch session-end pipeline processing
+        if !fullRawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let orchestrator = pipelineOrchestrator
+            Task.detached {
+                await orchestrator.processSessionEnd(
+                    fullText: fullRawText,
+                    sessionID: capturedSessionID,
+                    sessionContext: capturedConfig,
+                    source: source
+                )
+            }
+            Log.info(.system, "User session stopped — dispatching session-level processing (\(fullRawText.count) chars)")
+        } else {
+            Log.info(.system, "User session stopped — no transcript to process")
+        }
+
+        // Reset state
+        clearSessionTranscript()
+        sessionLifecycle = .undefined
+        sessionConfig = nil
     }
 
     /// Called at the chunk boundary: freezes the current streaming partial as a pending
@@ -1146,11 +1265,15 @@ final class AppState: ObservableObject {
             self?.refreshPipeline()
         }
 
-        pipelineOrchestrator.onTranscriptionCleaned = { [weak self] cleanedText in
+        pipelineOrchestrator.onTranscriptionCleaned = { [weak self] rawText in
             guard let self else { return }
             Task { @MainActor in
-                self.appendToLiveTranscript(cleanedText)
+                self.appendRawTranscript(rawText)
             }
+        }
+
+        pipelineOrchestrator.onSessionProcessingChanged = { [weak self] active in
+            self?.isSessionProcessing = active
         }
 
         // Observe audio level changes

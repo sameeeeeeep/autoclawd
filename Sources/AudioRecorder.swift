@@ -172,7 +172,13 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
             storedInputFormat = inputFormat
 
             inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-                guard let self, self._recording.withLock({ $0 }) else { return }
+                guard let self else { return }
+                // Always forward to external handlers (streaming transcription, ShazamKit)
+                // so they receive continuous audio regardless of chunk boundaries.
+                let handler = self._onBuffer.withLock { $0 }
+                handler?(buffer)
+                // File writing and level metering are gated on _recording.
+                guard self._recording.withLock({ $0 }) else { return }
                 self.processBuffer(buffer)
             }
 
@@ -219,13 +225,15 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
 
     // MARK: - Stop
 
-    /// Stop recording and return the file URL.
-    /// Clears tempFileURL so a second call returns nil — prevents double-transcription
-    /// when pause() and runOneChunk() both call stop on the same chunk.
+    /// Stop writing audio and return the file URL.
+    /// The AVAudioEngine is intentionally kept running so the next chunk can start
+    /// instantly without stopping/restarting CoreAudio — which would cause a
+    /// system-wide audio glitch (e.g. breaking movie playback) every 30 seconds.
+    /// Call shutdown() when the mic should fully go off (user pauses / stops).
     func stopRecording() -> URL? {
         _recording.withLock { $0 = false }
         audioFileQueue.sync { audioFile = nil }
-        audioEngine?.stop()
+        // Engine stays running — tap callback returns early when _recording == false.
         DispatchQueue.main.async {
             self.isRecording = false
             self.audioLevel = 0.0
@@ -233,6 +241,18 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
         let url = tempFileURL
         tempFileURL = nil
         return url
+    }
+
+    /// Fully stops the audio engine and releases the hardware tap.
+    /// Call this when the mic should go completely off (pause / stop listening).
+    /// It is safe to call multiple times.
+    func shutdown() {
+        _ = stopRecording()                          // set _recording=false, close file
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        audioEngine?.stop()
+        audioEngine = nil
+        currentDeviceUID = nil
+        storedInputFormat = nil
     }
 
     // MARK: - Buffer Processing
@@ -261,10 +281,6 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
                 try? file.write(from: buffer)
             }
         }
-
-        // Forward buffer to registered handlers (e.g. ShazamKitService)
-        let handler = _onBuffer.withLock { $0 }
-        handler?(buffer)
 
         // Update level for UI
         let scaled = min(rms * 10.0, 1.0)

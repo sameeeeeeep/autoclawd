@@ -5,7 +5,9 @@ import Foundation
 /// Central coordinator for the multi-stage pipeline.
 /// Called by ChunkManager instead of ExtractionService.classifyChunk().
 ///
-/// Pipeline: Raw Transcript → Cleaning → Analysis → Task Creation → Task Execution
+/// Pipeline modes:
+/// - Per-chunk (during session): raw text fires callback for display only. No Ollama.
+/// - Session-end: full accumulated text → Clean → Analyze → Task Create → Execute.
 ///
 /// A serial `SerialJobQueue` ensures Ollama is never hammered concurrently.
 /// Jobs queue up and drain one-at-a-time, with a 1.5 s stagger between jobs
@@ -17,9 +19,12 @@ final class PipelineOrchestrator: @unchecked Sendable {
     private let taskExecutionService: TaskExecutionService
 
     var onPipelineUpdated: (() -> Void)?
-    /// Called after cleaning completes for transcription-mode chunks.
-    /// Receives the cleaned text so AppState can accumulate it for the live transcript display.
+    /// Called per-chunk with raw transcribed text for live display.
+    /// No Ollama cleaning — just the raw SFSpeech/Groq transcript.
     var onTranscriptionCleaned: ((String) -> Void)?
+    /// Called when session-end processing starts/finishes.
+    /// True = actively cleaning or analysing. Used for widget glow.
+    var onSessionProcessingChanged: ((Bool) -> Void)?
 
     /// Serial queue — never runs two Ollama calls in parallel.
     private var jobQueue: SerialJobQueue!
@@ -43,9 +48,8 @@ final class PipelineOrchestrator: @unchecked Sendable {
 
     // MARK: - Public API
 
-    /// Enqueue a new transcript for serial pipeline processing.
-    /// Jobs are processed one-at-a-time with a 1.5 s stagger so Ollama is never
-    /// hit concurrently. Old unprocessed jobs are still run (FIFO order).
+    /// Enqueue a new transcript chunk for per-chunk processing (display only, no Ollama).
+    /// Jobs are processed one-at-a-time with a 1.5 s stagger.
     func processTranscript(
         text: String,
         transcriptID: Int64,
@@ -64,6 +68,25 @@ final class PipelineOrchestrator: @unchecked Sendable {
         await jobQueue.enqueue(job)
     }
 
+    /// Enqueue a session-end job. Full pipeline: Clean → Analyze → Tasks → Execute.
+    /// Called when the user stops a session.
+    func processSessionEnd(
+        fullText: String,
+        sessionID: String?,
+        sessionContext: SessionConfig?,
+        source: PipelineSource = .ambient
+    ) async {
+        let job = PipelineJob(
+            text: fullText, transcriptID: 0,
+            sessionID: sessionID, sessionChunkSeq: 0,
+            durationSeconds: 0, speakerName: nil,
+            source: source,
+            isSessionEnd: true,
+            sessionContext: sessionContext
+        )
+        await jobQueue.enqueue(job)
+    }
+
     /// Execute a task that was manually accepted by the user.
     func executeAcceptedTask(_ task: PipelineTaskRecord) async {
         Log.info(.pipeline, "Pipeline: executing accepted task \(task.id)")
@@ -76,14 +99,8 @@ final class PipelineOrchestrator: @unchecked Sendable {
     /// Runs one pipeline job synchronously (called serially by SerialJobQueue).
     private func _execute(_ job: PipelineJob) async {
         let text             = job.text
-        let transcriptID     = job.transcriptID
         let sessionID        = job.sessionID
-        let sessionChunkSeq  = job.sessionChunkSeq
-        let durationSeconds  = job.durationSeconds
-        let speakerName      = job.speakerName
         let source           = job.source
-
-        Log.info(.pipeline, "Pipeline[\(source.rawValue)]: processing transcript (\(text.count) chars, session=\(sessionID ?? "none"), seq=\(sessionChunkSeq))")
 
         // Code mode: the widget manages its own execution — no pipeline stages needed.
         if source == .code {
@@ -92,79 +109,129 @@ final class PipelineOrchestrator: @unchecked Sendable {
             return
         }
 
-        // Stage 1: Clean (runs for all non-code sources)
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // SESSION-END: Full pipeline on accumulated text
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        if job.isSessionEnd {
+            Log.info(.pipeline, "Pipeline[session-end]: processing full session (\(text.count) chars, source=\(source.rawValue))")
+            await executeSessionEnd(job)
+            return
+        }
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // PER-CHUNK: Raw text callback for display only — no Ollama
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        Log.info(.pipeline, "Pipeline[\(source.rawValue)]: per-chunk raw text (\(text.count) chars, session=\(sessionID ?? "none"))")
+
+        // Fire raw text callback for live display in widget
+        if !text.isEmpty {
+            onTranscriptionCleaned?(text)
+        }
+
+        await notifyUpdate()
+
+        // WhatsApp messages are self-contained — run full pipeline per-message
+        if source == .whatsapp {
+            Log.info(.pipeline, "Pipeline[whatsapp]: running full per-message pipeline")
+            await executeFullPipeline(job)
+            return
+        }
+
+        // All other per-chunk sources: display only, done.
+        Log.info(.pipeline, "Pipeline[\(source.rawValue)]: per-chunk display done (analysis deferred to session end)")
+    }
+
+    // MARK: - Session-End Full Pipeline
+
+    /// Run the full pipeline on the accumulated session text.
+    private func executeSessionEnd(_ job: PipelineJob) async {
+        let text = job.text
+        let sessionID = job.sessionID
+        let source = job.source
+        let sessionContext = job.sessionContext
+
+        // Signal processing started (widget glow)
+        await MainActor.run { [weak self] in self?.onSessionProcessingChanged?(true) }
+
+        // Use a local flag to ensure we always signal completion, even on early returns.
+        defer {
+            // Schedule on MainActor — safe to fire-and-forget from defer.
+            let callback = onSessionProcessingChanged
+            Task { @MainActor in callback?(false) }
+        }
+
+        // Stage 1: Clean the full session text
+        Log.info(.pipeline, "Pipeline[session-end]: Stage 1 — cleaning full session text")
         guard let cleaned = await cleaningService.processNewTranscript(
             text: text,
-            transcriptID: transcriptID,
+            transcriptID: 0,
             sessionID: sessionID,
-            sessionChunkSeq: sessionChunkSeq,
-            durationSeconds: durationSeconds,
-            speakerName: speakerName
+            sessionChunkSeq: 0,
+            durationSeconds: 0,
+            speakerName: nil
         ) else {
-            Log.info(.pipeline, "Pipeline: cleaning returned nil (likely waiting for more chunks)")
+            Log.info(.pipeline, "Pipeline[session-end]: cleaning returned nil")
             return
         }
-
         await notifyUpdate()
 
-        // Always fire the cleaned callback so the transcript widget accumulates text for all modes.
-        // This enables session-long transcript retention regardless of pill mode.
-        if !cleaned.cleanedText.isEmpty {
-            onTranscriptionCleaned?(cleaned.cleanedText)
-        }
-
-        // Transcription mode: clean only — stop here.
+        // Transcription mode: clean only — return the polished full-session transcript
         if source == .transcription {
-            Log.info(.pipeline, "Pipeline[transcription]: stopping after cleaning stage")
+            if !cleaned.cleanedText.isEmpty {
+                onTranscriptionCleaned?(cleaned.cleanedText)
+            }
+            Log.info(.pipeline, "Pipeline[session-end/transcription]: cleaned \(cleaned.cleanedText.count) chars — done")
             return
         }
 
-        // Ollama disabled: ambient transcripts stop after cleaning to save battery/tokens.
+        // Ollama disabled: stop after cleaning
         let ollamaOn = SettingsManager.shared.isOllamaEnabled
-        if !ollamaOn && source == .ambient {
-            Log.info(.pipeline, "Pipeline[ambient]: Ollama disabled — stopping after cleaning stage")
+        if !ollamaOn {
+            Log.info(.pipeline, "Pipeline[session-end]: Ollama disabled — stopping after cleaning")
             return
         }
 
-        // Stage 2: Analyze (ambient + whatsapp + tasks)
-        guard let analysis = await analysisService.analyze(cleaned: cleaned) else {
-            Log.info(.pipeline, "Pipeline: analysis returned nil")
+        // Stage 2: Analyze (with session context if available)
+        Log.info(.pipeline, "Pipeline[session-end]: Stage 2 — analyzing")
+        guard let analysis = await analysisService.analyze(
+            cleaned: cleaned,
+            sessionContext: sessionContext
+        ) else {
+            Log.info(.pipeline, "Pipeline[session-end]: analysis returned nil")
             return
         }
-
         await notifyUpdate()
 
-        // Grab any context captures (screenshots, clipboard images) from this session
+        // Grab any context captures from this session
         let captures = ContextCaptureStore.shared.recentUnattached(sessionID: sessionID)
         let capturePaths = captures.map(\.filePath).filter { !$0.isEmpty }
         if !captures.isEmpty {
-            Log.info(.pipeline, "Pipeline: found \(captures.count) context capture(s) for session")
+            Log.info(.pipeline, "Pipeline[session-end]: found \(captures.count) context capture(s)")
             ContextCaptureStore.shared.markAttached(ids: captures.map(\.id))
         }
 
-        // Stage 3: Create tasks (with attached context captures)
+        // Stage 3: Create tasks
         let tasks = await taskCreationService.createTasks(from: analysis, attachmentPaths: capturePaths)
-
         await notifyUpdate()
 
         if tasks.isEmpty {
-            Log.info(.pipeline, "Pipeline: no tasks created (non-actionable transcript)")
+            Log.info(.pipeline, "Pipeline[session-end]: no tasks created (non-actionable)")
             return
         }
 
-        Log.info(.pipeline, "Pipeline: \(tasks.count) task(s) created" +
+        Log.info(.pipeline, "Pipeline[session-end]: \(tasks.count) task(s) created" +
                  (capturePaths.isEmpty ? "" : " with \(capturePaths.count) attachment(s)"))
 
-        // Tasks mode: stop after task creation — no auto-execution.
+        // Tasks mode: stop after task creation — no auto-execution
         if source == .tasks {
-            Log.info(.pipeline, "Pipeline[tasks]: task creation complete — skipping execution")
+            Log.info(.pipeline, "Pipeline[session-end/tasks]: task creation complete — skipping execution")
             return
         }
 
-        // Stage 4: Execute auto tasks (respects isCodeExecutionEnabled toggle)
+        // Stage 4: Execute auto tasks
         let execOn = SettingsManager.shared.isCodeExecutionEnabled
         guard execOn else {
-            Log.info(.pipeline, "Pipeline: code execution disabled — tasks created but not run")
+            Log.info(.pipeline, "Pipeline[session-end]: code execution disabled — tasks created but not run")
             return
         }
 
@@ -173,7 +240,58 @@ final class PipelineOrchestrator: @unchecked Sendable {
             await notifyUpdate()
         }
 
-        Log.info(.pipeline, "Pipeline: complete")
+        Log.info(.pipeline, "Pipeline[session-end]: complete")
+    }
+
+    // MARK: - Legacy Full Pipeline (WhatsApp per-message)
+
+    /// Full pipeline for self-contained messages (WhatsApp).
+    private func executeFullPipeline(_ job: PipelineJob) async {
+        let text            = job.text
+        let transcriptID    = job.transcriptID
+        let sessionID       = job.sessionID
+        let sessionChunkSeq = job.sessionChunkSeq
+        let durationSeconds = job.durationSeconds
+        let speakerName     = job.speakerName
+
+        // Stage 1: Clean
+        guard let cleaned = await cleaningService.processNewTranscript(
+            text: text,
+            transcriptID: transcriptID,
+            sessionID: sessionID,
+            sessionChunkSeq: sessionChunkSeq,
+            durationSeconds: durationSeconds,
+            speakerName: speakerName
+        ) else {
+            return
+        }
+        await notifyUpdate()
+
+        // Stage 2: Analyze
+        guard let analysis = await analysisService.analyze(cleaned: cleaned) else {
+            return
+        }
+        await notifyUpdate()
+
+        // Stage 3: Create tasks
+        let captures = ContextCaptureStore.shared.recentUnattached(sessionID: sessionID)
+        let capturePaths = captures.map(\.filePath).filter { !$0.isEmpty }
+        if !captures.isEmpty {
+            ContextCaptureStore.shared.markAttached(ids: captures.map(\.id))
+        }
+        let tasks = await taskCreationService.createTasks(from: analysis, attachmentPaths: capturePaths)
+        await notifyUpdate()
+
+        guard !tasks.isEmpty else { return }
+
+        // Stage 4: Execute
+        let execOn = SettingsManager.shared.isCodeExecutionEnabled
+        guard execOn else { return }
+
+        for task in tasks where task.mode == .auto {
+            await taskExecutionService.execute(task: task)
+            await notifyUpdate()
+        }
     }
 
     // MARK: - Private
@@ -195,6 +313,23 @@ private struct PipelineJob {
     let durationSeconds: Int
     let speakerName: String?
     let source: PipelineSource
+    let isSessionEnd: Bool
+    let sessionContext: SessionConfig?
+
+    init(text: String, transcriptID: Int64, sessionID: String?,
+         sessionChunkSeq: Int, durationSeconds: Int, speakerName: String?,
+         source: PipelineSource, isSessionEnd: Bool = false,
+         sessionContext: SessionConfig? = nil) {
+        self.text = text
+        self.transcriptID = transcriptID
+        self.sessionID = sessionID
+        self.sessionChunkSeq = sessionChunkSeq
+        self.durationSeconds = durationSeconds
+        self.speakerName = speakerName
+        self.source = source
+        self.isSessionEnd = isSessionEnd
+        self.sessionContext = sessionContext
+    }
 }
 
 // MARK: - SerialJobQueue

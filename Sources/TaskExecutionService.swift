@@ -4,10 +4,12 @@ import Foundation
 
 /// Stage 4: Executes tasks based on their workflow. Logs steps progressively.
 /// Now uses interactive streaming (stream-json) for real-time progress.
+/// Supports OpenClaw skill instruction injection for expanded execution capabilities.
 final class TaskExecutionService: @unchecked Sendable {
     private let pipelineStore: PipelineStore
     private let claudeCodeRunner: ClaudeCodeRunner
     private let projectStore: ProjectStore
+    private let skillStore: SkillStore
 
     /// Active sessions keyed by task ID — allows follow-up messages.
     private var activeSessions: [String: ClaudeSession] = [:]
@@ -17,10 +19,11 @@ final class TaskExecutionService: @unchecked Sendable {
     var onStepUpdated: (() -> Void)?
 
     init(pipelineStore: PipelineStore, claudeCodeRunner: ClaudeCodeRunner,
-         projectStore: ProjectStore) {
+         projectStore: ProjectStore, skillStore: SkillStore) {
         self.pipelineStore = pipelineStore
         self.claudeCodeRunner = claudeCodeRunner
         self.projectStore = projectStore
+        self.skillStore = skillStore
     }
 
     // MARK: - Public API
@@ -48,6 +51,8 @@ final class TaskExecutionService: @unchecked Sendable {
         switch effectiveWorkflow {
         case "autoclawd-claude-code", "autoclawd-claude-code-linear", "autoclawd-claude-code-meta":
             await executeViaClaude(task: task, project: project)
+        case "autoclawd-openclaw":
+            await executeViaOpenClaw(task: task, project: project)
         default:
             logStep(taskID: task.id, index: 1,
                     description: "No executable workflow for '\(effectiveWorkflow)'",
@@ -113,7 +118,88 @@ final class TaskExecutionService: @unchecked Sendable {
         // Store session for follow-up messages
         sessionsLock.withLock { activeSessions[task.id] = session }
 
-        var stepIdx = 2
+        // Stream events using shared logic
+        await streamClaudeEvents(taskID: task.id, session: session, eventStream: eventStream, startStepIdx: 2)
+    }
+
+    // MARK: - OpenClaw Skill Execution
+
+    /// Execute a task using an OpenClaw skill. Loads the skill's SKILL.md instructions
+    /// and prepends them to the Claude Code prompt so Claude has the skill context.
+    private func executeViaOpenClaw(task: PipelineTaskRecord, project: Project) async {
+        // Load the matched skill and its instructions
+        let skill = task.skillID.flatMap { skillStore.load(id: $0) }
+        let instructions = skill?.instructions ?? ""
+
+        if !instructions.isEmpty {
+            logStep(taskID: task.id, index: 1,
+                    description: "Loading OpenClaw skill: \(skill?.name ?? task.skillID ?? "unknown")")
+        } else {
+            logStep(taskID: task.id, index: 1,
+                    description: "OpenClaw skill has no instructions, falling back to direct execution")
+        }
+
+        // Build the enhanced prompt with skill instructions prepended
+        let enhancedPrompt: String
+        if !instructions.isEmpty {
+            enhancedPrompt = """
+            # Skill Instructions
+
+            You have been given a specific skill with detailed instructions on how to complete this type of task. Follow these instructions carefully.
+
+            \(instructions)
+
+            ---
+
+            # Task
+
+            \(task.prompt)
+            """
+        } else {
+            enhancedPrompt = task.prompt
+        }
+
+        // Inject skill-specific environment variables if present
+        let skillEnvVars = skill?.envVars
+
+        // Load context capture attachments
+        let attachments: [Attachment] = task.attachmentPaths.compactMap { path in
+            ContextCaptureStore.loadAttachment(path: path)
+        }
+
+        let attachDesc = attachments.isEmpty ? "" : " with \(attachments.count) attachment(s)"
+        logStep(taskID: task.id, index: 2,
+                description: "Starting Claude Code session with OpenClaw skill context\(attachDesc)...")
+        Log.info(.taskExec, "Task \(task.id): executing via OpenClaw skill '\(skill?.name ?? "?")' in \(project.localPath)")
+
+        guard let (session, eventStream) = claudeCodeRunner.startSession(
+            prompt: enhancedPrompt,
+            in: project,
+            attachments: attachments,
+            extraEnvVars: skillEnvVars
+        ) else {
+            logStep(taskID: task.id, index: 3, description: "Failed to start Claude CLI", status: "failed")
+            pipelineStore.updateTaskStatus(id: task.id, status: .needs_input)
+            return
+        }
+
+        // Store session for follow-up messages
+        sessionsLock.withLock { activeSessions[task.id] = session }
+
+        // Stream events (reuse the same streaming logic as executeViaClaude)
+        await streamClaudeEvents(taskID: task.id, session: session, eventStream: eventStream, startStepIdx: 3)
+    }
+
+    // MARK: - Shared Claude Streaming
+
+    /// Shared event streaming logic used by both executeViaClaude and executeViaOpenClaw.
+    private func streamClaudeEvents(
+        taskID: String,
+        session: ClaudeSession,
+        eventStream: AsyncThrowingStream<ClaudeEvent, Error>,
+        startStepIdx: Int
+    ) async {
+        var stepIdx = startStepIdx
         var currentToolName: String? = nil
         var accumulatedText = ""
         var lastTextFlushTime = Date()
@@ -122,26 +208,25 @@ final class TaskExecutionService: @unchecked Sendable {
             for try await event in eventStream {
                 switch event {
                 case .sessionInit(let sid):
-                    logStep(taskID: task.id, index: stepIdx, description: "Session: \(sid.prefix(12))...")
+                    logStep(taskID: taskID, index: stepIdx, description: "Session: \(sid.prefix(12))...")
                     stepIdx += 1
 
                 case .toolUse(let name, let input):
-                    // Flush any accumulated text first
                     if !accumulatedText.isEmpty {
-                        logStep(taskID: task.id, index: stepIdx, description: accumulatedText)
+                        logStep(taskID: taskID, index: stepIdx, description: accumulatedText)
                         stepIdx += 1
                         accumulatedText = ""
                     }
                     currentToolName = name
                     let desc = input.isEmpty ? "Using \(name)..." : "Using \(name): \(input.prefix(120))"
-                    logStep(taskID: task.id, index: stepIdx, description: desc)
+                    logStep(taskID: taskID, index: stepIdx, description: desc)
                     stepIdx += 1
                     notifyUI()
 
                 case .toolResult(_, let output):
                     if let tool = currentToolName {
                         let desc = "\(tool) done" + (output.isEmpty ? "" : ": \(output.prefix(200))")
-                        logStep(taskID: task.id, index: stepIdx, description: desc)
+                        logStep(taskID: taskID, index: stepIdx, description: desc)
                         stepIdx += 1
                         currentToolName = nil
                         notifyUI()
@@ -149,12 +234,11 @@ final class TaskExecutionService: @unchecked Sendable {
 
                 case .text(let text):
                     accumulatedText += text
-                    // Flush text periodically (every 2s or at newlines)
                     let now = Date()
                     if now.timeIntervalSince(lastTextFlushTime) > 2.0 || accumulatedText.contains("\n") {
                         let trimmed = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
-                            logStep(taskID: task.id, index: stepIdx, description: trimmed)
+                            logStep(taskID: taskID, index: stepIdx, description: trimmed)
                             stepIdx += 1
                             notifyUI()
                         }
@@ -163,65 +247,61 @@ final class TaskExecutionService: @unchecked Sendable {
                     }
 
                 case .result(let text):
-                    // Flush remaining text
                     if !accumulatedText.isEmpty {
                         let trimmed = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
-                            logStep(taskID: task.id, index: stepIdx, description: trimmed)
+                            logStep(taskID: taskID, index: stepIdx, description: trimmed)
                             stepIdx += 1
                         }
                         accumulatedText = ""
                     }
-                    // Log final result
                     if !text.isEmpty {
-                        logStep(taskID: task.id, index: stepIdx, description: text)
+                        logStep(taskID: taskID, index: stepIdx, description: text)
                         stepIdx += 1
                     }
-                    logStep(taskID: task.id, index: stepIdx, description: "Task completed successfully")
-                    pipelineStore.updateTaskStatus(id: task.id, status: .completed, completedAt: Date())
-                    Log.info(.taskExec, "Task \(task.id): completed")
+                    logStep(taskID: taskID, index: stepIdx, description: "Task completed successfully")
+                    pipelineStore.updateTaskStatus(id: taskID, status: .completed, completedAt: Date())
+                    Log.info(.taskExec, "Task \(taskID): completed")
                     notifyUI()
 
                 case .status(let msg):
-                    // Update the latest step or add a new one for status messages
-                    logStep(taskID: task.id, index: stepIdx, description: msg, status: "running")
+                    logStep(taskID: taskID, index: stepIdx, description: msg, status: "running")
                     stepIdx += 1
                     notifyUI()
 
                 case .error(let msg):
-                    logStep(taskID: task.id, index: stepIdx, description: "Error: \(msg)", status: "failed")
+                    logStep(taskID: taskID, index: stepIdx, description: "Error: \(msg)", status: "failed")
                     stepIdx += 1
                     notifyUI()
                 }
             }
 
-            // Stream ended — if no explicit result event, mark as complete
-            let currentStatus = pipelineStore.fetchRecentTasks().first { $0.id == task.id }?.status
+            // Stream ended
+            let currentStatus = pipelineStore.fetchRecentTasks().first { $0.id == taskID }?.status
             if currentStatus == .ongoing {
-                // Flush remaining text
                 if !accumulatedText.isEmpty {
                     let trimmed = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty {
-                        logStep(taskID: task.id, index: stepIdx, description: trimmed)
+                        logStep(taskID: taskID, index: stepIdx, description: trimmed)
                         stepIdx += 1
                     }
                 }
-                logStep(taskID: task.id, index: stepIdx, description: "Task completed successfully")
-                pipelineStore.updateTaskStatus(id: task.id, status: .completed, completedAt: Date())
-                Log.info(.taskExec, "Task \(task.id): completed (stream ended)")
+                logStep(taskID: taskID, index: stepIdx, description: "Task completed successfully")
+                pipelineStore.updateTaskStatus(id: taskID, status: .completed, completedAt: Date())
+                Log.info(.taskExec, "Task \(taskID): completed (stream ended)")
                 notifyUI()
             }
 
         } catch {
-            logStep(taskID: task.id, index: stepIdx,
+            logStep(taskID: taskID, index: stepIdx,
                     description: "Execution failed: \(error.localizedDescription)", status: "failed")
-            pipelineStore.updateTaskStatus(id: task.id, status: .needs_input)
-            Log.error(.taskExec, "Task \(task.id): execution failed: \(error.localizedDescription)")
+            pipelineStore.updateTaskStatus(id: taskID, status: .needs_input)
+            Log.error(.taskExec, "Task \(taskID): execution failed: \(error.localizedDescription)")
             notifyUI()
         }
 
         // Clean up session
-        _ = sessionsLock.withLock { activeSessions.removeValue(forKey: task.id) }
+        _ = sessionsLock.withLock { activeSessions.removeValue(forKey: taskID) }
     }
 
     // MARK: - Helpers

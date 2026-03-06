@@ -134,9 +134,12 @@ final class TaskCreationService: @unchecked Sendable {
     }
 
     private func planExecution(title: String, prompt: String, projectName: String?) async -> ExecutionPlan {
-        // Build skill list for the LLM
-        let skills = skillStore.all().filter { $0.category != .pipeline }
-        let skillListStr = skills.map { "\($0.id): \($0.description)" }.joined(separator: "\n")
+        // Build skill list for the LLM — includes both built-in and available OpenClaw skills
+        let skills = skillStore.availableSkills()
+        let skillListStr = skills.map { skill -> String in
+            let openClawTag = (skill.isOpenClaw == true) ? " [openclaw]" : ""
+            return "\(skill.id): \(skill.description)\(openClawTag)"
+        }.joined(separator: "\n")
 
         let skill = skillStore.load(id: "task-creation")
         let template = skill?.promptTemplate ?? Self.defaultPlanningPrompt

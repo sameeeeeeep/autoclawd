@@ -154,7 +154,8 @@ final class ClaudeCodeRunner: Sendable {
         in project: Project,
         resumeSessionID: String? = nil,
         attachments: [Attachment] = [],
-        dangerouslySkipPermissions: Bool = true
+        dangerouslySkipPermissions: Bool = true,
+        extraEnvVars: [String: String]? = nil
     ) -> (ClaudeSession, AsyncThrowingStream<ClaudeEvent, Error>)? {
         guard let claudeURL = ClaudeCodeRunner.findCLI() else {
             Log.error(.taskExec, "Claude CLI not found")
@@ -192,6 +193,15 @@ final class ClaudeCodeRunner: Sendable {
             Self.setAuthEnv(apiKeyVal, into: &env)
         } else {
             Log.warn(.taskExec, "Claude CLI: NO API key in settings")
+        }
+        // Inject skill-specific environment variables (OpenClaw skills)
+        if let extra = extraEnvVars {
+            for (key, value) in extra where !value.isEmpty {
+                env[key] = value
+            }
+            if !extra.isEmpty {
+                Log.info(.taskExec, "Claude CLI: injected \(extra.count) skill env var(s)")
+            }
         }
         process.environment = env
 
