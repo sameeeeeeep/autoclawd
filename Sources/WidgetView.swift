@@ -10,13 +10,27 @@ enum WidgetCollapseLevel: Int, CaseIterable {
     case headerOnly // header + audio row only
     case icon       // app icon in small rounded square
 
+    /// Base height without camera feed.
     var height: CGFloat {
         switch self {
         case .expanded:   return 740
         case .full:       return 640
-        case .compact:    return 460
+        case .compact:    return 520
         case .headerOnly: return 150
         case .icon:       return 52
+        }
+    }
+
+    /// Extra height added when the camera feed is visible.
+    static let cameraFeedHeight: CGFloat = 170
+
+    /// Height with camera feed included.
+    var heightWithCamera: CGFloat {
+        switch self {
+        case .expanded, .full, .compact:
+            return height + Self.cameraFeedHeight
+        default:
+            return height
         }
     }
 
@@ -156,6 +170,7 @@ struct WidgetView: View {
     let onToggleCode:         () -> Void
     let onToggleSpeakerMode:  () -> Void
     let onToggleMusicMode:    () -> Void
+    let onToggleCamera:       () -> Void
     let onToggleWhatsApp:     () -> Void
     let onSessionConfigure:   () -> Void
     let onSessionPlay:        () -> Void
@@ -168,6 +183,7 @@ struct WidgetView: View {
     var isCodeEnabled:       Bool = false
     var isMultiSpeaker:      Bool = false
     var isMusicMode:         Bool = false
+    var isCameraEnabled:     Bool = false
     var isWhatsAppEnabled:   Bool = false
     var sessionLifecycle: SessionLifecycleState = .undefined
     /// Live log lines (max 2) from AutoClawdLogger
@@ -182,7 +198,11 @@ struct WidgetView: View {
     var canvasSnapshots: [CanvasSnapshot] = []
     /// Colour / material appearance tokens — drives dark/light/solid/frosted/transparent
     var appearance: WidgetAppearance = .default
+    /// Camera feed view (shown below the canvas when camera is enabled)
+    var cameraFeedContent: AnyView? = nil
     @State private var historyIndex: Int = 0
+
+    private var showsCameraFeed: Bool { cameraFeedContent != nil }
 
     var body: some View {
         Group {
@@ -192,7 +212,8 @@ struct WidgetView: View {
             default:          fullWidget
             }
         }
-        .frame(width: collapseLevel.width, height: collapseLevel.height)
+        .frame(width: collapseLevel.width,
+               height: showsCameraFeed ? collapseLevel.heightWithCamera : collapseLevel.height)
         .background(Color.clear)
         .animation(.spring(response: 0.36, dampingFraction: 0.84), value: collapseLevel)
     }
@@ -253,7 +274,9 @@ struct WidgetView: View {
         VStack(spacing: 0) {
             header
 
-            if collapseLevel != .compact {
+            if collapseLevel == .compact {
+                compactStatusRow
+            } else {
                 statusSection
             }
 
@@ -264,11 +287,17 @@ struct WidgetView: View {
             aiCanvasWithHistory
                 .frame(height: canvasHeight)
 
+            // Camera feed (shown when camera is enabled)
+            if let cameraFeed = cameraFeedContent {
+                cameraFeed
+                    .frame(height: WidgetCollapseLevel.cameraFeedHeight - 12)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
+            }
+
             logSection
 
-            if collapseLevel != .compact {
-                dock
-            }
+            dock
         }
         .liquidGlass(cornerRadius: 26, appearance: appearance)
     }
@@ -351,6 +380,87 @@ struct WidgetView: View {
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
+    }
+
+    // MARK: - Compact Status Row (icon-only mic + analysis + execution)
+
+    /// Three small icon-only toggle buttons with glow, shown in .compact mode.
+    private var compactStatusRow: some View {
+        let micOn = (state == .listening)
+        let analysisActive = pipelineStages.first(where: { $0.kind == .analysis }) != nil
+        let executionActive = pipelineStages.first(where: { $0.kind == .execution }) != nil
+
+        return HStack(spacing: 6) {
+            compactToggle(
+                icon:      "mic.fill",
+                active:    micOn,
+                color:     .green,
+                glowState: micOn ? .thinking : .off,
+                action:    onTogglePause
+            )
+            compactToggle(
+                icon:      "brain",
+                active:    isLocalModelEnabled,
+                color:     Color(red: 0.25, green: 0.55, blue: 1.0),
+                glowState: analysisActive ? .thinking : (isLocalModelEnabled ? .enabled : .off),
+                action:    onToggleLocalModel
+            )
+            compactToggle(
+                icon:      "chevron.left.forwardslash.chevron.right",
+                active:    isCodeEnabled,
+                color:     Color(red: 0.58, green: 0.2, blue: 0.92),
+                glowState: executionActive ? .thinking : (isCodeEnabled ? .enabled : .off),
+                action:    onToggleCode
+            )
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
+    }
+
+    private func compactToggle(
+        icon: String, active: Bool, color: Color, glowState: GlowState,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            ZStack {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(active ? color : appearance.iconOff)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 38)
+            .background {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(appearance.rowTile.opacity(active ? appearance.rowEnabledOpacity : appearance.rowOffOpacity))
+                    if active {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(LinearGradient(
+                                colors: [color.opacity(0.14), color.opacity(0.05)],
+                                startPoint: .top, endPoint: .bottom))
+                    }
+                    LinearGradient(
+                        colors: [appearance.specularColor.opacity(appearance.specularOpacity * 0.7), .clear],
+                        startPoint: .top,
+                        endPoint: UnitPoint(x: 0.5, y: 0.55)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    active ? color.opacity(0.30) : appearance.borderOff,
+                                    active ? color.opacity(0.06) : appearance.borderLow,
+                                ],
+                                startPoint: .top, endPoint: .bottom
+                            ),
+                            lineWidth: 0.8
+                        )
+                }
+            }
+            .intelligenceGlow(color: color, cornerRadius: 12, state: glowState)
+        }
+        .buttonStyle(.plain)
     }
 
     // Mic / audio row — tap to toggle listening
@@ -673,6 +783,16 @@ struct WidgetView: View {
 
             Rectangle().fill(appearance.dockSeparator).frame(width: 1, height: 20)
 
+            // Camera toggle
+            dockToggle(
+                icon:    "camera.fill",
+                active:  isCameraEnabled,
+                color:   Color(red: 0.0, green: 0.78, blue: 0.9),
+                action:  onToggleCamera
+            )
+
+            Rectangle().fill(appearance.dockSeparator).frame(width: 1, height: 20)
+
             // Music mode toggle
             dockToggle(
                 icon:    "music.note",
@@ -704,17 +824,17 @@ struct WidgetView: View {
 
         switch sessionLifecycle {
         case .undefined:
-            // Plus button to open config panel
+            // Play button to quick-start session (no config needed)
             dockToggle(
-                icon:   "plus.circle",
+                icon:   "play.fill",
                 active: false,
                 color:  green,
-                action: onSessionConfigure
+                action: onSessionPlay
             )
         case .configuring:
-            // Highlighted plus (config panel is open)
+            // Highlighted play (config panel is open)
             dockToggle(
-                icon:   "plus.circle.fill",
+                icon:   "play.circle.fill",
                 active: true,
                 color:  green,
                 action: onSessionConfigure
@@ -728,7 +848,7 @@ struct WidgetView: View {
                 action: onSessionPlay
             )
         case .active:
-            // Pause (yellow) + Stop (red)
+            // Pause (yellow) + Done (checkmark, red)
             dockToggle(
                 icon:   "pause.fill",
                 active: true,
@@ -736,13 +856,13 @@ struct WidgetView: View {
                 action: onSessionPause
             )
             dockToggle(
-                icon:   "stop.fill",
+                icon:   "checkmark.circle.fill",
                 active: true,
                 color:  red,
                 action: onSessionStop
             )
         case .paused:
-            // Play (green, resume) + Stop (red)
+            // Play (green, resume) + Done (checkmark, red)
             dockToggle(
                 icon:   "play.fill",
                 active: true,
@@ -750,7 +870,7 @@ struct WidgetView: View {
                 action: onSessionPlay
             )
             dockToggle(
-                icon:   "stop.fill",
+                icon:   "checkmark.circle.fill",
                 active: true,
                 color:  red,
                 action: onSessionStop

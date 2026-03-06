@@ -151,6 +151,14 @@ final class ChunkManager: ObservableObject {
             Task.detached {
                 await taggingService.tagPeople(sessionID: capturedSID, transcript: fullTranscript)
             }
+            // Also tag people detected by face tracking in this session
+            if let appState = self.appState,
+               appState.cameraEnabled && appState.faceTrackingEnabled {
+                let faces = appState.faceTracker.trackedFaces
+                Task.detached {
+                    taggingService.tagPeopleFromFaces(sessionID: capturedSID, faces: faces)
+                }
+            }
             currentSessionID = nil
         }
         transcriptBuffer.removeAll()

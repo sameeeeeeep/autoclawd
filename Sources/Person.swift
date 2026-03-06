@@ -28,6 +28,8 @@ struct Person: Identifiable, Codable, Equatable {
     var mapPosition: CGPoint     // normalized 0..1
     var isMe: Bool
     var isMusic: Bool
+    var faceTrackID: UUID?       // links to FaceTracker.TrackedFace within a session
+    var avatarSeed: UInt64?      // deterministic seed from face embedding for pixel art avatar
 
     var personColor: PersonColor {
         PersonColor(rawValue: colorIndex) ?? .cyan
@@ -49,11 +51,12 @@ struct Person: Identifiable, Codable, Equatable {
 
     // CGPoint is not Codable by default
     enum CodingKeys: String, CodingKey {
-        case id, name, colorIndex, posX, posY, isMe, isMusic
+        case id, name, colorIndex, posX, posY, isMe, isMusic, faceTrackID, avatarSeed
     }
-    init(id: UUID, name: String, colorIndex: Int, mapPosition: CGPoint, isMe: Bool, isMusic: Bool = false) {
+    init(id: UUID, name: String, colorIndex: Int, mapPosition: CGPoint, isMe: Bool, isMusic: Bool = false, faceTrackID: UUID? = nil, avatarSeed: UInt64? = nil) {
         self.id = id; self.name = name; self.colorIndex = colorIndex
         self.mapPosition = mapPosition; self.isMe = isMe; self.isMusic = isMusic
+        self.faceTrackID = faceTrackID; self.avatarSeed = avatarSeed
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -62,6 +65,8 @@ struct Person: Identifiable, Codable, Equatable {
         colorIndex  = try c.decode(Int.self,     forKey: .colorIndex)
         isMe        = try c.decode(Bool.self,    forKey: .isMe)
         isMusic     = (try? c.decode(Bool.self, forKey: .isMusic)) ?? false
+        faceTrackID = try? c.decode(UUID.self, forKey: .faceTrackID)
+        avatarSeed  = try? c.decode(UInt64.self, forKey: .avatarSeed)
         let x       = try c.decode(CGFloat.self, forKey: .posX)
         let y       = try c.decode(CGFloat.self, forKey: .posY)
         mapPosition = CGPoint(x: x, y: y)
@@ -73,6 +78,8 @@ struct Person: Identifiable, Codable, Equatable {
         try c.encode(colorIndex,     forKey: .colorIndex)
         try c.encode(isMe,           forKey: .isMe)
         try c.encode(isMusic,        forKey: .isMusic)
+        try c.encodeIfPresent(faceTrackID, forKey: .faceTrackID)
+        try c.encodeIfPresent(avatarSeed, forKey: .avatarSeed)
         try c.encode(mapPosition.x,  forKey: .posX)
         try c.encode(mapPosition.y,  forKey: .posY)
     }

@@ -36,6 +36,24 @@ final class PeopleTaggingService: @unchecked Sendable {
         Log.info(.system, "Tagged \(names.count) people for session \(sessionID): \(names)")
     }
 
+    /// Tag people detected by face tracking in a session.
+    func tagPeopleFromFaces(sessionID: String, faces: [FaceTracker.TrackedFace]) {
+        for face in faces {
+            guard let personID = face.assignedPersonID else { continue }
+            store.execBind(
+                """
+                INSERT OR IGNORE INTO session_people (session_id, person_id)
+                VALUES (?, ?);
+                """,
+                args: [sessionID, personID.uuidString]
+            )
+        }
+        let named = faces.filter { $0.assignedPersonID != nil }
+        if !named.isEmpty {
+            Log.info(.camera, "Tagged \(named.count) face-detected people for session \(sessionID)")
+        }
+    }
+
     private func callGroq(prompt: String) async throws -> [String] {
         var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
         request.httpMethod = "POST"
