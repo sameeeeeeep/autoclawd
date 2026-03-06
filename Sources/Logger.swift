@@ -34,6 +34,7 @@ enum LogComponent: String {
     case taskCreate = "TASKCREATE"
     case taskExec   = "TASKEXEC"
     case pipeline   = "PIPELINE"
+    case camera     = "CAMERA"
 }
 
 // MARK: - Log Entry

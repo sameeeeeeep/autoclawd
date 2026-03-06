@@ -211,6 +211,25 @@ final class AppState: ObservableObject {
     private var codeTaskID: String?
     private var codeStepIndex: Int = 0
 
+    // Camera & gesture state
+    @Published var cameraEnabled: Bool {
+        didSet {
+            SettingsManager.shared.cameraEnabled = cameraEnabled
+            if cameraEnabled { startCamera() } else { stopCamera() }
+        }
+    }
+    @Published var gestureControlEnabled: Bool {
+        didSet { SettingsManager.shared.gestureControlEnabled = gestureControlEnabled }
+    }
+    @Published var faceTrackingEnabled: Bool {
+        didSet { SettingsManager.shared.faceTrackingEnabled = faceTrackingEnabled }
+    }
+    @Published var detectedFaceCount: Int = 0
+    @Published var lastConfirmedGesture: HandGestureRecognizer.Gesture? = nil
+    @Published var showOptionSelector: Bool = false
+    @Published var availableOptions: [String] = []
+    private var onOptionSelected: ((Int) -> Void)?
+
     // WhatsApp state
     @Published var whatsAppStatus: WhatsAppStatus = .disconnected
     let whatsAppPoller = WhatsAppPoller()
@@ -237,6 +256,11 @@ final class AppState: ObservableObject {
     private(set) var qaService: QAService
     let qaStore: QAStore
     let claudeCodeRunner = ClaudeCodeRunner()
+
+    // Camera services
+    let cameraService = CameraService()
+    let handGestureRecognizer = HandGestureRecognizer()
+    let faceTracker = FaceTracker()
 
     // Pipeline v2 services
     let pipelineStore: PipelineStore
@@ -306,6 +330,9 @@ final class AppState: ObservableObject {
         isCodeExecutionEnabled = settings.isCodeExecutionEnabled
         speakerMode            = SpeakerMode(rawValue: settings.speakerMode) ?? .single
         musicModeEnabled       = settings.musicModeEnabled
+        cameraEnabled          = settings.cameraEnabled
+        gestureControlEnabled  = settings.gestureControlEnabled
+        faceTrackingEnabled    = settings.faceTrackingEnabled
         self.people       = AppState.init_loadPeople()
         self.locationName = UserDefaults.standard.string(forKey: "autoclawd.locationName") ?? "My Room"
 
@@ -437,6 +464,41 @@ final class AppState: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+
+        // Wire camera frame handlers → gesture recognizer + face tracker
+        cameraService.onFrame = { [weak self] sampleBuffer in
+            guard let self else { return }
+            if self.gestureControlEnabled {
+                self.handGestureRecognizer.processFrame(sampleBuffer)
+            }
+            if self.faceTrackingEnabled {
+                self.faceTracker.isAudioActive = self.audioLevel > 0.01
+                self.faceTracker.processFrame(sampleBuffer)
+            }
+        }
+
+        // Wire gesture callbacks → session control + option selection
+        handGestureRecognizer.holdThreshold = settings.gestureHoldDuration
+        handGestureRecognizer.onGestureConfirmed = { [weak self] gesture in
+            Task { @MainActor [weak self] in
+                self?.handleGesture(gesture)
+            }
+        }
+
+        // Wire face tracker → speaker tagging + face count
+        faceTracker.onSpeakerChanged = { [weak self] personID in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let personID {
+                    self.currentSpeakerID = personID
+                }
+            }
+        }
+        faceTracker.onFaceCountChanged = { [weak self] count in
+            Task { @MainActor [weak self] in
+                self?.detectedFaceCount = count
+            }
+        }
     }
 
     // MARK: - Lifecycle
@@ -493,6 +555,11 @@ final class AppState: ObservableObject {
         if SettingsManager.shared.whatsAppEnabled {
             startWhatsApp()
         }
+
+        // Start camera if enabled
+        if cameraEnabled {
+            startCamera()
+        }
     }
 
     // MARK: - Listening Control
@@ -543,6 +610,78 @@ final class AppState: ObservableObject {
             }
             Log.info(.ui, "Mic resumed")
         }
+    }
+
+    // MARK: - Camera Control
+
+    func startCamera() {
+        guard cameraEnabled else { return }
+        let fps = SettingsManager.shared.cameraAnalysisFPS
+        cameraService.minFrameInterval = fps > 0 ? 1.0 / Double(fps) : 0.125
+        do {
+            try cameraService.start()
+            Log.info(.camera, "Camera started")
+        } catch {
+            Log.error(.camera, "Camera failed to start: \(error.localizedDescription)")
+        }
+    }
+
+    func stopCamera() {
+        cameraService.stop()
+        detectedFaceCount = 0
+        Log.info(.camera, "Camera stopped")
+    }
+
+    private func handleGesture(_ gesture: HandGestureRecognizer.Gesture) {
+        lastConfirmedGesture = gesture
+
+        switch gesture {
+        case .rightSpreadOpen:
+            // Session start — same as the widget bottom-left play button
+            if !isListening {
+                toggleListening()
+            }
+            Log.info(.camera, "Gesture: session start (right spread)")
+
+        case .rightPinchClosed:
+            // Session stop — same as the widget bottom-left pause button
+            if isListening {
+                toggleListening()
+            }
+            Log.info(.camera, "Gesture: session stop (right pinch)")
+
+        case .leftFingerCount(let count):
+            // Option selection — pick from on-screen choices
+            selectOption(index: count)
+            Log.info(.camera, "Gesture: option \(count) selected (left fingers)")
+        }
+
+        // Clear gesture indicator after 1.5s
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            await MainActor.run {
+                if self.lastConfirmedGesture == gesture {
+                    self.lastConfirmedGesture = nil
+                }
+            }
+        }
+    }
+
+    /// Select an option from the currently presented choices via finger count.
+    func selectOption(index: Int) {
+        guard showOptionSelector, index >= 1, index <= availableOptions.count else { return }
+        onOptionSelected?(index)
+        showOptionSelector = false
+        availableOptions = []
+        onOptionSelected = nil
+    }
+
+    /// Present multi-choice options for gesture-based selection.
+    /// The user raises their left hand with N fingers to pick option N.
+    func presentOptions(_ options: [String], onSelect: @escaping (Int) -> Void) {
+        availableOptions = Array(options.prefix(5))  // max 5 (one hand)
+        showOptionSelector = true
+        onOptionSelected = onSelect
     }
 
     func cyclePillMode() {

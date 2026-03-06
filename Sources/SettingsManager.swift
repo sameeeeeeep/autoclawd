@@ -132,6 +132,11 @@ final class SettingsManager: @unchecked Sendable {
     private let kMusicModeEnabled     = "music_mode_enabled"
     private let kIsOpenClawEnabled    = "is_openclaw_enabled"
     private let kOpenClawSkillsDir    = "openclaw_skills_directory"
+    private let kCameraEnabled         = "camera_enabled"
+    private let kGestureControlEnabled = "gesture_control_enabled"
+    private let kFaceTrackingEnabled   = "face_tracking_enabled"
+    private let kGestureHoldDuration   = "gesture_hold_duration"
+    private let kCameraAnalysisFPS     = "camera_analysis_fps"
 
     // MARK: - Properties
 
@@ -333,6 +338,39 @@ final class SettingsManager: @unchecked Sendable {
     var openClawSkillsDirectory: String {
         get { defaults.string(forKey: kOpenClawSkillsDir) ?? "" }
         set { defaults.set(newValue, forKey: kOpenClawSkillsDir) }
+    }
+
+    // MARK: - Camera & Gestures
+
+    var cameraEnabled: Bool {
+        get { defaults.object(forKey: kCameraEnabled) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: kCameraEnabled) }
+    }
+
+    var gestureControlEnabled: Bool {
+        get { defaults.object(forKey: kGestureControlEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: kGestureControlEnabled) }
+    }
+
+    var faceTrackingEnabled: Bool {
+        get { defaults.object(forKey: kFaceTrackingEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: kFaceTrackingEnabled) }
+    }
+
+    var gestureHoldDuration: Double {
+        get {
+            let v = defaults.double(forKey: kGestureHoldDuration)
+            return v > 0 ? v : 0.5
+        }
+        set { defaults.set(newValue, forKey: kGestureHoldDuration) }
+    }
+
+    var cameraAnalysisFPS: Int {
+        get {
+            let v = defaults.integer(forKey: kCameraAnalysisFPS)
+            return v > 0 ? v : 8
+        }
+        set { defaults.set(newValue, forKey: kCameraAnalysisFPS) }
     }
 
     private init() {}

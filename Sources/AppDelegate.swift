@@ -229,6 +229,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showMicAlert()
         }
 
+        // Camera (for gesture control and face tracking — optional)
+        let camStatus = AVCaptureDevice.authorizationStatus(for: .video)
+        if camStatus == .notDetermined {
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async {
+                    Log.info(.system, "Camera permission: \(granted ? "granted" : "denied")")
+                }
+            }
+        }
+
         // Speech Recognition (for local transcription mode)
         let srStatus = SFSpeechRecognizer.authorizationStatus()
         if srStatus == .notDetermined {
@@ -379,6 +389,12 @@ struct PillContentView: View {
                                         style: appState.widgetStyle
                                     )
         )
+        .overlay(alignment: .topTrailing) {
+            if appState.cameraEnabled {
+                CameraGestureOverlayView(appState: appState)
+                    .padding(8)
+            }
+        }
         .onChange(of: collapseLevel) { level in onCollapseChange(level) }
         .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
             displayLevel = appState.chunkManager.audioLevel

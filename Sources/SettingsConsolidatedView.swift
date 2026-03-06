@@ -10,6 +10,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case people
     case skills
     case connections
+    case camera
     case appearance
     case widget
 
@@ -23,6 +24,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .people:      return "person.2"
         case .skills:      return "wrench.and.screwdriver"
         case .connections: return "link"
+        case .camera:      return "camera.fill"
         case .appearance:  return "paintbrush"
         case .widget:      return "widget.small"
         }
@@ -36,6 +38,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .people:      return "People"
         case .skills:      return "Skills"
         case .connections: return "Connections"
+        case .camera:      return "Camera"
         case .appearance:  return "Appearance"
         case .widget:      return "Widget"
         }
@@ -125,6 +128,7 @@ struct SettingsConsolidatedView: View {
         case .people:      peopleSection()
         case .skills:      skillsSection()
         case .connections: connectionsSection()
+        case .camera:      cameraSection()
         case .appearance:  appearanceSection()
         case .widget:      widgetSection()
         }
@@ -554,6 +558,72 @@ struct SettingsConsolidatedView: View {
                         }
                     }
                     .opacity(isCC ? 1.0 : 0.5)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - Camera Section
+
+    @ViewBuilder
+    private func cameraSection() -> some View {
+        Form {
+            Section("Camera") {
+                Toggle("Enable Camera", isOn: $appState.cameraEnabled)
+
+                Text("Camera is used for hand gesture control and person detection. No video is recorded — frames are analyzed in real-time and discarded.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if appState.cameraEnabled {
+                    Label("Camera indicator light will be active while enabled",
+                          systemImage: "light.recessed.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+
+            Section("Gesture Control") {
+                Toggle("Hand Gesture Controls", isOn: $appState.gestureControlEnabled)
+                    .disabled(!appState.cameraEnabled)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Right hand spread = Start session", systemImage: "hand.raised.fill")
+                    Label("Right hand pinch = Stop session", systemImage: "hand.point.up.braille.fill")
+                    Label("Left hand fingers = Select option (1-5)", systemImage: "hand.point.up.left.fill")
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+                Picker("Hold duration", selection: Binding(
+                    get: { SettingsManager.shared.gestureHoldDuration },
+                    set: {
+                        SettingsManager.shared.gestureHoldDuration = $0
+                        appState.handGestureRecognizer.holdThreshold = $0
+                    }
+                )) {
+                    Text("0.3s (Fast)").tag(0.3)
+                    Text("0.5s (Default)").tag(0.5)
+                    Text("0.8s (Careful)").tag(0.8)
+                    Text("1.0s (Slow)").tag(1.0)
+                }
+                .disabled(!appState.cameraEnabled)
+            }
+
+            Section("Person Detection") {
+                Toggle("Face Detection & Speaker Tagging", isOn: $appState.faceTrackingEnabled)
+                    .disabled(!appState.cameraEnabled)
+
+                Text("Detects faces in view and correlates mouth movement with audio to identify who is speaking.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if appState.cameraEnabled && appState.faceTrackingEnabled {
+                    LabeledContent("Detected faces") {
+                        Text("\(appState.detectedFaceCount)")
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
         }
