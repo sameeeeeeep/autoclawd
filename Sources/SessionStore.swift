@@ -11,6 +11,10 @@ struct SessionRecord: Identifiable {
     let placeID: String?
     let placeName: String?   // joined from places table
     let transcriptSnippet: String  // first 120 chars for canvas card
+    let projectID: String?
+    let projectName: String?
+    let objective: String?   // JSON array of context bullets
+    let peopleJSON: String?  // JSON array of people names
 }
 
 struct PlaceRecord: Identifiable {
@@ -33,6 +37,7 @@ final class SessionStore: @unchecked Sendable {
             return
         }
         createTables()
+        migrateSchema()
         Log.info(.system, "SessionStore opened at \(url.lastPathComponent)")
     }
 
@@ -42,15 +47,25 @@ final class SessionStore: @unchecked Sendable {
 
     /// Create a new session row, returns the new session UUID.
     @discardableResult
-    func beginSession(wifiSSID: String?) -> String {
+    func beginSession(wifiSSID: String?, config: SessionConfig? = nil) -> String {
         let id = UUID().uuidString
         let now = ISO8601DateFormatter().string(from: Date())
+
+        let projectID = config?.projectID
+        let projectName = config?.projectName
+        let objective: String? = config.flatMap { cfg in
+            cfg.contextBullets.isEmpty ? nil : (try? JSONEncoder().encode(cfg.contextBullets)).flatMap { String(data: $0, encoding: .utf8) }
+        }
+        let peopleJSON: String? = config.flatMap { cfg in
+            cfg.peopleNames.isEmpty ? nil : (try? JSONEncoder().encode(cfg.peopleNames)).flatMap { String(data: $0, encoding: .utf8) }
+        }
+
         let sql = """
-            INSERT INTO sessions (id, started_at, wifi_ssid)
-            VALUES (?, ?, ?);
+            INSERT INTO sessions (id, started_at, wifi_ssid, project_id, project_name, objective, people_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
         """
-        execBindOptional(sql, args: [id, now, wifiSSID])
-        Log.info(.system, "Session started: \(id)")
+        execBindOptional(sql, args: [id, now, wifiSSID, projectID, projectName, objective, peopleJSON])
+        Log.info(.system, "Session started: \(id)" + (projectName.map { " (project: \($0))" } ?? ""))
         return id
     }
 
@@ -93,7 +108,8 @@ final class SessionStore: @unchecked Sendable {
     func sessions(forPlaceID placeID: String, limit: Int = 100) -> [SessionRecord] {
         let sql = """
             SELECT s.id, s.started_at, s.ended_at, s.wifi_ssid,
-                   s.place_id, p.name, s.transcript_snippet
+                   s.place_id, p.name, s.transcript_snippet,
+                   s.project_id, s.project_name, s.objective, s.people_json
             FROM sessions s
             LEFT JOIN places p ON s.place_id = p.id
             WHERE s.place_id = ?
@@ -147,13 +163,29 @@ final class SessionStore: @unchecked Sendable {
     func recentSessions(limit: Int = 50) -> [SessionRecord] {
         let sql = """
             SELECT s.id, s.started_at, s.ended_at, s.wifi_ssid,
-                   s.place_id, p.name, s.transcript_snippet
+                   s.place_id, p.name, s.transcript_snippet,
+                   s.project_id, s.project_name, s.objective, s.people_json
             FROM sessions s
             LEFT JOIN places p ON s.place_id = p.id
             ORDER BY s.started_at DESC
             LIMIT ?;
         """
         return queue.sync { querySessions(sql, args: [String(limit)]) }
+    }
+
+    /// Sessions for a specific project, most recent first.
+    func sessions(forProjectID projectID: String, limit: Int = 100) -> [SessionRecord] {
+        let sql = """
+            SELECT s.id, s.started_at, s.ended_at, s.wifi_ssid,
+                   s.place_id, p.name, s.transcript_snippet,
+                   s.project_id, s.project_name, s.objective, s.people_json
+            FROM sessions s
+            LEFT JOIN places p ON s.place_id = p.id
+            WHERE s.project_id = ?
+            ORDER BY s.started_at DESC
+            LIMIT ?;
+        """
+        return queue.sync { querySessions(sql, args: [projectID, String(limit)]) }
     }
 
     // MARK: - User Profile (singleton row)
@@ -227,6 +259,18 @@ final class SessionStore: @unchecked Sendable {
                 PRIMARY KEY (session_id, person_id)
             );
         """)
+    }
+
+    // MARK: - Schema Migration
+
+    /// Add columns introduced for user-defined sessions. Safe to call repeatedly —
+    /// ALTER TABLE IF NOT EXISTS is not supported in SQLite, so we ignore errors.
+    private func migrateSchema() {
+        // These will silently fail if the column already exists.
+        execSQL("ALTER TABLE sessions ADD COLUMN project_id TEXT;")
+        execSQL("ALTER TABLE sessions ADD COLUMN project_name TEXT;")
+        execSQL("ALTER TABLE sessions ADD COLUMN objective TEXT;")
+        execSQL("ALTER TABLE sessions ADD COLUMN people_json TEXT;")
     }
 
     // MARK: - Helpers (internal for use by other services)
@@ -303,6 +347,7 @@ final class SessionStore: @unchecked Sendable {
         }
         var results: [SessionRecord] = []
         let iso = ISO8601DateFormatter()
+        let colCount = sqlite3_column_count(stmt)
         while sqlite3_step(stmt) == SQLITE_ROW {
             let id        = String(cString: sqlite3_column_text(stmt, 0))
             let startStr  = String(cString: sqlite3_column_text(stmt, 1))
@@ -311,6 +356,11 @@ final class SessionStore: @unchecked Sendable {
             let placeRaw  = sqlite3_column_text(stmt, 4)
             let nameRaw   = sqlite3_column_text(stmt, 5)
             let snippet   = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
+            // New columns (7-10) — may not exist in older queries
+            let projID    = colCount > 7 ? sqlite3_column_text(stmt, 7).map { String(cString: $0) } : nil
+            let projName  = colCount > 8 ? sqlite3_column_text(stmt, 8).map { String(cString: $0) } : nil
+            let objective = colCount > 9 ? sqlite3_column_text(stmt, 9).map { String(cString: $0) } : nil
+            let pplJSON   = colCount > 10 ? sqlite3_column_text(stmt, 10).map { String(cString: $0) } : nil
             results.append(SessionRecord(
                 id: id,
                 startedAt: iso.date(from: startStr) ?? Date(),
@@ -318,7 +368,11 @@ final class SessionStore: @unchecked Sendable {
                 wifiSSID: ssidRaw.map { String(cString: $0) },
                 placeID: placeRaw.map { String(cString: $0) },
                 placeName: nameRaw.map { String(cString: $0) },
-                transcriptSnippet: snippet
+                transcriptSnippet: snippet,
+                projectID: projID,
+                projectName: projName,
+                objective: objective,
+                peopleJSON: pplJSON
             ))
         }
         return results

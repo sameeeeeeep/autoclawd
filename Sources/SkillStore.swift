@@ -4,9 +4,14 @@ import Foundation
 
 /// File-based persistence for skills. Each skill is a JSON file in ~/.autoclawd/skills/.
 /// User can edit these files outside the app.
+/// OpenClaw skills are loaded from ~/.autoclawd/openclaw-skills/ (SKILL.md files).
 final class SkillStore: @unchecked Sendable {
     let directory: URL
     private let queue = DispatchQueue(label: "com.autoclawd.skillstore", qos: .utility)
+
+    /// Cached OpenClaw skills (refreshed on demand).
+    private var openClawSkillsCache: [Skill] = []
+    private var openClawCacheDate: Date?
 
     init(directory: URL) {
         self.directory = directory
@@ -15,12 +20,28 @@ final class SkillStore: @unchecked Sendable {
 
     // MARK: - CRUD
 
+    /// Returns all skills: built-in + user-created + OpenClaw.
     func all() -> [Skill] {
+        queue.sync {
+            var skills = _loadAll()
+            let openClaw = _loadOpenClawSkills()
+            skills.append(contentsOf: openClaw)
+            return skills
+        }
+    }
+
+    /// Returns only skills from the JSON store (no OpenClaw).
+    func allBuiltin() -> [Skill] {
         queue.sync { _loadAll() }
     }
 
     func load(id: String) -> Skill? {
-        queue.sync { _load(id: id) }
+        queue.sync {
+            // Check JSON skills first
+            if let skill = _load(id: id) { return skill }
+            // Check OpenClaw skills
+            return _loadOpenClawSkills().first { $0.id == id }
+        }
     }
 
     func save(_ skill: Skill) {
@@ -36,6 +57,43 @@ final class SkillStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - OpenClaw Skills
+
+    /// Returns all available OpenClaw skills (requirement checks passed).
+    func availableOpenClawSkills() -> [Skill] {
+        queue.sync {
+            _loadOpenClawSkills().filter { $0.isAvailable }
+        }
+    }
+
+    /// Returns all skills that are available (requirements met) and not pipeline-internal.
+    func availableSkills() -> [Skill] {
+        queue.sync {
+            var skills = _loadAll().filter { $0.category != .pipeline && $0.isAvailable }
+            let openClaw = _loadOpenClawSkills().filter { $0.isAvailable }
+            skills.append(contentsOf: openClaw)
+            return skills
+        }
+    }
+
+    /// Force refresh the OpenClaw skills cache.
+    func refreshOpenClawSkills() {
+        queue.async { [self] in
+            openClawCacheDate = nil
+            _ = _loadOpenClawSkills()
+        }
+    }
+
+    /// Returns the OpenClaw skills directory URL.
+    static func openClawDirectory() -> URL {
+        let custom = SettingsManager.shared.openClawSkillsDirectory
+        if !custom.isEmpty {
+            return URL(fileURLWithPath: custom)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".autoclawd/openclaw-skills")
+    }
+
     // MARK: - Seed Defaults
 
     func seedDefaults() {
@@ -46,6 +104,10 @@ final class SkillStore: @unchecked Sendable {
                     _save(skill)
                 }
             }
+            // Ensure OpenClaw directory exists
+            let openClawDir = Self.openClawDirectory()
+            try? FileManager.default.createDirectory(at: openClawDir, withIntermediateDirectories: true)
+
             Log.info(.pipeline, "SkillStore: seeded \(Self.defaultSkills.count) default skills")
         }
     }
@@ -82,6 +144,23 @@ final class SkillStore: @unchecked Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(skill) else { return }
         try? data.write(to: url, options: .atomic)
+    }
+
+    /// Load OpenClaw skills with a 30-second cache to avoid constant filesystem scanning.
+    private func _loadOpenClawSkills() -> [Skill] {
+        guard SettingsManager.shared.isOpenClawEnabled else { return [] }
+
+        // Return cache if fresh (within 30 seconds)
+        if let cacheDate = openClawCacheDate,
+           Date().timeIntervalSince(cacheDate) < 30.0 {
+            return openClawSkillsCache
+        }
+
+        let dir = Self.openClawDirectory()
+        let skills = OpenClawSkillLoader.loadSkills(from: dir)
+        openClawSkillsCache = skills
+        openClawCacheDate = Date()
+        return skills
     }
 
     // MARK: - Default Skills

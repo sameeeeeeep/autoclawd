@@ -130,6 +130,8 @@ final class SettingsManager: @unchecked Sendable {
     private let kIsCodeExecEnabled    = "is_code_exec_enabled"
     private let kSpeakerMode          = "speaker_mode"
     private let kMusicModeEnabled     = "music_mode_enabled"
+    private let kIsOpenClawEnabled    = "is_openclaw_enabled"
+    private let kOpenClawSkillsDir    = "openclaw_skills_directory"
 
     // MARK: - Properties
 
@@ -316,6 +318,21 @@ final class SettingsManager: @unchecked Sendable {
     var musicModeEnabled: Bool {
         get { defaults.object(forKey: kMusicModeEnabled) as? Bool ?? false }
         set { defaults.set(newValue, forKey: kMusicModeEnabled) }
+    }
+
+    // MARK: - OpenClaw Skills
+
+    /// Whether OpenClaw skill loading is enabled.
+    var isOpenClawEnabled: Bool {
+        get { defaults.object(forKey: kIsOpenClawEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: kIsOpenClawEnabled) }
+    }
+
+    /// Custom directory path for OpenClaw skills.
+    /// Empty string means use default: ~/.autoclawd/openclaw-skills/
+    var openClawSkillsDirectory: String {
+        get { defaults.string(forKey: kOpenClawSkillsDir) ?? "" }
+        set { defaults.set(newValue, forKey: kOpenClawSkillsDir) }
     }
 
     private init() {}

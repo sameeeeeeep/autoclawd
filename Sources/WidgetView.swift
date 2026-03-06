@@ -157,6 +157,10 @@ struct WidgetView: View {
     let onToggleSpeakerMode:  () -> Void
     let onToggleMusicMode:    () -> Void
     let onToggleWhatsApp:     () -> Void
+    let onSessionConfigure:   () -> Void
+    let onSessionPlay:        () -> Void
+    let onSessionPause:       () -> Void
+    let onSessionStop:        () -> Void
 
     /// Live pipeline stage rows — matched by .kind
     var pipelineStages:      [WidgetStageRow] = []
@@ -165,6 +169,7 @@ struct WidgetView: View {
     var isMultiSpeaker:      Bool = false
     var isMusicMode:         Bool = false
     var isWhatsAppEnabled:   Bool = false
+    var sessionLifecycle: SessionLifecycleState = .undefined
     /// Live log lines (max 2) from AutoClawdLogger
     var logLines: [(dot: Color, text: String, time: String)] = []
     /// Current AI canvas content
@@ -663,20 +668,8 @@ struct WidgetView: View {
 
     private var dock: some View {
         HStack(spacing: 0) {
-            // Single speaker button
-            dockToggle(
-                icon:    "person.fill",
-                active:  !isMultiSpeaker,
-                color:   Color(red: 0.2, green: 0.78, blue: 0.44),
-                action:  { if isMultiSpeaker { onToggleSpeakerMode() } }
-            )
-            // Multi speaker button
-            dockToggle(
-                icon:    "person.2.fill",
-                active:  isMultiSpeaker,
-                color:   Color(red: 0.2, green: 0.78, blue: 0.44),
-                action:  { if !isMultiSpeaker { onToggleSpeakerMode() } }
-            )
+            // Session lifecycle controls (left side)
+            sessionDockControls
 
             Rectangle().fill(appearance.dockSeparator).frame(width: 1, height: 20)
 
@@ -701,6 +694,68 @@ struct WidgetView: View {
         .frame(height: 50)
         .padding(.horizontal, 14)
         .padding(.bottom, 10)
+    }
+
+    @ViewBuilder
+    private var sessionDockControls: some View {
+        let green = Color(red: 0.2, green: 0.78, blue: 0.44)
+        let yellow = Color(red: 0.95, green: 0.75, blue: 0.1)
+        let red = Color(red: 0.92, green: 0.26, blue: 0.24)
+
+        switch sessionLifecycle {
+        case .undefined:
+            // Plus button to open config panel
+            dockToggle(
+                icon:   "plus.circle",
+                active: false,
+                color:  green,
+                action: onSessionConfigure
+            )
+        case .configuring:
+            // Highlighted plus (config panel is open)
+            dockToggle(
+                icon:   "plus.circle.fill",
+                active: true,
+                color:  green,
+                action: onSessionConfigure
+            )
+        case .ready:
+            // Play button (green) to start session
+            dockToggle(
+                icon:   "play.fill",
+                active: true,
+                color:  green,
+                action: onSessionPlay
+            )
+        case .active:
+            // Pause (yellow) + Stop (red)
+            dockToggle(
+                icon:   "pause.fill",
+                active: true,
+                color:  yellow,
+                action: onSessionPause
+            )
+            dockToggle(
+                icon:   "stop.fill",
+                active: true,
+                color:  red,
+                action: onSessionStop
+            )
+        case .paused:
+            // Play (green, resume) + Stop (red)
+            dockToggle(
+                icon:   "play.fill",
+                active: true,
+                color:  green,
+                action: onSessionPlay
+            )
+            dockToggle(
+                icon:   "stop.fill",
+                active: true,
+                color:  red,
+                action: onSessionStop
+            )
+        }
     }
 
     private func dockToggle(icon: String, active: Bool, color: Color, action: @escaping () -> Void) -> some View {

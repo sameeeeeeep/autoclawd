@@ -32,6 +32,18 @@ final class WorkflowRegistry {
                 requiredConnections: ["claude-cli"]
             ),
             Workflow(
+                id: "autoclawd-openclaw",
+                name: "AutoClawd \u{2192} OpenClaw Skill \u{2192} Claude Code",
+                steps: [
+                    "AutoClawd captures requirement",
+                    "OpenClaw skill instructions loaded",
+                    "Skill instructions injected into Claude Code prompt",
+                    "Claude Code executes with skill context",
+                    "Results logged back to AutoClawd",
+                ],
+                requiredConnections: ["claude-cli"]
+            ),
+            Workflow(
                 id: "autoclawd-freepik",
                 name: "AutoClawd \u{2192} Freepik (Gemini \u{2192} Sora)",
                 steps: [
@@ -84,6 +96,23 @@ final class WorkflowRegistry {
         for conn in workflow.requiredConnections {
             if !isConnectionAvailable(conn) {
                 return conn
+            }
+        }
+        return nil
+    }
+
+    /// Check connections for a workflow, also checking skill-specific binary requirements.
+    func checkConnections(for workflow: Workflow, skill: Skill?) -> String? {
+        // First check workflow-level connections
+        if let missing = checkConnections(for: workflow) {
+            return missing
+        }
+        // Then check skill-specific binary requirements
+        if let skill = skill, let bins = skill.requiredBins {
+            for bin in bins {
+                if !Skill.commandExists(bin) {
+                    return bin
+                }
             }
         }
         return nil

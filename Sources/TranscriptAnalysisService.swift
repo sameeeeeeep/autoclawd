@@ -21,7 +21,7 @@ final class TranscriptAnalysisService: @unchecked Sendable {
 
     // MARK: - Public API
 
-    func analyze(cleaned: CleanedTranscript) async -> TranscriptAnalysis? {
+    func analyze(cleaned: CleanedTranscript, sessionContext: SessionConfig? = nil) async -> TranscriptAnalysis? {
         // 1. Pre-LLM: detect dot-words as hints
         let dotWords = Self.detectDotWords(in: cleaned.cleanedText)
         let dotPriority = dotWords.first(where: { $0.hasPrefix("p") })
@@ -39,11 +39,20 @@ final class TranscriptAnalysisService: @unchecked Sendable {
             dotHints = ""
         }
 
+        // Build session context preamble if available
+        let sessionPreamble: String
+        if let ctx = sessionContext, ctx.hasContext {
+            sessionPreamble = "SESSION CONTEXT:\n\(ctx.promptContext())\n"
+        } else {
+            sessionPreamble = ""
+        }
+
         // 3. LLM call: full semantic analysis
         let skill = skillStore.load(id: "transcript-analysis")
         let template = skill?.promptTemplate ?? Self.defaultAnalysisPrompt
 
         let prompt = template
+            .replacingOccurrences(of: "{{session_context}}", with: sessionPreamble)
             .replacingOccurrences(of: "{{project_list}}", with: projectList)
             .replacingOccurrences(of: "{{dot_word_hints}}", with: dotHints)
             .replacingOccurrences(of: "{{transcript}}", with: cleaned.cleanedText)
@@ -217,7 +226,7 @@ final class TranscriptAnalysisService: @unchecked Sendable {
 
     private static let defaultAnalysisPrompt = """
         You are analyzing a spoken transcript to understand context, intent, and create actionable tasks.
-
+        {{session_context}}
         KNOWN PROJECTS: {{project_list}}
         {{dot_word_hints}}
 

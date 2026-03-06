@@ -5,6 +5,7 @@ import SwiftUI
 
 enum PanelTab: String, CaseIterable, Identifiable {
     case world    = "World"
+    case projects = "Projects"
     case logs     = "Logs"
     case settings = "Settings"
 
@@ -13,6 +14,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .world:    return "globe"
+        case .projects: return "folder"
         case .logs:     return "doc.text"
         case .settings: return "gearshape"
         }
@@ -77,6 +79,11 @@ struct MainPanelView: View {
             }
             .opacity(selectedTab == .world ? 1 : 0)
             .allowsHitTesting(selectedTab == .world)
+
+            ProjectsListView(appState: appState)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selectedTab == .projects ? 1 : 0)
+                .allowsHitTesting(selectedTab == .projects)
 
             LogsPipelineView(appState: appState)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
