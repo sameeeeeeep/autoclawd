@@ -129,11 +129,14 @@ final class PillWindow: NSPanel {
 
     // MARK: - Collapse-level resize
 
+    /// Whether the camera feed is currently shown — adds extra height to the widget.
+    var showsCameraFeed: Bool = false
+
     /// Animate the window frame to match a WidgetCollapseLevel.
     /// Top edge and right edge are pinned — the widget grows downward / inward.
     func setCollapseLevel(_ level: WidgetCollapseLevel) {
         let newW = level.width
-        let newH = level.height
+        let newH = showsCameraFeed ? level.heightWithCamera : level.height
         guard abs(frame.width - newW) > 1 || abs(frame.height - newH) > 1 else { return }
         let deltaH = newH - frame.height
         let deltaW = newW - frame.width

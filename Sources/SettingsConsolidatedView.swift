@@ -81,6 +81,9 @@ struct SettingsConsolidatedView: View {
     @State private var audioDevices: [AVCaptureDevice] = []
     @State private var selectedAudioDeviceID: String = ""
 
+    @State private var cameraDevices: [CameraService.CameraDevice] = []
+    @State private var selectedCameraDeviceID: String = ""
+
     var body: some View {
         NavigationSplitView {
             List(SettingsSection.allCases, selection: $selectedSection) { section in
@@ -115,6 +118,7 @@ struct SettingsConsolidatedView: View {
             anthropicKey = SettingsManager.shared.anthropicAPIKey
             localHotWordConfigs = SettingsManager.shared.hotWordConfigs
             refreshAudioDevices()
+            refreshCameraDevices()
             checkClaudeCodeCLI()
         }
     }
@@ -352,9 +356,13 @@ struct SettingsConsolidatedView: View {
             Section {
                 ForEach(appState.people) { person in
                     HStack {
-                        Circle()
-                            .fill(person.color)
-                            .frame(width: 8, height: 8)
+                        if let seed = person.avatarSeed {
+                            PixelAvatarView(seed: seed, pixelSize: 3)
+                        } else {
+                            Circle()
+                                .fill(person.color)
+                                .frame(width: 8, height: 8)
+                        }
 
                         Text(person.name)
 
@@ -572,6 +580,16 @@ struct SettingsConsolidatedView: View {
             Section("Camera") {
                 Toggle("Enable Camera", isOn: $appState.cameraEnabled)
 
+                Picker("Camera Input", selection: $selectedCameraDeviceID) {
+                    Text("Default").tag("")
+                    ForEach(cameraDevices) { device in
+                        Text(device.name).tag(device.id)
+                    }
+                }
+                .onChange(of: selectedCameraDeviceID) { newValue in
+                    SettingsManager.shared.selectedCameraDeviceID = newValue.isEmpty ? nil : newValue
+                }
+
                 Text("Camera is used for hand gesture control and person detection. No video is recorded — frames are analyzed in real-time and discarded.")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -590,7 +608,8 @@ struct SettingsConsolidatedView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     Label("Right hand spread = Start session", systemImage: "hand.raised.fill")
-                    Label("Right hand pinch = Stop session", systemImage: "hand.point.up.braille.fill")
+                    Label("Right hand pinch = Pause session", systemImage: "hand.point.up.braille.fill")
+                    Label("Right hand thumbs up = Done", systemImage: "hand.thumbsup.fill")
                     Label("Left hand fingers = Select option (1-5)", systemImage: "hand.point.up.left.fill")
                 }
                 .font(.caption)
@@ -746,6 +765,11 @@ struct SettingsConsolidatedView: View {
             position: .unspecified
         )
         audioDevices = discoverySession.devices
+    }
+
+    private func refreshCameraDevices() {
+        cameraDevices = CameraService.availableDevices()
+        selectedCameraDeviceID = SettingsManager.shared.selectedCameraDeviceID ?? ""
     }
 
     private func checkClaudeCodeCLI() {

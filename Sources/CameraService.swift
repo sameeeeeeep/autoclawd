@@ -14,7 +14,8 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
     @Published var isRunning: Bool = false
 
-    private var captureSession: AVCaptureSession?
+    /// Exposed for AVCaptureVideoPreviewLayer binding in CameraPreviewView.
+    private(set) var captureSession: AVCaptureSession?
     private let processingQueue = DispatchQueue(label: "com.autoclawd.camera", qos: .userInitiated)
     private var lastProcessedTime: TimeInterval = 0
 
@@ -29,6 +30,23 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         set { _onFrame.withLock { $0 = newValue } }
     }
 
+    // MARK: - Device Discovery
+
+    struct CameraDevice: Identifiable {
+        let id: String       // AVCaptureDevice.uniqueID
+        let name: String     // AVCaptureDevice.localizedName
+    }
+
+    /// Returns all available video capture devices (built-in + external/Continuity).
+    static func availableDevices() -> [CameraDevice] {
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
+            mediaType: .video,
+            position: .unspecified
+        )
+        return discovery.devices.map { CameraDevice(id: $0.uniqueID, name: $0.localizedName) }
+    }
+
     // MARK: - Start
 
     func start() throws {
@@ -40,15 +58,23 @@ final class CameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             return
         }
 
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
-              ?? AVCaptureDevice.default(for: .video)
-        else {
+        // Use selected device from settings, fall back to default front camera
+        let device: AVCaptureDevice? = {
+            if let selectedID = SettingsManager.shared.selectedCameraDeviceID,
+               let selected = AVCaptureDevice(uniqueID: selectedID) {
+                return selected
+            }
+            return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
+                ?? AVCaptureDevice.default(for: .video)
+        }()
+
+        guard let device else {
             Log.error(.camera, "No camera device available")
             return
         }
 
         let session = AVCaptureSession()
-        session.sessionPreset = .low  // lowest resolution sufficient for Vision analysis
+        session.sessionPreset = .medium  // balanced for Vision analysis + preview display
 
         let input = try AVCaptureDeviceInput(device: device)
         guard session.canAddInput(input) else {

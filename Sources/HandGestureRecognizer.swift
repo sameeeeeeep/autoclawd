@@ -8,7 +8,8 @@ import Vision
 ///
 /// **Right hand:**
 /// - Spread open (all fingers extended, spread apart) → session start
-/// - Pinch closed (thumb + index touching) → session stop
+/// - Pinch closed (thumb + index touching) → session pause
+/// - Thumbs up (only thumb extended) → session done
 ///
 /// **Left hand:**
 /// - Finger count (1-5 extended fingers) → option selection
@@ -22,6 +23,7 @@ final class HandGestureRecognizer: @unchecked Sendable {
     enum Gesture: Equatable {
         case rightSpreadOpen
         case rightPinchClosed
+        case rightThumbsUp
         case leftFingerCount(Int)
     }
 
@@ -40,7 +42,7 @@ final class HandGestureRecognizer: @unchecked Sendable {
     var cooldownInterval: TimeInterval = 1.0
 
     /// Minimum confidence for Vision landmark points.
-    var minConfidence: Float = 0.3
+    var minConfidence: Float = 0.5
 
     // MARK: - Callbacks
 
@@ -49,7 +51,7 @@ final class HandGestureRecognizer: @unchecked Sendable {
     // MARK: - State
 
     private var state: State = .idle
-    private let maxMissFrames = 2  // allow brief jitter without resetting
+    private let maxMissFrames = 3  // allow brief jitter without resetting
 
     // MARK: - Process Frame
 
@@ -93,10 +95,15 @@ final class HandGestureRecognizer: @unchecked Sendable {
         var detected: Gesture?
 
         if let right = rightHand {
-            if isSpreadOpen(right) {
-                detected = .rightSpreadOpen
-            } else if isPinchClosed(right) {
+            // Check pinch FIRST — pinch (thumb+index touching) can look like
+            // thumbs up (thumb extended, others closed) since the thumb is still
+            // far from wrist during a pinch. Pinch is more specific.
+            if isPinchClosed(right) {
                 detected = .rightPinchClosed
+            } else if isThumbsUp(right) {
+                detected = .rightThumbsUp
+            } else if isSpreadOpen(right) {
+                detected = .rightSpreadOpen
             }
         }
 
@@ -195,7 +202,9 @@ final class HandGestureRecognizer: @unchecked Sendable {
         return count
     }
 
-    /// A finger is extended when tip.y > pip.y > mcp.y in Vision coords (y increases upward).
+    /// A finger is extended when tip is above pip with a tolerance margin.
+    /// Aligned with MediaPipe reference: `tip.y > pip.y + margin` in Vision coords (y increases upward).
+    /// Only checks tip vs pip (not the full 3-point chain) for more reliable detection.
     private func isFingerExtended(
         observation: VNHumanHandPoseObservation,
         tip: VNHumanHandPoseObservation.JointName,
@@ -204,37 +213,52 @@ final class HandGestureRecognizer: @unchecked Sendable {
     ) -> Bool {
         guard let tipPt = try? observation.recognizedPoint(tip),
               let pipPt = try? observation.recognizedPoint(pip),
-              let mcpPt = try? observation.recognizedPoint(mcp),
               tipPt.confidence > minConfidence,
-              pipPt.confidence > minConfidence,
-              mcpPt.confidence > minConfidence
+              pipPt.confidence > minConfidence
         else { return false }
 
-        return tipPt.location.y > pipPt.location.y && pipPt.location.y > mcpPt.location.y
+        // Vision Y-up: tip.y > pip.y means finger points up. Add 0.025 margin for noise tolerance.
+        return tipPt.location.y > pipPt.location.y + 0.025
     }
 
-    /// Thumb is extended when tip is significantly farther from wrist than CMC joint.
+    /// Thumb is extended when tip is far from wrist (palm base).
+    /// Aligned with MediaPipe reference: checks tip-to-wrist distance > threshold.
     private func isThumbExtended(_ observation: VNHumanHandPoseObservation) -> Bool {
         guard let tipPt = try? observation.recognizedPoint(.thumbTip),
-              let ipPt = try? observation.recognizedPoint(.thumbIP),
-              let cmc = try? observation.recognizedPoint(.thumbCMC),
+              let wrist = try? observation.recognizedPoint(.wrist),
               tipPt.confidence > minConfidence,
-              ipPt.confidence > minConfidence,
-              cmc.confidence > minConfidence
+              wrist.confidence > minConfidence
         else { return false }
 
-        // Thumb extended: tip is farther from CMC than IP is (in both x and y combined)
-        let tipDist = hypot(tipPt.location.x - cmc.location.x, tipPt.location.y - cmc.location.y)
-        let ipDist = hypot(ipPt.location.x - cmc.location.x, ipPt.location.y - cmc.location.y)
-        return tipDist > ipDist * 1.2  // tip at least 20% farther than IP joint
+        let dist = hypot(tipPt.location.x - wrist.location.x, tipPt.location.y - wrist.location.y)
+        return dist > 0.12  // same threshold as reference
     }
 
-    /// All 5 fingers extended AND inter-finger tip distance indicates spread.
+    /// Thumbs up: only thumb extended, all other fingers closed.
+    private func isThumbsUp(_ observation: VNHumanHandPoseObservation) -> Bool {
+        guard isThumbExtended(observation) else { return false }
+        // Count only the 4 non-thumb fingers — none should be extended
+        let fingers: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
+            (.indexTip, .indexPIP, .indexMCP),
+            (.middleTip, .middlePIP, .middleMCP),
+            (.ringTip, .ringPIP, .ringMCP),
+            (.littleTip, .littlePIP, .littleMCP),
+        ]
+        for (tip, pip, mcp) in fingers {
+            if isFingerExtended(observation: observation, tip: tip, pip: pip, mcp: mcp) {
+                return false  // any non-thumb finger extended → not thumbs up
+            }
+        }
+        return true
+    }
+
+    /// All 4+ fingers extended AND inter-finger tip distance indicates spread.
+    /// Reference: sums adjacent tip distances × 3, checks > 0.3 → raw totalDist > 0.1.
     private func isSpreadOpen(_ observation: VNHumanHandPoseObservation) -> Bool {
         let count = countExtendedFingers(observation)
         guard count >= 4 else { return false }  // at least 4 fingers open (thumb detection can be tricky)
 
-        // Check spread: average distance between adjacent fingertips
+        // Check spread: total distance between adjacent fingertips (like reference)
         guard let indexTip = try? observation.recognizedPoint(.indexTip),
               let middleTip = try? observation.recognizedPoint(.middleTip),
               let ringTip = try? observation.recognizedPoint(.ringTip),
@@ -248,12 +272,14 @@ final class HandGestureRecognizer: @unchecked Sendable {
         let d1 = distance(indexTip.location, middleTip.location)
         let d2 = distance(middleTip.location, ringTip.location)
         let d3 = distance(ringTip.location, littleTip.location)
-        let avgSpread = (d1 + d2 + d3) / 3.0
+        let totalSpread = d1 + d2 + d3
 
-        return avgSpread > 0.06  // threshold for "spread apart" in normalized coords
+        return totalSpread > 0.10  // aligned with reference (totalDist * 3 > 0.3)
     }
 
     /// Pinch: thumb tip and index tip are very close together.
+    /// Reference uses `1 - dist * 5` mapped to 0-1, with pinch considered active when value > 0.5.
+    /// That maps to raw distance < 0.10 in normalized coords.
     private func isPinchClosed(_ observation: VNHumanHandPoseObservation) -> Bool {
         guard let thumbTip = try? observation.recognizedPoint(.thumbTip),
               let indexTip = try? observation.recognizedPoint(.indexTip),
@@ -262,7 +288,7 @@ final class HandGestureRecognizer: @unchecked Sendable {
         else { return false }
 
         let dist = distance(thumbTip.location, indexTip.location)
-        return dist < 0.05  // close together = pinch
+        return dist < 0.10  // relaxed from 0.05 — aligned with reference
     }
 
     private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {

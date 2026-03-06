@@ -83,7 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onToggleCode:        { [weak self] in self?.toggleCodeMode() },
             onToggleSpeakerMode: { [weak self] in self?.toggleSpeakerMode() },
             onToggleMusicMode:   { [weak self] in self?.toggleMusicMode() },
-            onCollapseChange:    { [weak self] level in self?.pillWindow?.setCollapseLevel(level) }
+            onCollapseChange:    { [weak self] level in self?.pillWindow?.setCollapseLevel(level) },
+            onCameraVisibilityChange: { [weak self] visible in self?.pillWindow?.showsCameraFeed = visible }
         )
         pill.setContent(content)
         pill.menuProvider = { [weak self] in self?.makePillMenu() ?? NSMenu() }
@@ -311,6 +312,7 @@ struct PillContentView: View {
     let onToggleSpeakerMode:  () -> Void
     let onToggleMusicMode:    () -> Void
     let onCollapseChange:     (WidgetCollapseLevel) -> Void
+    let onCameraVisibilityChange: (Bool) -> Void
 
     @State private var isWhatsAppEnabled: Bool = SettingsManager.shared.whatsAppEnabled
 
@@ -353,6 +355,7 @@ struct PillContentView: View {
             onToggleCode:           onToggleCode,
             onToggleSpeakerMode:    onToggleSpeakerMode,
             onToggleMusicMode:      onToggleMusicMode,
+            onToggleCamera:         { appState.cameraEnabled.toggle() },
             onToggleWhatsApp: {
                 SettingsManager.shared.whatsAppEnabled.toggle()
                 isWhatsAppEnabled = SettingsManager.shared.whatsAppEnabled
@@ -360,6 +363,9 @@ struct PillContentView: View {
             onSessionConfigure:     { appState.configureSession() },
             onSessionPlay: {
                 switch appState.sessionLifecycle {
+                case .undefined:
+                    // Quick-start with default config (no config panel)
+                    appState.startUserSession(config: SessionConfig())
                 case .ready:
                     if let config = appState.sessionConfig {
                         appState.startUserSession(config: config)
@@ -377,6 +383,7 @@ struct PillContentView: View {
             isCodeEnabled:          isCodeEnabled,
             isMultiSpeaker:         appState.speakerMode == .multiple,
             isMusicMode:            appState.musicModeEnabled,
+            isCameraEnabled:        appState.cameraEnabled,
             isWhatsAppEnabled:      isWhatsAppEnabled,
             sessionLifecycle:       appState.sessionLifecycle,
             logLines:               logLines,
@@ -384,18 +391,19 @@ struct PillContentView: View {
             analysisIdleSubtitle:   analysisIdleSubtitle,
             executionIdleSubtitle:  executionIdleSubtitle,
             canvasSnapshots:        canvasSnapshots,
-            appearance:             WidgetAppearance(
-                                        base:  appState.widgetBase,
-                                        style: appState.widgetStyle
-                                    )
+            appearance:             widgetAppearance,
+            cameraFeedContent:      cameraFeedView
         )
-        .overlay(alignment: .topTrailing) {
-            if appState.cameraEnabled {
-                CameraGestureOverlayView(appState: appState)
-                    .padding(8)
-            }
-        }
         .onChange(of: collapseLevel) { level in onCollapseChange(level) }
+        .onChange(of: appState.cameraEnabled) { enabled in
+            onCameraVisibilityChange(enabled && appState.cameraService.isRunning)
+            // Re-trigger collapse to resize window
+            onCollapseChange(collapseLevel)
+        }
+        .onChange(of: appState.cameraService.isRunning) { running in
+            onCameraVisibilityChange(appState.cameraEnabled && running)
+            onCollapseChange(collapseLevel)
+        }
         .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
             displayLevel = appState.chunkManager.audioLevel
         }
@@ -461,6 +469,17 @@ struct PillContentView: View {
         .onChange(of: appState.speakerMode) { mode in
             showMultiSpeakerPrompt = (mode == .multiple)
         }
+    }
+
+    // MARK: - Camera feed
+
+    private var widgetAppearance: WidgetAppearance {
+        WidgetAppearance(base: appState.widgetBase, style: appState.widgetStyle)
+    }
+
+    private var cameraFeedView: AnyView? {
+        guard appState.cameraEnabled, appState.cameraService.isRunning else { return nil }
+        return AnyView(CameraFeedWidget(appState: appState, appearance: widgetAppearance))
     }
 
     // MARK: - Log dot colour
@@ -561,6 +580,29 @@ struct PillContentView: View {
                     style: appState.widgetStyle
                 )
             ))
+        }
+
+        // ── Session project picker (gesture-triggered session start) ──────────────
+        if appState.showSessionProjectPicker {
+            return AnyView(SessionProjectPickerCanvasView(
+                projects: appState.projects,
+                onSelect: { project in
+                    appState.showSessionProjectPicker = false
+                    var config = SessionConfig()
+                    config.projectID = project.id
+                    config.projectName = project.name
+                    appState.startUserSession(config: config)
+                },
+                onSkip: {
+                    appState.showSessionProjectPicker = false
+                    appState.startUserSession(config: SessionConfig())
+                }
+            ))
+        }
+
+        // ── Face linking canvas (auto-triggered or manual) ────────────────────────
+        if appState.showFaceLinkingOverlay {
+            return AnyView(FaceLinkingCanvasView(appState: appState))
         }
 
         // ── Smart prompt: multi-speaker "who are you with?" ──────────────────────

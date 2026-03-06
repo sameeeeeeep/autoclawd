@@ -590,9 +590,13 @@ struct MultiSpeakerPromptCanvasView: View {
                 ForEach(visible) { person in
                     Button { onSelect(person) } label: {
                         HStack(spacing: 5) {
-                            Circle()
-                                .fill(person.personColor.color)
-                                .frame(width: 7, height: 7)
+                            if let seed = person.avatarSeed {
+                                PixelAvatarView(seed: seed, pixelSize: 2)
+                            } else {
+                                Circle()
+                                    .fill(person.personColor.color)
+                                    .frame(width: 7, height: 7)
+                            }
                             Text(person.name)
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundColor(.white.opacity(0.72))
@@ -691,6 +695,194 @@ struct CodeCanvasView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - Face Linking Canvas
+
+/// Shown on the AI canvas when the user taps the face count badge.
+/// Walks through each tracked face and presents numbered people options.
+/// User selects with left-hand gestures (1-5) or tap.
+struct FaceLinkingCanvasView: View {
+    @ObservedObject var appState: AppState
+
+    private var currentFace: FaceTracker.TrackedFace? {
+        let queue = appState.faceTracker.trackedFaces
+        let index = appState.faceLinkingIndex
+        guard index < queue.count else { return nil }
+        return queue[index]
+    }
+
+    private var peopleOptions: [Person] {
+        appState.people.filter { !$0.isMe && !$0.isMusic }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Header
+            HStack(spacing: 6) {
+                Image(systemName: "face.dashed")
+                    .font(.system(size: 10))
+                    .foregroundColor(.cyan)
+                Text("Link Faces")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.75))
+                Spacer()
+                Button {
+                    appState.showFaceLinkingOverlay = false
+                } label: {
+                    Text("Done")
+                        .font(.system(size: 9))
+                        .foregroundColor(.white.opacity(0.26))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if let face = currentFace {
+                // Current face label
+                HStack(spacing: 6) {
+                    Text(face.label)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(.cyan)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 8))
+                        .foregroundColor(.white.opacity(0.3))
+                    Text("?")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(.yellow)
+                }
+
+                // People chips
+                let options = peopleOptions
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 76, maximum: 120), spacing: 6)],
+                    spacing: 6
+                ) {
+                    ForEach(Array(options.enumerated()), id: \.offset) { idx, person in
+                        Button { appState.advanceFaceLinking(selectedOption: idx + 1) } label: {
+                            HStack(spacing: 5) {
+                                Text("\(idx + 1)")
+                                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.cyan)
+                                    .frame(width: 12)
+                                if let seed = person.avatarSeed {
+                                    PixelAvatarView(seed: seed, pixelSize: 2)
+                                } else {
+                                    Circle()
+                                        .fill(person.personColor.color)
+                                        .frame(width: 6, height: 6)
+                                }
+                                Text(person.name)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.72))
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Color.cyan.opacity(0.08))
+                                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(Color.cyan.opacity(0.18), lineWidth: 1))
+                            )
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Text("gesture \u{270B} 1-\(options.count) or tap")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.22))
+            } else {
+                Text("No faces detected")
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.22))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - Session Project Picker Canvas
+
+/// Gesture-friendly project picker shown on the AI canvas when a session starts.
+/// User raises left hand with 1-5 fingers to select a project, or taps.
+struct SessionProjectPickerCanvasView: View {
+    let projects: [Project]
+    let onSelect: (Project) -> Void
+    let onSkip: () -> Void
+
+    var body: some View {
+        let displayProjects = Array(projects.prefix(5))
+        VStack(alignment: .leading, spacing: 10) {
+            // Header
+            HStack(spacing: 6) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(.green)
+                Text("Start Session")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.75))
+                Spacer()
+                Button { onSkip() } label: {
+                    Text("Skip")
+                        .font(.system(size: 9))
+                        .foregroundColor(.white.opacity(0.26))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text("SELECT PROJECT")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(.white.opacity(0.28))
+                .tracking(1)
+
+            // Numbered project list
+            ForEach(Array(displayProjects.enumerated()), id: \.offset) { idx, project in
+                Button { onSelect(project) } label: {
+                    HStack(spacing: 8) {
+                        Text("\(idx + 1)")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundColor(.green)
+                            .frame(width: 14)
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.30))
+                        Text(project.name)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white.opacity(0.78))
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.green.opacity(0.06))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(Color.green.opacity(0.15), lineWidth: 1)
+                            )
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer()
+
+            Text("gesture \u{270B} 1-\(displayProjects.count) or tap")
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundColor(.white.opacity(0.22))
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }

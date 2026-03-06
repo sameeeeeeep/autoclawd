@@ -137,6 +137,7 @@ final class SettingsManager: @unchecked Sendable {
     private let kFaceTrackingEnabled   = "face_tracking_enabled"
     private let kGestureHoldDuration   = "gesture_hold_duration"
     private let kCameraAnalysisFPS     = "camera_analysis_fps"
+    private let kSelectedCameraDeviceID = "selected_camera_device_id"
 
     // MARK: - Properties
 
@@ -371,6 +372,12 @@ final class SettingsManager: @unchecked Sendable {
             return v > 0 ? v : 8
         }
         set { defaults.set(newValue, forKey: kCameraAnalysisFPS) }
+    }
+
+    /// Selected camera device unique ID. nil = system default.
+    var selectedCameraDeviceID: String? {
+        get { defaults.string(forKey: kSelectedCameraDeviceID) }
+        set { defaults.set(newValue, forKey: kSelectedCameraDeviceID) }
     }
 
     private init() {}

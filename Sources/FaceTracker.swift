@@ -1,3 +1,5 @@
+import CoreGraphics
+import CoreImage
 import CoreMedia
 import Foundation
 import Vision
@@ -7,7 +9,8 @@ import Vision
 /// Detects faces in camera frames and tracks them across frames to identify
 /// who is currently speaking based on mouth movement during non-silent audio.
 ///
-/// No face data is stored — analysis is real-time and discarded per-frame.
+/// Uses Vision feature prints for face re-identification: when a person leaves
+/// the frame and returns, their identity (label, avatar) is preserved.
 final class FaceTracker: @unchecked Sendable {
 
     // MARK: - Types
@@ -20,6 +23,8 @@ final class FaceTracker: @unchecked Sendable {
         var label: String                // e.g. "Person A"
         var isSpeaking: Bool = false
         var lastMouthOpenness: CGFloat = 0
+        var featurePrint: VNFeaturePrintObservation?  // for re-identification
+        var avatarSeed: UInt64 = 0       // deterministic seed for pixel art avatar
 
         static func == (lhs: TrackedFace, rhs: TrackedFace) -> Bool {
             lhs.id == rhs.id
@@ -28,14 +33,23 @@ final class FaceTracker: @unchecked Sendable {
 
     // MARK: - Configuration
 
-    /// Faces not seen for this long are expired.
+    /// Faces not seen for this long are removed from active tracking.
     var expirationInterval: TimeInterval = 2.0
+
+    /// Expired faces kept for re-identification (longer window).
+    var reIdRetentionInterval: TimeInterval = 120.0
 
     /// IoU threshold for matching a new observation to an existing face.
     var iouThreshold: CGFloat = 0.3
 
+    /// Maximum feature print distance for re-identification match.
+    var featurePrintDistanceThreshold: Float = 18.0
+
     /// Mouth movement threshold to consider a face "speaking".
     var mouthMovementThreshold: CGFloat = 0.015
+
+    /// How often to update feature prints (not every frame — expensive).
+    var featurePrintUpdateInterval: TimeInterval = 2.0
 
     // MARK: - Callbacks
 
@@ -48,8 +62,10 @@ final class FaceTracker: @unchecked Sendable {
     // MARK: - State
 
     private var faces: [TrackedFace] = []
+    private var recentlyExpired: [TrackedFace] = []  // for re-identification
     private var currentSpeakerTrackID: UUID?
     private var nextLabel = 1
+    private var lastFeaturePrintTime: Date = .distantPast
 
     /// Whether external audio is currently non-silent (set by AppState).
     var isAudioActive: Bool = false
@@ -78,7 +94,7 @@ final class FaceTracker: @unchecked Sendable {
         let landmarkObservations = landmarkRequest.results ?? []
         let now = Date()
 
-        // Match observations to existing tracked faces
+        // Match observations to existing tracked faces via IoU
         var matchedExisting = Set<UUID>()
         var matchedObservations = Set<Int>()
 
@@ -95,12 +111,10 @@ final class FaceTracker: @unchecked Sendable {
             }
 
             if let matchID = bestMatch {
-                // Update existing face
                 if let idx = faces.firstIndex(where: { $0.id == matchID }) {
                     faces[idx].boundingBox = obs.boundingBox
                     faces[idx].lastSeenTime = now
 
-                    // Check mouth movement from landmarks
                     if obsIndex < landmarkObservations.count {
                         let mouthOpenness = measureMouthOpenness(landmarkObservations[obsIndex])
                         let delta = abs(mouthOpenness - faces[idx].lastMouthOpenness)
@@ -116,24 +130,74 @@ final class FaceTracker: @unchecked Sendable {
         // Create new tracked faces for unmatched observations
         let oldCount = faces.count
         for (obsIndex, obs) in faceObservations.enumerated() where !matchedObservations.contains(obsIndex) {
-            let label = "Person \(Character(UnicodeScalar(64 + nextLabel)!))"  // A, B, C...
-            nextLabel += 1
-            if nextLabel > 26 { nextLabel = 1 }
+            // Try re-identification against recently expired faces
+            let featurePrint = extractFeaturePrint(from: pixelBuffer, faceBox: obs.boundingBox)
 
-            var newFace = TrackedFace(
-                id: UUID(),
-                boundingBox: obs.boundingBox,
-                lastSeenTime: now,
-                label: label
-            )
-            if obsIndex < landmarkObservations.count {
-                newFace.lastMouthOpenness = measureMouthOpenness(landmarkObservations[obsIndex])
+            if let fp = featurePrint, let reIdMatch = findReIdMatch(featurePrint: fp) {
+                // Re-identified! Reuse identity from expired face
+                var reusedFace = TrackedFace(
+                    id: UUID(),
+                    boundingBox: obs.boundingBox,
+                    lastSeenTime: now,
+                    assignedPersonID: reIdMatch.assignedPersonID,
+                    label: reIdMatch.label,
+                    featurePrint: fp,
+                    avatarSeed: reIdMatch.avatarSeed
+                )
+                if obsIndex < landmarkObservations.count {
+                    reusedFace.lastMouthOpenness = measureMouthOpenness(landmarkObservations[obsIndex])
+                }
+                faces.append(reusedFace)
+                // Remove from expired pool so we don't double-match
+                recentlyExpired.removeAll { $0.label == reIdMatch.label }
+            } else {
+                // Brand new face
+                let label = "Person \(Character(UnicodeScalar(64 + nextLabel)!))"
+                nextLabel += 1
+                if nextLabel > 26 { nextLabel = 1 }
+
+                let seed = featurePrint.map { computeAvatarSeed(from: $0) } ?? UInt64.random(in: 0...UInt64.max)
+
+                var newFace = TrackedFace(
+                    id: UUID(),
+                    boundingBox: obs.boundingBox,
+                    lastSeenTime: now,
+                    label: label,
+                    featurePrint: featurePrint,
+                    avatarSeed: seed
+                )
+                if obsIndex < landmarkObservations.count {
+                    newFace.lastMouthOpenness = measureMouthOpenness(landmarkObservations[obsIndex])
+                }
+                faces.append(newFace)
             }
-            faces.append(newFace)
         }
 
-        // Expire old faces
+        // Periodically refresh feature prints on active faces
+        if now.timeIntervalSince(lastFeaturePrintTime) >= featurePrintUpdateInterval {
+            lastFeaturePrintTime = now
+            for i in faces.indices {
+                if faces[i].featurePrint == nil {
+                    faces[i].featurePrint = extractFeaturePrint(from: pixelBuffer, faceBox: faces[i].boundingBox)
+                    if let fp = faces[i].featurePrint, faces[i].avatarSeed == 0 {
+                        faces[i].avatarSeed = computeAvatarSeed(from: fp)
+                    }
+                }
+            }
+        }
+
+        // Move expired faces to re-id pool before removing
+        let expiring = faces.filter { now.timeIntervalSince($0.lastSeenTime) > expirationInterval }
+        for face in expiring where face.featurePrint != nil {
+            // Only keep faces that have a feature print for re-id
+            if !recentlyExpired.contains(where: { $0.label == face.label }) {
+                recentlyExpired.append(face)
+            }
+        }
         faces.removeAll { now.timeIntervalSince($0.lastSeenTime) > expirationInterval }
+
+        // Expire old re-id candidates
+        recentlyExpired.removeAll { now.timeIntervalSince($0.lastSeenTime) > reIdRetentionInterval }
 
         // Notify face count change
         if faces.count != oldCount {
@@ -142,6 +206,70 @@ final class FaceTracker: @unchecked Sendable {
 
         // Determine current speaker
         updateCurrentSpeaker()
+    }
+
+    // MARK: - Feature Print Extraction
+
+    /// Crop the face region and generate a Vision feature print for re-identification.
+    private func extractFeaturePrint(from pixelBuffer: CVPixelBuffer, faceBox: CGRect) -> VNFeaturePrintObservation? {
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let imageWidth = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+        let imageHeight = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+
+        // Vision bbox: origin is bottom-left, y goes up — same as CIImage
+        let cropRect = CGRect(
+            x: faceBox.origin.x * imageWidth,
+            y: faceBox.origin.y * imageHeight,
+            width: faceBox.width * imageWidth,
+            height: faceBox.height * imageHeight
+        ).insetBy(dx: -10, dy: -10)  // slight padding for better embedding
+
+        let croppedImage = ciImage.cropped(to: cropRect)
+        guard croppedImage.extent.width > 10, croppedImage.extent.height > 10 else { return nil }
+
+        let request = VNGenerateImageFeaturePrintRequest()
+        let handler = VNImageRequestHandler(ciImage: croppedImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return nil
+        }
+        return request.results?.first
+    }
+
+    /// Find a matching expired face by feature print similarity.
+    private func findReIdMatch(featurePrint: VNFeaturePrintObservation) -> TrackedFace? {
+        var bestMatch: TrackedFace?
+        var bestDistance: Float = featurePrintDistanceThreshold
+
+        for expired in recentlyExpired {
+            guard let expiredPrint = expired.featurePrint else { continue }
+            var distance: Float = 0
+            do {
+                try featurePrint.computeDistance(&distance, to: expiredPrint)
+            } catch {
+                continue
+            }
+            if distance < bestDistance {
+                bestDistance = distance
+                bestMatch = expired
+            }
+        }
+        return bestMatch
+    }
+
+    // MARK: - Avatar Seed
+
+    /// Compute a deterministic hash from the feature print data for avatar generation.
+    private func computeAvatarSeed(from featurePrint: VNFeaturePrintObservation) -> UInt64 {
+        let data = featurePrint.data
+        var hash: UInt64 = 5381
+        data.withUnsafeBytes { buffer in
+            for byte in buffer {
+                hash = ((hash &<< 5) &+ hash) &+ UInt64(byte)
+            }
+        }
+        return hash
     }
 
     // MARK: - Speaker Detection
@@ -155,7 +283,6 @@ final class FaceTracker: @unchecked Sendable {
         } else if speakingFaces.isEmpty {
             newSpeakerTrackID = nil
         } else {
-            // Multiple speaking — keep current if still speaking, otherwise pick first
             if let current = currentSpeakerTrackID,
                speakingFaces.contains(where: { $0.id == current }) {
                 newSpeakerTrackID = current
@@ -166,7 +293,6 @@ final class FaceTracker: @unchecked Sendable {
 
         if newSpeakerTrackID != currentSpeakerTrackID {
             currentSpeakerTrackID = newSpeakerTrackID
-            // Map track ID to person ID
             let personID = faces.first(where: { $0.id == newSpeakerTrackID })?.assignedPersonID
             onSpeakerChanged?(personID)
         }
@@ -174,16 +300,17 @@ final class FaceTracker: @unchecked Sendable {
 
     // MARK: - Person Assignment
 
-    /// Link a tracked face to a Person from the roster.
-    func assignPerson(trackID: UUID, personID: UUID) {
+    func assignPerson(trackID: UUID, personID: UUID, personName: String? = nil) {
         if let idx = faces.firstIndex(where: { $0.id == trackID }) {
             faces[idx].assignedPersonID = personID
+            if let name = personName {
+                faces[idx].label = name
+            }
         }
     }
 
     // MARK: - Mouth Measurement
 
-    /// Measure how "open" the mouth is from face landmarks (normalized value).
     private func measureMouthOpenness(_ observation: VNFaceObservation) -> CGFloat {
         guard let landmarks = observation.landmarks,
               let outerLips = landmarks.outerLips
@@ -192,14 +319,9 @@ final class FaceTracker: @unchecked Sendable {
         let points = outerLips.normalizedPoints
         guard points.count >= 8 else { return 0 }
 
-        // Approximate mouth openness: vertical distance between top and bottom lip points
-        // Top lip is roughly at index 2-3, bottom lip at index 8-9 (12-point outer lip model)
         let topIndex = min(2, points.count - 1)
         let bottomIndex = min(points.count - 2, points.count - 1)
-        let topY = points[topIndex].y
-        let bottomY = points[bottomIndex].y
-
-        return abs(topY - bottomY)
+        return abs(points[topIndex].y - points[bottomIndex].y)
     }
 
     // MARK: - IoU
@@ -211,5 +333,110 @@ final class FaceTracker: @unchecked Sendable {
         let unionArea = a.width * a.height + b.width * b.height - intersectionArea
         guard unionArea > 0 else { return 0 }
         return intersectionArea / unionArea
+    }
+}
+
+// MARK: - PixelAvatar
+
+/// Generates a deterministic pixel art avatar from a UInt64 seed.
+/// Creates a 5×7 character face with mirrored symmetry — each person
+/// gets a unique but stable avatar derived from their face embedding.
+struct PixelAvatar {
+
+    /// Palette of skin/feature colors — index chosen by seed bits.
+    static let skinTones: [CGColor] = [
+        CGColor(red: 1.00, green: 0.87, blue: 0.75, alpha: 1),  // light
+        CGColor(red: 0.96, green: 0.80, blue: 0.65, alpha: 1),
+        CGColor(red: 0.87, green: 0.68, blue: 0.53, alpha: 1),
+        CGColor(red: 0.76, green: 0.57, blue: 0.42, alpha: 1),
+        CGColor(red: 0.60, green: 0.42, blue: 0.30, alpha: 1),
+        CGColor(red: 0.44, green: 0.30, blue: 0.22, alpha: 1),  // dark
+    ]
+
+    static let hairColors: [CGColor] = [
+        CGColor(red: 0.15, green: 0.10, blue: 0.07, alpha: 1),  // black
+        CGColor(red: 0.40, green: 0.26, blue: 0.13, alpha: 1),  // brown
+        CGColor(red: 0.85, green: 0.65, blue: 0.20, alpha: 1),  // blonde
+        CGColor(red: 0.70, green: 0.22, blue: 0.10, alpha: 1),  // red
+        CGColor(red: 0.55, green: 0.55, blue: 0.60, alpha: 1),  // grey
+        CGColor(red: 0.20, green: 0.50, blue: 0.90, alpha: 1),  // blue
+        CGColor(red: 0.80, green: 0.20, blue: 0.60, alpha: 1),  // pink
+        CGColor(red: 0.30, green: 0.75, blue: 0.45, alpha: 1),  // green
+    ]
+
+    static let eyeColor = CGColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1)
+    static let bgColor = CGColor(red: 0, green: 0, blue: 0, alpha: 0)
+
+    /// Generate a 5×7 pixel grid. Each cell is a CGColor.
+    /// The grid is left-right mirrored (columns 0,1,2 are unique; 3=mirror of 1; 4=mirror of 0).
+    static func generate(seed: UInt64) -> [[CGColor]] {
+        let skinIdx = Int((seed >> 0) & 0x7) % skinTones.count
+        let hairIdx = Int((seed >> 3) & 0x7) % hairColors.count
+        let hairStyle = Int((seed >> 6) & 0x3)   // 0-3
+        let eyeStyle = Int((seed >> 8) & 0x1)    // 0-1
+        let mouthStyle = Int((seed >> 9) & 0x1)  // 0-1
+        let hasGlasses = (seed >> 10) & 0x1 == 1
+
+        let skin = skinTones[skinIdx]
+        let hair = hairColors[hairIdx]
+        let eye = eyeColor
+        let bg = bgColor
+
+        // Build left half (3 columns) × 7 rows, then mirror
+        // Row layout: [hair, hair, forehead, eyes, nose, mouth, neck]
+        var left: [[CGColor]] = Array(repeating: Array(repeating: bg, count: 3), count: 7)
+
+        // Row 0: hair top
+        switch hairStyle {
+        case 0: left[0] = [bg, hair, hair]     // flat top
+        case 1: left[0] = [hair, hair, hair]   // full top
+        case 2: left[0] = [bg, hair, hair]     // side part
+        case 3: left[0] = [hair, hair, bg]     // mohawk-ish
+        default: left[0] = [bg, hair, hair]
+        }
+
+        // Row 1: hair sides + forehead
+        switch hairStyle {
+        case 0: left[1] = [bg, skin, skin]
+        case 1: left[1] = [hair, skin, skin]
+        case 2: left[1] = [hair, hair, skin]
+        case 3: left[1] = [bg, skin, skin]
+        default: left[1] = [bg, skin, skin]
+        }
+
+        // Row 2: forehead
+        left[2] = [bg, skin, skin]
+
+        // Row 3: eyes
+        let eyePixel = hasGlasses ? CGColor(red: 0.3, green: 0.5, blue: 0.9, alpha: 1) : eye
+        if eyeStyle == 0 {
+            left[3] = [bg, eyePixel, skin]   // eyes at column 1
+        } else {
+            left[3] = [bg, skin, eyePixel]   // eyes at column 2
+        }
+
+        // Row 4: nose
+        left[4] = [bg, skin, skin]
+
+        // Row 5: mouth
+        let mouthColor = CGColor(red: 0.8, green: 0.3, blue: 0.3, alpha: 1)
+        if mouthStyle == 0 {
+            left[5] = [bg, skin, mouthColor]  // small mouth
+        } else {
+            left[5] = [bg, mouthColor, mouthColor]  // wide mouth
+        }
+
+        // Row 6: neck/body
+        let shirtColor = hairColors[Int((seed >> 12) & 0x7) % hairColors.count]
+        left[6] = [bg, shirtColor, shirtColor]
+
+        // Mirror to create 5-column grid
+        var grid: [[CGColor]] = []
+        for row in left {
+            let fullRow = [row[0], row[1], row[2], row[1], row[0]]
+            grid.append(fullRow)
+        }
+
+        return grid
     }
 }

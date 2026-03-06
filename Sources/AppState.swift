@@ -79,8 +79,8 @@ final class AppState: ObservableObject {
                 resetCodeWidget()
             }
             // Transcript accumulates across all modes within a session.
-            // clearSessionTranscript() is called only on silence-based session end,
-            // not on mode changes — so text stays visible when the user switches modes.
+            // clearSessionTranscript() is called only on new session start or manual Clear.
+            // Mode changes never clear the transcript — text stays visible.
             Log.info(.system, "Pill mode → \(pillMode.rawValue)")
         }
     }
@@ -228,7 +228,14 @@ final class AppState: ObservableObject {
     @Published var lastConfirmedGesture: HandGestureRecognizer.Gesture? = nil
     @Published var showOptionSelector: Bool = false
     @Published var availableOptions: [String] = []
+    @Published var showFaceLinkingOverlay: Bool = false
+    @Published var showSessionProjectPicker: Bool = false
     private var onOptionSelected: ((Int) -> Void)?
+    private var faceLinkingQueue: [FaceTracker.TrackedFace] = []
+    @Published private(set) var faceLinkingIndex: Int = 0
+    private var dismissedFaceTrackIDs: Set<UUID> = []
+    private var lastAutoFaceLinkingTime: Date = .distantPast
+    private let autoFaceLinkingCooldown: TimeInterval = 5.0
 
     // WhatsApp state
     @Published var whatsAppStatus: WhatsAppStatus = .disconnected
@@ -496,7 +503,10 @@ final class AppState: ObservableObject {
         }
         faceTracker.onFaceCountChanged = { [weak self] count in
             Task { @MainActor [weak self] in
-                self?.detectedFaceCount = count
+                guard let self else { return }
+                self.detectedFaceCount = count
+                self.syncAvatarSeedsFromFaces()
+                self.checkForUnlinkedFaces()
             }
         }
     }
@@ -637,23 +647,87 @@ final class AppState: ObservableObject {
 
         switch gesture {
         case .rightSpreadOpen:
-            // Session start — same as the widget bottom-left play button
-            if !isListening {
-                toggleListening()
+            // Session start — uses PR#5 session lifecycle so dock buttons sync
+            switch sessionLifecycle {
+            case .undefined:
+                if projects.isEmpty {
+                    // No projects — quick-start with default config
+                    startUserSession(config: SessionConfig())
+                } else if projects.count == 1 {
+                    // Single project — auto-select
+                    var config = SessionConfig()
+                    config.projectID = projects[0].id
+                    config.projectName = projects[0].name
+                    startUserSession(config: config)
+                } else {
+                    // Multiple projects — show canvas picker for gesture selection
+                    showSessionProjectPicker = true
+                }
+            case .paused:
+                resumeUserSession()
+            case .active:
+                break  // already active
+            default:
+                break
             }
-            Log.info(.camera, "Gesture: session start (right spread)")
+            Log.info(.camera, "Gesture: session start (right spread) → lifecycle: \(sessionLifecycle)")
 
         case .rightPinchClosed:
-            // Session stop — same as the widget bottom-left pause button
-            if isListening {
-                toggleListening()
+            // Dismiss project picker without starting
+            if showSessionProjectPicker {
+                showSessionProjectPicker = false
+                Log.info(.camera, "Gesture: dismissed project picker (pinch)")
+            } else {
+                // Session pause
+                switch sessionLifecycle {
+                case .active:
+                    pauseUserSession()
+                default:
+                    break
+                }
+                Log.info(.camera, "Gesture: session pause (right pinch) → lifecycle: \(sessionLifecycle)")
             }
-            Log.info(.camera, "Gesture: session stop (right pinch)")
+
+        case .rightThumbsUp:
+            // Dismiss overlays or end session
+            if showSessionProjectPicker {
+                showSessionProjectPicker = false
+                Log.info(.camera, "Gesture: dismissed project picker (thumbs up)")
+            } else if showFaceLinkingOverlay {
+                // Mark remaining unlinked faces as dismissed so they don't re-trigger
+                for i in faceLinkingIndex..<faceLinkingQueue.count {
+                    dismissedFaceTrackIDs.insert(faceLinkingQueue[i].id)
+                }
+                showFaceLinkingOverlay = false
+                Log.info(.camera, "Gesture: dismissed face linking (thumbs up)")
+            } else {
+                switch sessionLifecycle {
+                case .active, .paused:
+                    stopUserSession()
+                default:
+                    break
+                }
+                Log.info(.camera, "Gesture: session done (thumbs up) → lifecycle: \(sessionLifecycle)")
+            }
 
         case .leftFingerCount(let count):
-            // Option selection — pick from on-screen choices
-            selectOption(index: count)
-            Log.info(.camera, "Gesture: option \(count) selected (left fingers)")
+            if showSessionProjectPicker {
+                selectSessionProject(index: count)
+                Log.info(.camera, "Gesture: session project \(count) selected")
+            } else if showFaceLinkingOverlay {
+                advanceFaceLinking(selectedOption: count)
+                Log.info(.camera, "Gesture: face linking option \(count) selected")
+            } else if showOptionSelector {
+                selectOption(index: count)
+                Log.info(.camera, "Gesture: option \(count) selected (left fingers)")
+            } else if sessionLifecycle == .undefined || sessionLifecycle == .ready {
+                // No session, no question — switch pill mode with fingers 1-5
+                switchModeByGesture(index: count)
+                Log.info(.camera, "Gesture: mode switch to index \(count)")
+            } else {
+                selectOption(index: count)
+                Log.info(.camera, "Gesture: option \(count) selected (left fingers)")
+            }
         }
 
         // Clear gesture indicator after 1.5s
@@ -684,6 +758,85 @@ final class AppState: ObservableObject {
         onOptionSelected = onSelect
     }
 
+    // MARK: - Face Linking
+
+    /// Start the face-to-person linking flow. Walks through each tracked face
+    /// and presents the people list as options for gesture-based assignment.
+    func presentFaceLinkingOptions() {
+        let faces = faceTracker.trackedFaces
+        guard !faces.isEmpty else { return }
+        faceLinkingQueue = faces
+        faceLinkingIndex = 0
+        showFaceLinkingOverlay = true
+    }
+
+    /// Assign a person to the current face and advance to the next.
+    /// `selectedOption` is 1-based (matches left-hand finger count).
+    func advanceFaceLinking(selectedOption: Int) {
+        guard faceLinkingIndex < faceLinkingQueue.count else {
+            showFaceLinkingOverlay = false
+            syncAvatarSeedsFromFaces()
+            return
+        }
+
+        let face = faceLinkingQueue[faceLinkingIndex]
+        let nonSpecialPeople = people.filter { !$0.isMe && !$0.isMusic }
+        guard selectedOption >= 1, selectedOption <= nonSpecialPeople.count else { return }
+
+        let person = nonSpecialPeople[selectedOption - 1]
+        faceTracker.assignPerson(trackID: face.id, personID: person.id, personName: person.name)
+        Log.info(.camera, "Linked \(face.label) → \(person.name)")
+        faceLinkingIndex += 1
+
+        if faceLinkingIndex >= faceLinkingQueue.count {
+            showFaceLinkingOverlay = false
+            syncAvatarSeedsFromFaces()
+        }
+    }
+
+    /// Auto-detect new unlinked faces and trigger face linking on the canvas.
+    /// Called from `onFaceCountChanged` handler — only during active sessions.
+    private func checkForUnlinkedFaces() {
+        guard sessionLifecycle == .active else { return }
+        guard !showFaceLinkingOverlay else { return }
+        guard !showSessionProjectPicker else { return }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastAutoFaceLinkingTime) >= autoFaceLinkingCooldown else { return }
+
+        let unlinkedFaces = faceTracker.trackedFaces.filter { face in
+            face.assignedPersonID == nil && !dismissedFaceTrackIDs.contains(face.id)
+        }
+        guard !unlinkedFaces.isEmpty else { return }
+
+        let linkablePeople = people.filter { !$0.isMe && !$0.isMusic }
+        guard !linkablePeople.isEmpty else { return }
+
+        lastAutoFaceLinkingTime = now
+        faceLinkingQueue = unlinkedFaces
+        faceLinkingIndex = 0
+        showFaceLinkingOverlay = true
+        Log.info(.camera, "Auto-triggered face linking for \(unlinkedFaces.count) unlinked face(s)")
+    }
+
+    /// Select a project from the session project picker (gesture-based, 1-indexed).
+    func selectSessionProject(index: Int) {
+        let available = Array(projects.prefix(5))
+        guard index >= 1, index <= available.count else { return }
+        showSessionProjectPicker = false
+        var config = SessionConfig()
+        config.projectID = available[index - 1].id
+        config.projectName = available[index - 1].name
+        startUserSession(config: config)
+    }
+
+    /// Switch pill mode via left-hand gesture (1-5) when idle.
+    private func switchModeByGesture(index: Int) {
+        let modes: [PillMode] = [.ambientIntelligence, .transcription, .aiSearch, .tasks, .code]
+        guard index >= 1, index <= modes.count else { return }
+        pillMode = modes[index - 1]
+    }
+
     func cyclePillMode() {
         pillMode = pillMode.next()
     }
@@ -699,14 +852,13 @@ final class AppState: ObservableObject {
         pasteService.paste(text: text)
     }
 
-    /// Append raw transcribed text to the live transcript accumulator.
-    /// Called per-chunk after transcription (SFSpeech/Groq). No Ollama cleaning per-chunk.
-    /// Clears pendingRawSegment — the transcribed text has now replaced it.
-    func appendRawTranscript(_ text: String) {
-        let separator = liveTranscriptText.isEmpty ? "" : " "
-        liveTranscriptText += separator + text
-        pendingRawSegment = ""   // transcribed version has arrived — drop the raw placeholder
-        // Do NOT touch latestTranscriptChunk — it may already be accumulating the next chunk
+    /// Replace live transcript with the cleaned version from the pipeline.
+    /// Called at session end when Ollama cleaning returns the polished full-session text.
+    /// Replaces (not appends) because liveTranscriptText already has the raw accumulation.
+    func replaceWithCleanedTranscript(_ text: String) {
+        liveTranscriptText = text
+        pendingRawSegment = ""
+        latestTranscriptChunk = ""
     }
 
     /// Session model: append committed chunk text directly to the accumulated transcript.
@@ -807,14 +959,20 @@ final class AppState: ObservableObject {
                 )
             }
             Log.info(.system, "User session stopped — dispatching session-level processing (\(fullRawText.count) chars)")
+
+            // Transcription mode: auto-paste the raw text to the frontmost app immediately.
+            // The cleaned version will arrive later via onTranscriptionCleaned.
+            if capturedPillMode == .transcription {
+                pasteService.paste(text: fullRawText)
+            }
         } else {
             Log.info(.system, "User session stopped — no transcript to process")
         }
 
-        // Reset state
-        clearSessionTranscript()
+        // Reset state — keep transcript visible until next session starts or manual clear
         sessionLifecycle = .undefined
         sessionConfig = nil
+        dismissedFaceTrackIDs.removeAll()
     }
 
     /// Called at the chunk boundary: freezes the current streaming partial as a pending
@@ -1404,10 +1562,10 @@ final class AppState: ObservableObject {
             self?.refreshPipeline()
         }
 
-        pipelineOrchestrator.onTranscriptionCleaned = { [weak self] rawText in
+        pipelineOrchestrator.onTranscriptionCleaned = { [weak self] cleanedText in
             guard let self else { return }
             Task { @MainActor in
-                self.appendRawTranscript(rawText)
+                self.replaceWithCleanedTranscript(cleanedText)
             }
         }
 
@@ -1559,6 +1717,17 @@ final class AppState: ObservableObject {
     /// Toggle speaker: tap same person = clear, tap different = set.
     func toggleSpeaker(_ id: UUID) {
         currentSpeakerID = (currentSpeakerID == id) ? nil : id
+    }
+
+    /// Sync avatar seeds from tracked faces to linked Person records.
+    func syncAvatarSeedsFromFaces() {
+        for face in faceTracker.trackedFaces {
+            guard let personID = face.assignedPersonID, face.avatarSeed != 0 else { continue }
+            if let idx = people.firstIndex(where: { $0.id == personID }),
+               people[idx].avatarSeed == nil {
+                people[idx].avatarSeed = face.avatarSeed
+            }
+        }
     }
 
     /// Add a new person with the next unused color and auto-placed position.
