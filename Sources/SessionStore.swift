@@ -15,6 +15,7 @@ struct SessionRecord: Identifiable {
     let projectName: String?
     let objective: String?   // JSON array of context bullets
     let peopleJSON: String?  // JSON array of people names
+    let visualContext: String?  // JSON blob of VisualSessionContext
 }
 
 struct PlaceRecord: Identifiable {
@@ -82,6 +83,10 @@ final class SessionStore: @unchecked Sendable {
         execBind("UPDATE sessions SET place_id = ? WHERE id = ?;", args: [placeID, id])
     }
 
+    func updateSessionVisualContext(id: String, json: String) {
+        execBind("UPDATE sessions SET visual_context = ? WHERE id = ?;", args: [json, id])
+    }
+
     // MARK: - Place CRUD
 
     func findPlace(wifiSSID: String) -> PlaceRecord? {
@@ -109,7 +114,7 @@ final class SessionStore: @unchecked Sendable {
         let sql = """
             SELECT s.id, s.started_at, s.ended_at, s.wifi_ssid,
                    s.place_id, p.name, s.transcript_snippet,
-                   s.project_id, s.project_name, s.objective, s.people_json
+                   s.project_id, s.project_name, s.objective, s.people_json, s.visual_context
             FROM sessions s
             LEFT JOIN places p ON s.place_id = p.id
             WHERE s.place_id = ?
@@ -164,7 +169,7 @@ final class SessionStore: @unchecked Sendable {
         let sql = """
             SELECT s.id, s.started_at, s.ended_at, s.wifi_ssid,
                    s.place_id, p.name, s.transcript_snippet,
-                   s.project_id, s.project_name, s.objective, s.people_json
+                   s.project_id, s.project_name, s.objective, s.people_json, s.visual_context
             FROM sessions s
             LEFT JOIN places p ON s.place_id = p.id
             ORDER BY s.started_at DESC
@@ -178,7 +183,7 @@ final class SessionStore: @unchecked Sendable {
         let sql = """
             SELECT s.id, s.started_at, s.ended_at, s.wifi_ssid,
                    s.place_id, p.name, s.transcript_snippet,
-                   s.project_id, s.project_name, s.objective, s.people_json
+                   s.project_id, s.project_name, s.objective, s.people_json, s.visual_context
             FROM sessions s
             LEFT JOIN places p ON s.place_id = p.id
             WHERE s.project_id = ?
@@ -271,6 +276,7 @@ final class SessionStore: @unchecked Sendable {
         execSQL("ALTER TABLE sessions ADD COLUMN project_name TEXT;")
         execSQL("ALTER TABLE sessions ADD COLUMN objective TEXT;")
         execSQL("ALTER TABLE sessions ADD COLUMN people_json TEXT;")
+        execSQL("ALTER TABLE sessions ADD COLUMN visual_context TEXT;")
     }
 
     // MARK: - Helpers (internal for use by other services)
@@ -357,10 +363,11 @@ final class SessionStore: @unchecked Sendable {
             let nameRaw   = sqlite3_column_text(stmt, 5)
             let snippet   = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
             // New columns (7-10) — may not exist in older queries
-            let projID    = colCount > 7 ? sqlite3_column_text(stmt, 7).map { String(cString: $0) } : nil
-            let projName  = colCount > 8 ? sqlite3_column_text(stmt, 8).map { String(cString: $0) } : nil
-            let objective = colCount > 9 ? sqlite3_column_text(stmt, 9).map { String(cString: $0) } : nil
-            let pplJSON   = colCount > 10 ? sqlite3_column_text(stmt, 10).map { String(cString: $0) } : nil
+            let projID     = colCount > 7  ? sqlite3_column_text(stmt, 7).map  { String(cString: $0) } : nil
+            let projName   = colCount > 8  ? sqlite3_column_text(stmt, 8).map  { String(cString: $0) } : nil
+            let objective  = colCount > 9  ? sqlite3_column_text(stmt, 9).map  { String(cString: $0) } : nil
+            let pplJSON    = colCount > 10 ? sqlite3_column_text(stmt, 10).map { String(cString: $0) } : nil
+            let visualCtx  = colCount > 11 ? sqlite3_column_text(stmt, 11).map { String(cString: $0) } : nil
             results.append(SessionRecord(
                 id: id,
                 startedAt: iso.date(from: startStr) ?? Date(),
@@ -372,7 +379,8 @@ final class SessionStore: @unchecked Sendable {
                 projectID: projID,
                 projectName: projName,
                 objective: objective,
-                peopleJSON: pplJSON
+                peopleJSON: pplJSON,
+                visualContext: visualCtx
             ))
         }
         return results

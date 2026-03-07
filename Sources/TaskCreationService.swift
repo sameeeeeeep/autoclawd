@@ -23,7 +23,8 @@ final class TaskCreationService: @unchecked Sendable {
 
     // MARK: - Public API
 
-    func createTasks(from analysis: TranscriptAnalysis, attachmentPaths: [String] = []) async -> [PipelineTaskRecord] {
+    func createTasks(from analysis: TranscriptAnalysis, attachmentPaths: [String] = [],
+                     screenContext: String? = nil) async -> [PipelineTaskRecord] {
         guard !analysis.taskDescriptions.isEmpty else {
             Log.info(.taskCreate, "Stage 3: no task descriptions from analysis, skipping")
             return []
@@ -95,11 +96,26 @@ final class TaskCreationService: @unchecked Sendable {
             let prefix = projectPrefix(for: analysis.projectName)
             let taskID = pipelineStore.nextTaskID(prefix: prefix)
 
+            // Append raw screen context directly to the Claude Code prompt (bypasses Llama).
+            // Claude is much better at reading error messages, code, and UI text than Llama 3.2.
+            let finalPrompt: String
+            if let ctx = screenContext, !ctx.isEmpty {
+                let truncated = ctx.count > 3000 ? String(ctx.prefix(3000)) + "\n[…truncated]" : ctx
+                finalPrompt = """
+                \(desc.prompt)
+
+                SCREEN CONTEXT (what the user had visible on screen):
+                \(truncated)
+                """
+            } else {
+                finalPrompt = desc.prompt
+            }
+
             let task = PipelineTaskRecord(
                 id: taskID,
                 analysisID: analysis.id,
                 title: desc.title,
-                prompt: desc.prompt,
+                prompt: finalPrompt,
                 projectID: analysis.projectID,
                 projectName: analysis.projectName,
                 mode: mode,

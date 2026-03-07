@@ -74,12 +74,20 @@ final class PipelineOrchestrator: @unchecked Sendable {
         fullText: String,
         sessionID: String?,
         sessionContext: SessionConfig?,
+        speakerContext: String? = nil,
+        /// Metadata or cropped OCR — goes through Llama for project/task detection.
+        screenAnalysisContext: String? = nil,
+        /// Full or cropped OCR text — appended directly to Claude Code task prompts (bypasses Llama).
+        screenExecutionContext: String? = nil,
         source: PipelineSource = .ambient
     ) async {
         let job = PipelineJob(
             text: fullText, transcriptID: 0,
             sessionID: sessionID, sessionChunkSeq: 0,
             durationSeconds: 0, speakerName: nil,
+            speakerContext: speakerContext,
+            screenAnalysisContext: screenAnalysisContext,
+            screenExecutionContext: screenExecutionContext,
             source: source,
             isSessionEnd: true,
             sessionContext: sessionContext
@@ -144,6 +152,9 @@ final class PipelineOrchestrator: @unchecked Sendable {
         let sessionID = job.sessionID
         let source = job.source
         let sessionContext = job.sessionContext
+        let speakerContext = job.speakerContext
+        let screenAnalysisContext  = job.screenAnalysisContext
+        let screenExecutionContext = job.screenExecutionContext
 
         // Signal processing started (widget glow)
         await MainActor.run { [weak self] in self?.onSessionProcessingChanged?(true) }
@@ -163,7 +174,8 @@ final class PipelineOrchestrator: @unchecked Sendable {
             sessionID: sessionID,
             sessionChunkSeq: 0,
             durationSeconds: 0,
-            speakerName: nil
+            speakerName: nil,
+            speakerContext: speakerContext
         ) else {
             Log.info(.pipeline, "Pipeline[session-end]: cleaning returned nil")
             return
@@ -194,16 +206,18 @@ final class PipelineOrchestrator: @unchecked Sendable {
 
         // Stage 2: Analyze (with session context if available)
         Log.info(.pipeline, "Pipeline[session-end]: Stage 2 — analyzing")
+        // Stage 2: Analyze — Llama receives metadata/cropped OCR only (screenAnalysisContext)
         guard let analysis = await analysisService.analyze(
             cleaned: cleaned,
-            sessionContext: sessionContext
+            sessionContext: sessionContext,
+            screenContext: screenAnalysisContext
         ) else {
             Log.info(.pipeline, "Pipeline[session-end]: analysis returned nil")
             return
         }
         await notifyUpdate()
 
-        // Grab any context captures from this session
+        // Grab any context captures from this session (screenshots saved via captureScreenNow)
         let captures = ContextCaptureStore.shared.recentUnattached(sessionID: sessionID)
         let capturePaths = captures.map(\.filePath).filter { !$0.isEmpty }
         if !captures.isEmpty {
@@ -211,8 +225,12 @@ final class PipelineOrchestrator: @unchecked Sendable {
             ContextCaptureStore.shared.markAttached(ids: captures.map(\.id))
         }
 
-        // Stage 3: Create tasks
-        let tasks = await taskCreationService.createTasks(from: analysis, attachmentPaths: capturePaths)
+        // Stage 3: Create tasks — Claude Code receives full/cropped OCR (screenExecutionContext)
+        let tasks = await taskCreationService.createTasks(
+            from: analysis,
+            attachmentPaths: capturePaths,
+            screenContext: screenExecutionContext
+        )
         await notifyUpdate()
 
         if tasks.isEmpty {
@@ -309,12 +327,18 @@ private struct PipelineJob {
     let sessionChunkSeq: Int
     let durationSeconds: Int
     let speakerName: String?
+    let speakerContext: String?          // "Alice: 90s, Bob: 45s" — for LLM speaker attribution
+    let screenAnalysisContext: String?   // metadata / cropped OCR — fed to Llama for project detection
+    let screenExecutionContext: String?  // full / cropped OCR — appended to Claude Code task prompts only
     let source: PipelineSource
     let isSessionEnd: Bool
     let sessionContext: SessionConfig?
 
     init(text: String, transcriptID: Int64, sessionID: String?,
          sessionChunkSeq: Int, durationSeconds: Int, speakerName: String?,
+         speakerContext: String? = nil,
+         screenAnalysisContext: String? = nil,
+         screenExecutionContext: String? = nil,
          source: PipelineSource, isSessionEnd: Bool = false,
          sessionContext: SessionConfig? = nil) {
         self.text = text
@@ -323,6 +347,9 @@ private struct PipelineJob {
         self.sessionChunkSeq = sessionChunkSeq
         self.durationSeconds = durationSeconds
         self.speakerName = speakerName
+        self.speakerContext = speakerContext
+        self.screenAnalysisContext = screenAnalysisContext
+        self.screenExecutionContext = screenExecutionContext
         self.source = source
         self.isSessionEnd = isSessionEnd
         self.sessionContext = sessionContext
