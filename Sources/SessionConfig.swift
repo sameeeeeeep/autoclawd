@@ -50,3 +50,42 @@ struct SessionConfig {
         (projectID != nil) || !peopleNames.isEmpty || !contextBullets.isEmpty
     }
 }
+
+// MARK: - Ambient Review (post-session canvas overlay)
+
+/// Tracks which phase the post-session review canvas is in.
+enum AmbientReviewPhase: Equatable {
+    /// Session just ended — transcript is being cleaned by the LLM (blue glow).
+    case cleaning
+    /// Cleaning finished — LLM is now extracting tasks (blue glow).
+    case analyzing
+    /// Pipeline finished (or timed out) — tasks are available for user approval.
+    case tasksReady
+    /// All approved tasks have been executed — show success state.
+    case done
+}
+
+/// All state for the post-session ambient review overlay.
+/// Non-nil on AppState when an ambient session has just ended.
+struct AmbientReviewState {
+    var phase: AmbientReviewPhase = .cleaning
+    /// Cleaned (or raw) transcript text — updated progressively as pipeline runs.
+    var cleanedTranscript: String = ""
+    /// The ChunkManager sessionID for this session — used for matching pipeline output.
+    var sessionID: String? = nil
+    /// Timestamp when this review was created — used to filter analyses to this session only.
+    var startedAt: Date = Date()
+    /// IDs of TranscriptAnalysis records created from this session.
+    var sessionAnalysisIDs: [String] = []
+    /// IDs of PipelineTaskRecord records created from this session.
+    var sessionTaskIDs: [String] = []
+    /// Tasks the user has approved in the review canvas.
+    var approvedTaskIDs: Set<String> = []
+    /// Tasks the user has skipped in the review canvas.
+    var skippedTaskIDs: Set<String> = []
+    /// Project chosen in the review (applied retroactively on Done).
+    var selectedProjectID: String? = nil
+    var selectedProjectName: String? = nil
+    /// Remaining task IDs to execute sequentially after "approve all".
+    var executionQueue: [String] = []
+}

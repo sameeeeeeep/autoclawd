@@ -3,6 +3,14 @@ import Combine
 import Foundation
 import SwiftUI
 
+// MARK: - FeedViewMode
+
+/// Which source is shown in the camera/screen feed area.
+enum FeedViewMode: String {
+    case camera
+    case screen
+}
+
 // MARK: - ExecutionMode
 
 enum ExecutionMode: String, CaseIterable {
@@ -211,6 +219,17 @@ final class AppState: ObservableObject {
     private var codeTaskID: String?
     private var codeStepIndex: Int = 0
 
+    // System audio state
+    @Published var systemAudioEnabled: Bool {
+        didSet {
+            SettingsManager.shared.systemAudioEnabled = systemAudioEnabled
+            if systemAudioEnabled { startSystemAudio() } else { stopSystemAudio() }
+        }
+    }
+    @Published var systemAudioLevel: Float = 0
+    @Published var screenPreviewImage: CGImage? = nil
+    @Published var feedViewMode: FeedViewMode = .camera
+
     // Camera & gesture state
     @Published var cameraEnabled: Bool {
         didSet {
@@ -233,6 +252,17 @@ final class AppState: ObservableObject {
     @Published var showCleaningPicker: Bool = false
     @Published var cleaningResults: [CleaningLevel: String] = [:]
     @Published var selectedCleaningLevel: CleaningLevel = .minimal
+
+    // MARK: - Ambient Review
+    /// Non-nil when a just-ended ambient session is awaiting task review on the pill canvas.
+    @Published var ambientReview: AmbientReviewState? = nil
+    /// Computed convenience for `onChange` observation.
+    var isAmbientReviewActive: Bool { ambientReview != nil }
+
+    // MARK: - Canvas Task Execution
+    /// Non-nil while a pipeline task is streaming on the pill canvas.
+    /// Execution output is delivered via the existing codeSessionMessages / codeIsStreaming machinery.
+    @Published var canvasExecutingTask: PipelineTaskRecord? = nil
     private var onOptionSelected: ((Int) -> Void)?
     private var faceLinkingQueue: [FaceTracker.TrackedFace] = []
     @Published private(set) var faceLinkingIndex: Int = 0
@@ -341,6 +371,7 @@ final class AppState: ObservableObject {
         isCodeExecutionEnabled = settings.isCodeExecutionEnabled
         speakerMode            = SpeakerMode(rawValue: settings.speakerMode) ?? .single
         musicModeEnabled       = settings.musicModeEnabled
+        systemAudioEnabled     = settings.systemAudioEnabled
         cameraEnabled          = settings.cameraEnabled
         gestureControlEnabled  = settings.gestureControlEnabled
         faceTrackingEnabled    = settings.faceTrackingEnabled
@@ -575,6 +606,11 @@ final class AppState: ObservableObject {
         if cameraEnabled {
             startCamera()
         }
+
+        // Start system audio if enabled
+        if systemAudioEnabled {
+            startSystemAudio()
+        }
     }
 
     // MARK: - Listening Control
@@ -625,6 +661,55 @@ final class AppState: ObservableObject {
             }
             Log.info(.ui, "Mic resumed")
         }
+    }
+
+    // MARK: - System Audio Control
+
+    func startSystemAudio() {
+        guard systemAudioEnabled else { return }
+        guard SystemAudioCapturer.hasPermission() else {
+            SystemAudioCapturer.requestPermission()
+            systemAudioEnabled = false
+            Log.warn(.audio, "Screen Recording permission not granted — disabling system audio")
+            return
+        }
+        // Wire screen preview frames
+        chunkManager.systemAudioCapturer.onFrame = { [weak self] image in
+            Task { @MainActor [weak self] in
+                self?.screenPreviewImage = image
+            }
+        }
+        Task {
+            do {
+                try await chunkManager.enableSystemAudio()
+                // Forward system audio level to UI
+                chunkManager.systemAudioCapturer.$audioLevel
+                    .receive(on: RunLoop.main)
+                    .sink { [weak self] level in
+                        self?.systemAudioLevel = level
+                    }
+                    .store(in: &cancellables)
+                // Auto-switch feed to screen if camera is off
+                if !cameraEnabled {
+                    feedViewMode = .screen
+                }
+                Log.info(.audio, "System audio started")
+            } catch {
+                Log.error(.audio, "System audio failed to start: \(error.localizedDescription)")
+                systemAudioEnabled = false
+            }
+        }
+    }
+
+    func stopSystemAudio() {
+        chunkManager.disableSystemAudio()
+        screenPreviewImage = nil
+        systemAudioLevel = 0
+        // Switch feed back to camera if camera is on
+        if cameraEnabled {
+            feedViewMode = .camera
+        }
+        Log.info(.audio, "System audio stopped")
     }
 
     // MARK: - Camera Control
@@ -708,6 +793,14 @@ final class AppState: ObservableObject {
                 }
                 showFaceLinkingOverlay = false
                 Log.info(.camera, "Gesture: dismissed face linking (thumbs up)")
+            } else if let review = ambientReview, review.phase == .tasksReady {
+                // Approve all session tasks and start sequential execution
+                approveAllReviewTasks()
+                Log.info(.camera, "Gesture: approve all review tasks (thumbs up)")
+            } else if ambientReview?.phase == .done {
+                // Dismiss the done-state review
+                dismissAmbientReview()
+                Log.info(.camera, "Gesture: dismiss done review (thumbs up)")
             } else {
                 switch sessionLifecycle {
                 case .active, .paused:
@@ -730,6 +823,10 @@ final class AppState: ObservableObject {
             } else if showFaceLinkingOverlay {
                 advanceFaceLinking(selectedOption: count)
                 Log.info(.camera, "Gesture: face linking option \(count) selected")
+            } else if ambientReview != nil {
+                // Select project during review: 0 = None, 1..N = project by position
+                selectReviewProjectByIndex(count)
+                Log.info(.camera, "Gesture: review project index \(count) selected")
             } else if showOptionSelector {
                 selectOption(index: count)
                 Log.info(.camera, "Gesture: option \(count) selected (left fingers)")
@@ -903,6 +1000,14 @@ final class AppState: ObservableObject {
 
     /// Open the session config panel.
     func configureSession() {
+        // Ambient + transcription: skip the start-of-session project picker.
+        // Ambient sessions show a review canvas at the END with project assignment.
+        // Transcription sessions rely on the LLM auto-guessing the project silently.
+        if pillMode == .ambientIntelligence || pillMode == .transcription {
+            startUserSession(config: SessionConfig())
+            return
+        }
+        // Tasks / Code / other modes: keep the existing config panel.
         sessionLifecycle = .configuring
         sessionConfig = SessionConfig()
     }
@@ -920,6 +1025,9 @@ final class AppState: ObservableObject {
         clearSessionTranscript()
         showCleaningPicker = false
         cleaningResults.removeAll()
+        // Clear any stale overlays from a previous session so they don't block the canvas.
+        ambientReview = nil
+        showSessionProjectPicker = false
 
         // Derive pill mode from context — default to ambient intelligence
         if pillMode != .ambientIntelligence && pillMode != .transcription && pillMode != .tasks {
@@ -979,6 +1087,18 @@ final class AppState: ObservableObject {
                 )
             }
             Log.info(.system, "User session stopped — dispatching session-level processing (\(fullRawText.count) chars)")
+
+            // Ambient mode: show post-session review canvas immediately.
+            // Tasks and analyses will populate it reactively as the pipeline runs.
+            // Do NOT call clearSessionTranscript() here — dismissAmbientReview() does it.
+            if capturedPillMode == .ambientIntelligence {
+                var review = AmbientReviewState()
+                review.cleanedTranscript = fullRawText
+                review.sessionID = capturedSessionID
+                review.phase = .cleaning
+                review.startedAt = Date()
+                ambientReview = review
+            }
 
             // Transcription mode: show cleaning level chooser on canvas
             if capturedPillMode == .transcription {
@@ -1418,6 +1538,96 @@ final class AppState: ObservableObject {
         refreshPipeline()
     }
 
+    // MARK: - Ambient Review Actions
+
+    /// Approve a task directly from the post-session review canvas and stream it on the canvas.
+    func reviewApproveTask(_ id: String) {
+        guard var review = ambientReview else { return }
+        review.approvedTaskIDs.insert(id)
+        review.skippedTaskIDs.remove(id)
+        ambientReview = review
+        executeReviewTaskOnCanvas(id)
+    }
+
+    /// Skip a task from the post-session review canvas (marks it filtered).
+    func reviewSkipTask(_ id: String) {
+        guard var review = ambientReview else { return }
+        review.skippedTaskIDs.insert(id)
+        review.approvedTaskIDs.remove(id)
+        ambientReview = review
+        dismissTask(id: id)
+    }
+
+    /// Update the project selected in the post-session review canvas.
+    func reviewSelectProject(_ project: Project?) {
+        guard var review = ambientReview else { return }
+        review.selectedProjectID   = project?.id
+        review.selectedProjectName = project?.name
+        ambientReview = review
+    }
+
+    /// Select project in the review by 1-based index (0 = None, 1..N = project list).
+    func selectReviewProjectByIndex(_ index: Int) {
+        if index == 0 {
+            reviewSelectProject(nil)
+        } else {
+            let allProjects = Array(projects.prefix(5))
+            if index >= 1 && index <= allProjects.count {
+                reviewSelectProject(allProjects[index - 1])
+            }
+        }
+    }
+
+    /// Approve all session tasks and start executing them sequentially on the canvas.
+    func approveAllReviewTasks() {
+        guard var review = ambientReview, review.phase == .tasksReady else { return }
+        let taskIDs = review.sessionTaskIDs.filter { !review.skippedTaskIDs.contains($0) }
+        guard !taskIDs.isEmpty else {
+            review.phase = .done
+            ambientReview = review
+            Log.info(.pipeline, "Review: no tasks to execute — done")
+            return
+        }
+        review.approvedTaskIDs = Set(taskIDs)
+        review.executionQueue = Array(taskIDs.dropFirst())
+        ambientReview = review
+        // Kick off the first task; doneWithCanvasExecution() handles the rest.
+        executeReviewTaskOnCanvas(taskIDs[0])
+        Log.info(.pipeline, "Review: approving all \(taskIDs.count) task(s), \(taskIDs.count - 1) queued")
+    }
+
+    /// Dismiss the ambient review: retroactively assigns the selected project to all
+    /// analyses and tasks from this session, then clears the review and the transcript.
+    func dismissAmbientReview() {
+        guard let review = ambientReview else { return }
+
+        // Retroactively patch project onto all pipeline records from this session.
+        if let pid = review.selectedProjectID, let pname = review.selectedProjectName {
+            for aid in review.sessionAnalysisIDs {
+                if let a = transcriptAnalyses.first(where: { $0.id == aid }) {
+                    pipelineStore.updateAnalysis(
+                        id: aid, projectName: pname, projectID: pid,
+                        priority: a.priority, tags: a.tags, summary: a.summary
+                    )
+                }
+            }
+            for tid in review.sessionTaskIDs {
+                if let t = pipelineTasks.first(where: { $0.id == tid }) {
+                    pipelineStore.updateTaskDetails(
+                        id: tid, title: t.title, prompt: t.prompt,
+                        projectName: pname, projectID: pid
+                    )
+                }
+            }
+            refreshPipeline()
+            Log.info(.system, "Ambient review: assigned project '\(pname)' retroactively to \(review.sessionAnalysisIDs.count) analyses, \(review.sessionTaskIDs.count) tasks")
+        }
+
+        ambientReview = nil
+        clearSessionTranscript()
+        Log.info(.system, "Ambient review dismissed")
+    }
+
     /// Re-run the full pipeline (analysis → task creation → execution) on an
     /// existing cleaned transcript. Useful for transcripts captured in
     /// transcription-only mode, or that previously produced no actionable tasks.
@@ -1438,6 +1648,87 @@ final class AppState: ObservableObject {
                 source: .ambient
             )
         }
+    }
+
+    // MARK: - Canvas Task Execution
+
+    /// Start executing a pipeline task and stream its output on the pill canvas.
+    /// Reuses the existing codeSessionMessages / codeIsStreaming / processCodeStream machinery.
+    func executeReviewTaskOnCanvas(_ taskID: String) {
+        guard let task = pipelineTasks.first(where: { $0.id == taskID }) else { return }
+
+        // Resolve project: review selection → task's project → first available.
+        let resolvedProjectID = ambientReview?.selectedProjectID ?? task.projectID
+        let project: Project?
+        if let pid = resolvedProjectID {
+            project = projects.first(where: { $0.id == pid }) ?? projects.first
+        } else {
+            project = projects.first
+        }
+        guard let project else {
+            Log.warn(.system, "Canvas execution: no project available for task \(taskID)")
+            return
+        }
+
+        // Mark task as running in the pipeline store.
+        pipelineStore.updateTaskStatus(id: taskID, status: .ongoing, startedAt: Date())
+        refreshPipeline()
+
+        // Wire up streaming state (reuses code widget published properties).
+        codeSessionMessages = []
+        codeIsStreaming = true
+        codeCurrentToolName = nil
+        codeTaskID = taskID
+        codeStepIndex = 0
+        canvasExecutingTask = task
+
+        guard let (session, stream) = claudeCodeRunner.startSession(
+            prompt: task.prompt, in: project,
+            dangerouslySkipPermissions: true
+        ) else {
+            codeSessionMessages.append(CodeMessage(role: .error, text: "Failed to start Claude CLI"))
+            codeIsStreaming = false
+            canvasExecutingTask = nil
+            return
+        }
+        codeSession = session
+        codeSessionMessages.append(CodeMessage(role: .status, text: task.title))
+
+        codeStreamTask = Task { @MainActor in
+            await processCodeStream(stream)
+            // Mark complete when stream finishes naturally.
+            pipelineStore.updateTaskStatus(id: taskID, status: .completed, completedAt: Date())
+            refreshPipeline()
+        }
+        Log.info(.pipeline, "Canvas execution started: \(task.title) in \(project.name)")
+    }
+
+    /// Stop the canvas execution: advance the sequential execution queue or show done state.
+    func doneWithCanvasExecution() {
+        codeStreamTask?.cancel()
+        codeStreamTask = nil
+        codeSession = nil
+        codeIsStreaming = false
+        codeCurrentToolName = nil
+        if let taskID = codeTaskID {
+            pipelineStore.updateTaskStatus(id: taskID, status: .completed, completedAt: Date())
+            refreshPipeline()
+        }
+        codeTaskID = nil
+        canvasExecutingTask = nil
+
+        // Advance the execution queue — start next task or show done state.
+        if var review = ambientReview, !review.executionQueue.isEmpty {
+            let nextID = review.executionQueue.removeFirst()
+            ambientReview = review
+            executeReviewTaskOnCanvas(nextID)
+            Log.info(.pipeline, "Review: starting next queued task \(nextID)")
+        } else if ambientReview != nil {
+            // Queue exhausted — all tasks done.
+            ambientReview?.phase = .done
+            Log.info(.pipeline, "Review: all tasks executed, showing done state")
+        }
+        // If ambientReview is nil, canvasForCurrentMode falls through to the next canvas layer.
     }
 
     /// Send a follow-up message to an active Claude session for a task (with optional attachments).
@@ -1660,17 +1951,68 @@ final class AppState: ObservableObject {
             guard let self else { return }
             Task { @MainActor in
                 self.replaceWithCleanedTranscript(cleanedText)
+                // Update review transcript and advance cleaning → analyzing phase.
+                if var review = self.ambientReview {
+                    review.cleanedTranscript = cleanedText
+                    if review.phase == .cleaning {
+                        review.phase = .analyzing
+                    }
+                    self.ambientReview = review
+                }
             }
         }
 
         pipelineOrchestrator.onSessionProcessingChanged = { [weak self] active in
-            self?.isSessionProcessing = active
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.isSessionProcessing = active
+                // When processing ends, advance review to tasksReady if still in a pipeline phase.
+                if !active, var review = self.ambientReview {
+                    if review.phase == .analyzing || review.phase == .cleaning {
+                        review.phase = .tasksReady
+                        self.ambientReview = review
+                    }
+                }
+            }
         }
 
         // Observe audio level changes
         chunkManager.$chunkIndex
             .sink { [weak self] _ in
                 DispatchQueue.main.async { self?.audioLevel = self?.chunkManager.audioLevel ?? 0 }
+            }
+            .store(in: &cancellables)
+
+        // ── Ambient review: reactively populate analysis IDs as pipeline emits them ──
+        // Only include analyses from THIS session (timestamp >= review.startedAt) to avoid
+        // contaminating the review with analyses from previous sessions.
+        $transcriptAnalyses
+            .receive(on: RunLoop.main)
+            .sink { [weak self] analyses in
+                guard var review = self?.ambientReview else { return }
+                let newIDs = analyses
+                    .filter { $0.timestamp >= review.startedAt && !review.sessionAnalysisIDs.contains($0.id) }
+                    .map(\.id)
+                guard !newIDs.isEmpty else { return }
+                review.sessionAnalysisIDs.append(contentsOf: newIDs)
+                self?.ambientReview = review
+            }
+            .store(in: &cancellables)
+
+        // ── Ambient review: reactively populate task IDs matched to this session's analyses ──
+        $pipelineTasks
+            .receive(on: RunLoop.main)
+            .sink { [weak self] tasks in
+                guard var review = self?.ambientReview else { return }
+                let newIDs = tasks
+                    .filter { review.sessionAnalysisIDs.contains($0.analysisID)
+                           && $0.createdAt >= review.startedAt
+                           && !review.sessionTaskIDs.contains($0.id) }
+                    .map(\.id)
+                guard !newIDs.isEmpty else { return }
+                review.sessionTaskIDs.append(contentsOf: newIDs)
+                review.phase = .tasksReady
+                self?.ambientReview = review
             }
             .store(in: &cancellables)
     }

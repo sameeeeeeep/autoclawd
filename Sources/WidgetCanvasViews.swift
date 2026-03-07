@@ -982,3 +982,483 @@ struct CleaningPickerCanvasView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
+
+// MARK: - Ambient Session Review Canvas
+
+/// Post-session review overlay shown on the pill canvas after an ambient session ends.
+/// Four phases: cleaning → analyzing → tasksReady → done.
+/// Gesture-aware: left fingers select project, thumbs up approves all tasks.
+struct AmbientSessionReviewView: View {
+    let review:          AmbientReviewState
+    let tasks:           [PipelineTaskRecord]
+    let projects:        [Project]
+    let skills:          [Skill]
+    let onApproveTask:   (String) -> Void
+    let onSkipTask:      (String) -> Void
+    let onApproveAll:    () -> Void
+    let onSelectProject: (Project?) -> Void
+    let onDone:          () -> Void
+
+    var body: some View {
+        switch review.phase {
+        case .done:
+            doneView
+        default:
+            mainView
+        }
+    }
+
+    // MARK: - Done State
+
+    private var doneView: some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 26))
+                .foregroundColor(.green.opacity(0.8))
+            Text("All done")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white.opacity(0.82))
+            Text("Tasks executed successfully")
+                .font(.system(size: 9))
+                .foregroundColor(.white.opacity(0.35))
+            Spacer()
+            Button { onDone() } label: {
+                Text("Close")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.cyan.opacity(0.7))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.cyan.opacity(0.10))
+                    )
+            }
+            .buttonStyle(.plain)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Main Review View (cleaning / analyzing / tasksReady)
+
+    private var mainView: some View {
+        VStack(spacing: 0) {
+            // ── Header ────────────────────────────────────────────────────────
+            HStack(spacing: 6) {
+                phaseIcon
+                phaseLabel
+                Spacer()
+                if review.phase == .tasksReady {
+                    Button { onDone() } label: {
+                        Text("Skip")
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.28))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 5)
+
+            Divider().opacity(0.10)
+
+            // ── Scrollable body ───────────────────────────────────────────────
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 10) {
+
+                    // ── Transcript ─────────────────────────────────────────────
+                    if !review.cleanedTranscript.isEmpty {
+                        ScrollView(showsIndicators: false) {
+                            Text(review.cleanedTranscript)
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundColor(.white.opacity(0.78))
+                                .lineSpacing(3)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 70)
+                    }
+
+                    // ── Pipeline status spinner ────────────────────────────────
+                    if review.phase == .cleaning || review.phase == .analyzing {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .scaleEffect(0.45)
+                                .frame(width: 10, height: 10)
+                            Text(review.phase == .cleaning ? "Cleaning transcript…" : "Extracting tasks…")
+                                .font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.28))
+                                .italic()
+                        }
+                    }
+
+                    // ── Task list ─────────────────────────────────────────────
+                    if review.phase == .tasksReady {
+                        if tasks.isEmpty {
+                            Text("No tasks extracted.")
+                                .font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.25))
+                                .italic()
+                        } else {
+                            VStack(spacing: 5) {
+                                ForEach(tasks) { task in
+                                    taskRow(task)
+                                }
+                            }
+
+                            // Approve-all hint
+                            HStack {
+                                Spacer()
+                                Button { onApproveAll() } label: {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "hand.thumbsup.fill")
+                                            .font(.system(size: 9))
+                                        Text("Approve all & execute")
+                                            .font(.system(size: 9, weight: .semibold))
+                                    }
+                                    .foregroundColor(.green.opacity(0.8))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                            .fill(Color.green.opacity(0.10))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                                    .stroke(Color.green.opacity(0.25), lineWidth: 1)
+                                            )
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                Spacer()
+                            }
+                        }
+                    }
+
+                    // ── Project chips ─────────────────────────────────────────
+                    projectSelector
+
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    // MARK: - Phase Icon & Label
+
+    @ViewBuilder
+    private var phaseIcon: some View {
+        switch review.phase {
+        case .cleaning:
+            Image(systemName: "wand.and.sparkles")
+                .font(.system(size: 10))
+                .foregroundColor(.cyan.opacity(0.7))
+        case .analyzing:
+            Image(systemName: "brain")
+                .font(.system(size: 10))
+                .foregroundColor(.cyan.opacity(0.7))
+        case .tasksReady:
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 10))
+                .foregroundColor(.green.opacity(0.7))
+        case .done:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var phaseLabel: some View {
+        switch review.phase {
+        case .cleaning:
+            Text("CLEANING")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(.white.opacity(0.35))
+                .tracking(1)
+        case .analyzing:
+            Text("ANALYZING")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(.white.opacity(0.35))
+                .tracking(1)
+        case .tasksReady:
+            Text("SESSION REVIEW")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(.white.opacity(0.35))
+                .tracking(1)
+        case .done:
+            EmptyView()
+        }
+    }
+
+    // MARK: - Task Row (rich: title + tags + skill chip + attachments)
+
+    @ViewBuilder
+    private func taskRow(_ task: PipelineTaskRecord) -> some View {
+        let approved = review.approvedTaskIDs.contains(task.id)
+        let skipped  = review.skippedTaskIDs.contains(task.id)
+        let resolved = approved || skipped
+
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 6) {
+                // State icon
+                Image(systemName: approved ? "checkmark.circle.fill"
+                                  : skipped  ? "xmark.circle.fill"
+                                             : "circle")
+                    .font(.system(size: 10))
+                    .foregroundColor(approved ? .green
+                                     : skipped  ? .white.opacity(0.18)
+                                                : .white.opacity(0.30))
+                    .frame(width: 14, alignment: .top)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    // Title
+                    Text(task.title)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white.opacity(resolved ? 0.28 : 0.80))
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // Chips row: skill + tags + attachments
+                    if !resolved {
+                        chipsRow(task)
+                    }
+                }
+
+                // Action buttons (hidden once resolved)
+                if !resolved {
+                    VStack(spacing: 3) {
+                        Button("✓") { onApproveTask(task.id) }
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.green.opacity(0.85))
+                            .buttonStyle(.plain)
+                        Button("✕") { onSkipTask(task.id) }
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.22))
+                            .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.white.opacity(resolved ? 0.02 : 0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(approved ? Color.green.opacity(0.18) : Color.clear, lineWidth: 1)
+                )
+        )
+    }
+
+    @ViewBuilder
+    private func chipsRow(_ task: PipelineTaskRecord) -> some View {
+        let skillName: String? = task.skillID.flatMap { sid in
+            skills.first(where: { $0.id == sid })?.name
+        }
+        let hasChips = skillName != nil || !task.attachmentPaths.isEmpty
+        if hasChips {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    // Skill chip
+                    if let sname = skillName {
+                        miniChip(label: sname, icon: "bolt.fill", color: .purple)
+                    }
+                    // Attachment chips
+                    ForEach(Array(task.attachmentPaths.prefix(2).enumerated()), id: \.offset) { _, path in
+                        let name = URL(fileURLWithPath: path).lastPathComponent
+                        miniChip(label: name, icon: "paperclip", color: .cyan)
+                    }
+                }
+            }
+            .frame(height: 18)
+        }
+    }
+
+    @ViewBuilder
+    private func miniChip(label: String, icon: String?, color: Color) -> some View {
+        HStack(spacing: 3) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 6))
+            }
+            Text(label)
+                .font(.system(size: 7, weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundColor(color.opacity(0.7))
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(
+            Capsule()
+                .fill(color.opacity(0.08))
+                .overlay(Capsule().stroke(color.opacity(0.18), lineWidth: 0.5))
+        )
+    }
+
+    // MARK: - Project Selector (numbered chips for gesture selection)
+
+    private var projectSelector: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                Text("PROJECT")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundColor(.white.opacity(0.22))
+                    .tracking(1)
+                if review.phase != .done {
+                    Text("· gesture to assign")
+                        .font(.system(size: 7))
+                        .foregroundColor(.white.opacity(0.14))
+                }
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 62, maximum: 110), spacing: 4)],
+                spacing: 4
+            ) {
+                // "0" = None chip
+                numberedProjectChip(index: 0, label: "None",
+                                    selected: review.selectedProjectID == nil) {
+                    onSelectProject(nil)
+                }
+
+                ForEach(Array(projects.prefix(5).enumerated()), id: \.element.id) { i, project in
+                    numberedProjectChip(
+                        index: i + 1,
+                        label: project.name,
+                        selected: review.selectedProjectID == project.id
+                    ) {
+                        onSelectProject(project)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func numberedProjectChip(index: Int, label: String, selected: Bool,
+                                     action: @escaping () -> Void) -> some View {
+        Button { action() } label: {
+            HStack(spacing: 3) {
+                Text("\(index)")
+                    .font(.system(size: 7, weight: .bold, design: .monospaced))
+                    .foregroundColor(selected ? .cyan.opacity(0.6) : .white.opacity(0.20))
+                Text(label)
+                    .font(.system(size: 9, weight: selected ? .semibold : .regular))
+                    .foregroundColor(selected ? .cyan : .white.opacity(0.45))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(selected ? Color.cyan.opacity(0.12) : Color.white.opacity(0.05))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(selected ? Color.cyan.opacity(0.5) : Color.clear,
+                                    lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Task Execution Canvas
+
+/// Shown on the pill canvas while a pipeline task is streaming via Claude Code.
+/// Reuses AppState's codeSessionMessages / codeIsStreaming / CodeMessageRow machinery.
+struct TaskExecutionCanvasView: View {
+    let task: PipelineTaskRecord
+    @ObservedObject var appState: AppState
+    let onDone: () -> Void
+
+    var isRunning: Bool { appState.codeSession?.isRunning == true || appState.codeIsStreaming }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+
+            // ── Header ────────────────────────────────────────────────────────
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.accentColor)
+
+                Text(task.title)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.75))
+                    .lineLimit(1)
+
+                Spacer()
+
+                // Streaming pulse
+                if appState.codeIsStreaming {
+                    Circle()
+                        .fill(Color.orange)
+                        .frame(width: 5, height: 5)
+                        .modifier(PulsingDot())
+                }
+
+                // Stop / Done button
+                Button { onDone() } label: {
+                    if isRunning {
+                        Image(systemName: "stop.circle")
+                            .font(.system(size: 11))
+                            .foregroundColor(.red.opacity(0.7))
+                    } else {
+                        Text("Done")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(.cyan.opacity(0.65))
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 5)
+
+            Divider().opacity(0.10)
+
+            // ── Message stream ────────────────────────────────────────────────
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(appState.codeSessionMessages) { msg in
+                            CodeMessageRow(message: msg)
+                                .id(msg.id)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onChange(of: appState.codeSessionMessages.count) { _ in
+                    if let last = appState.codeSessionMessages.last {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                    }
+                }
+            }
+
+            // ── Tool indicator ────────────────────────────────────────────────
+            if let toolName = appState.codeCurrentToolName {
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.mini)
+                    Text(toolName)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.orange)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
+                .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}

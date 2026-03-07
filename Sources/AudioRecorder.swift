@@ -101,6 +101,8 @@ final class AudioRecorder: NSObject, ObservableObject, @unchecked Sendable {
     private let audioFileQueue = DispatchQueue(label: "com.autoclawd.audiofile", qos: .utility)
     private var currentDeviceUID: String?
     private var storedInputFormat: AVAudioFormat?
+    /// Exposes the mic's input format so callers (e.g. ChunkManager) can resample other sources to match.
+    var currentFormat: AVAudioFormat? { storedInputFormat }
 
     // Silence tracking — reset on each startRecording()
     private var totalFrames: Int = 0

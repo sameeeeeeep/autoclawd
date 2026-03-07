@@ -132,7 +132,11 @@ struct SettingsConsolidatedView: View {
         case .people:      peopleSection()
         case .skills:      skillsSection()
         case .connections: connectionsSection()
-        case .camera:      cameraSection()
+        case .camera:
+            VStack(spacing: 0) {
+                cameraSection()
+                systemAudioSection()
+            }
         case .appearance:  appearanceSection()
         case .widget:      widgetSection()
         }
@@ -566,6 +570,43 @@ struct SettingsConsolidatedView: View {
                         }
                     }
                     .opacity(isCC ? 1.0 : 0.5)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - System Audio Section
+
+    @ViewBuilder
+    private func systemAudioSection() -> some View {
+        Form {
+            Section("System Audio") {
+                Toggle("Capture System Audio", isOn: $appState.systemAudioEnabled)
+
+                Text("Captures audio from Zoom, YouTube, and other apps via ScreenCaptureKit. Screen Recording permission is required.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if appState.systemAudioEnabled {
+                    if SystemAudioCapturer.hasPermission() {
+                        Label("Screen Recording permission granted",
+                              systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    } else {
+                        Label("Screen Recording permission required",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+
+                        Button("Open System Settings") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .font(.caption)
+                    }
                 }
             }
         }

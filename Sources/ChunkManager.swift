@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import ScreenCaptureKit
 
 // MARK: - Chunk Manager State
 
@@ -58,6 +59,9 @@ final class ChunkManager: ObservableObject {
     private var streamingTranscriber: StreamingLocalTranscriber?
     // Shazam handler held separately so we can fan out to both Shazam + streaming.
     private var shazamBufferHandler: ((AVAudioPCMBuffer) -> Void)?
+    // System audio capture (ScreenCaptureKit)
+    let systemAudioCapturer = SystemAudioCapturer()
+    let systemAudioMixer = SystemAudioMixer()
     private var extractionService: ExtractionService?
     private var pipelineOrchestrator: PipelineOrchestrator?
     private var transcriptStore: TranscriptStore?
@@ -95,12 +99,32 @@ final class ChunkManager: ObservableObject {
 
     /// Forwards raw PCM buffers from the mic to an external handler (e.g. ShazamKitService).
     /// Also fans out to StreamingLocalTranscriber when active.
+    /// When system audio capture is active, mixes system audio into the buffer before forwarding.
     func setBufferHandler(_ handler: @escaping (AVAudioPCMBuffer) -> Void) {
         shazamBufferHandler = handler
         audioRecorder.onBuffer = { [weak self] buffer in
+            // Mix system audio into mic buffer if active
+            self?.systemAudioMixer.mix(into: buffer)
             handler(buffer)
             self?.streamingTranscriber?.appendBuffer(buffer)
         }
+    }
+
+    // MARK: - System Audio
+
+    func enableSystemAudio() async throws {
+        // Wire system audio buffers into the mixer
+        systemAudioCapturer.onBuffer = { [weak self] buffer in
+            self?.systemAudioMixer.storeBuffer(buffer)
+        }
+        try await systemAudioCapturer.start()
+        Log.info(.audio, "ChunkManager: system audio enabled")
+    }
+
+    func disableSystemAudio() {
+        systemAudioCapturer.stop()
+        systemAudioMixer.reset()
+        Log.info(.audio, "ChunkManager: system audio disabled")
     }
 
     // MARK: - Public API
@@ -241,7 +265,10 @@ final class ChunkManager: ObservableObject {
     // MARK: - Streaming Transcriber Lifecycle
 
     private func startStreamingTranscriberIfNeeded() {
-        guard SettingsManager.shared.transcriptionMode == .local else { return }
+        // Always start the streaming transcriber for live word-by-word preview,
+        // regardless of transcription mode (Groq or local).
+        // In Groq mode the SFSpeech result is discarded at commit time — Groq transcribes
+        // the audio file for accuracy. In local mode SFSpeech provides both preview and text.
         let streamer = StreamingLocalTranscriber()
         streamer.onPartial = { [weak self] partial in
             guard let self else { return }
@@ -258,11 +285,13 @@ final class ChunkManager: ObservableObject {
             // Re-wire the buffer handler so the new streamer receives buffers.
             if let shazam = shazamBufferHandler {
                 audioRecorder.onBuffer = { [weak self] buf in
+                    self?.systemAudioMixer.mix(into: buf)
                     shazam(buf)
                     self?.streamingTranscriber?.appendBuffer(buf)
                 }
             } else {
                 audioRecorder.onBuffer = { [weak self] buf in
+                    self?.systemAudioMixer.mix(into: buf)
                     self?.streamingTranscriber?.appendBuffer(buf)
                 }
             }
@@ -277,11 +306,16 @@ final class ChunkManager: ObservableObject {
         streamingTranscriber?.stop()
         streamingTranscriber = nil
         lastSpeechTime = nil   // reset so next session starts clean
-        // Restore plain Shazam-only handler.
+        // Restore plain Shazam-only handler (still with system audio mixing).
         if let shazam = shazamBufferHandler {
-            audioRecorder.onBuffer = shazam
+            audioRecorder.onBuffer = { [weak self] buf in
+                self?.systemAudioMixer.mix(into: buf)
+                shazam(buf)
+            }
         } else {
-            audioRecorder.onBuffer = nil
+            audioRecorder.onBuffer = { [weak self] buf in
+                self?.systemAudioMixer.mix(into: buf)
+            }
         }
     }
 
@@ -353,20 +387,34 @@ final class ChunkManager: ObservableObject {
         let duration = Int(elapsed)
         guard let savedURL = audioRecorder.stopRecording() else { return }
 
-        // Local streaming mode: commit accumulated text NOW (SFSpeech finalises within ~400ms).
-        // Groq mode: streamedTranscript is nil — processChunk transcribes the audio file instead.
+        // Commit the streaming transcriber at every chunk boundary to:
+        //   1. Reset the SFSpeech request for the next chunk (prevents text carry-over).
+        //   2. Clear the live partial preview in the UI (chunk boundary is a natural break).
+        //   3. Obtain the SFSpeech text — used directly in local mode, discarded in Groq mode.
+        //
+        // Hybrid model: the streaming transcriber always runs for live word-by-word preview.
+        // In Groq mode the audio file is sent to Groq Whisper for the committed transcript,
+        // giving accurate final text without the text-disappearing behaviour of SFSpeech finals.
         let streamedTranscript: String?
         if let streamer = streamingTranscriber {
             let t = await streamer.commitAndReset()
-            streamedTranscript = t.isEmpty ? nil : t
-            if streamedTranscript == nil {
-                Log.info(.audio, "Chunk \(index): empty streaming transcript, skipping")
-                return
-            }
-            // Append committed text directly to accumulated transcript and clear live partial.
-            // No intermediate "pending" layer — session model accumulates raw text continuously.
-            if let committed = streamedTranscript {
-                appState?.appendChunkToSession(committed)
+            // Always clear the live streaming preview — the chunk committed, preview resets.
+            appState?.latestTranscriptChunk = ""
+
+            if SettingsManager.shared.transcriptionMode == .local {
+                // Local mode: SFSpeech result IS the committed transcript.
+                streamedTranscript = t.isEmpty ? nil : t
+                if streamedTranscript == nil {
+                    Log.info(.audio, "Chunk \(index): empty streaming transcript, skipping")
+                    return
+                }
+                if let committed = streamedTranscript {
+                    appState?.appendChunkToSession(committed)
+                }
+            } else {
+                // Groq mode: discard SFSpeech result — Groq transcribes the audio file.
+                // Silence detection falls through to the silence-ratio check below.
+                streamedTranscript = nil
             }
         } else {
             streamedTranscript = nil

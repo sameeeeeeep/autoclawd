@@ -132,6 +132,7 @@ final class SettingsManager: @unchecked Sendable {
     private let kMusicModeEnabled     = "music_mode_enabled"
     private let kIsOpenClawEnabled    = "is_openclaw_enabled"
     private let kOpenClawSkillsDir    = "openclaw_skills_directory"
+    private let kSystemAudioEnabled     = "system_audio_enabled"
     private let kCameraEnabled         = "camera_enabled"
     private let kGestureControlEnabled = "gesture_control_enabled"
     private let kFaceTrackingEnabled   = "face_tracking_enabled"
@@ -339,6 +340,13 @@ final class SettingsManager: @unchecked Sendable {
     var openClawSkillsDirectory: String {
         get { defaults.string(forKey: kOpenClawSkillsDir) ?? "" }
         set { defaults.set(newValue, forKey: kOpenClawSkillsDir) }
+    }
+
+    // MARK: - System Audio
+
+    var systemAudioEnabled: Bool {
+        get { defaults.object(forKey: kSystemAudioEnabled) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: kSystemAudioEnabled) }
     }
 
     // MARK: - Camera & Gestures

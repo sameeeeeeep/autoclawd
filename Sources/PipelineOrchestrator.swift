@@ -184,6 +184,12 @@ final class PipelineOrchestrator: @unchecked Sendable {
             return
         }
 
+        // Ambient/other modes: fire the cleaned callback so the ambient review
+        // canvas advances from .cleaning → .analyzing phase.
+        if !cleaned.cleanedText.isEmpty {
+            onTranscriptionCleaned?(cleaned.cleanedText)
+        }
+
         // Ollama disabled: stop after cleaning
         let ollamaOn = SettingsManager.shared.isOllamaEnabled
         if !ollamaOn {

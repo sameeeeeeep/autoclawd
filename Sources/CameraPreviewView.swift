@@ -101,55 +101,37 @@ final class CameraPreviewNSView: NSView {
 
 // MARK: - CameraFeedWidget
 
-/// Camera feed tile for the pill widget — shows live video with face bounding boxes,
-/// gesture indicators, and a camera off button. Styled to match the widget row tiles.
+/// Dual-purpose feed tile for the pill widget — shows camera feed or screen share preview.
+/// When both camera and screen share are active, a cycle button switches between them.
 struct CameraFeedWidget: View {
     @ObservedObject var appState: AppState
     let appearance: WidgetAppearance
 
+    private var cameraActive: Bool {
+        appState.cameraEnabled && appState.cameraService.isRunning
+    }
+
+    private var screenActive: Bool {
+        appState.systemAudioEnabled
+    }
+
+    /// Both sources active — show cycle button
+    private var hasBothSources: Bool {
+        cameraActive && screenActive
+    }
+
     var body: some View {
         ZStack {
-            if appState.cameraEnabled, appState.cameraService.isRunning {
-                // Live camera feed
-                CameraPreviewView(session: appState.cameraService.captureSession)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                // Face bounding boxes overlay
-                if appState.faceTrackingEnabled {
-                    GeometryReader { geo in
-                        ForEach(appState.faceTracker.trackedFaces) { face in
-                            faceBoundingBox(face: face, in: geo.size)
-                        }
-                    }
-                }
-
-                // HUD overlay (badges + buttons)
-                VStack {
-                    // Top row: face count + gesture indicator + camera off button
-                    HStack {
-                        if appState.faceTrackingEnabled && appState.detectedFaceCount > 0 {
-                            faceCountBadge
-                                .onTapGesture {
-                                    appState.presentFaceLinkingOptions()
-                                }
-                        }
-                        Spacer()
-                        if let gesture = appState.lastConfirmedGesture {
-                            gestureIndicatorBadge(gesture)
-                        }
-                        cameraOffButton
-                    }
-                    Spacer()
-                    // Bottom row: LIVE badge
-                    HStack {
-                        liveBadge
-                        Spacer()
-                    }
-                }
-                .padding(8)
-
+            if appState.feedViewMode == .camera && cameraActive {
+                cameraContent
+            } else if appState.feedViewMode == .screen && screenActive {
+                screenContent
+            } else if cameraActive {
+                cameraContent
+            } else if screenActive {
+                screenContent
             } else {
-                cameraOffPlaceholder
+                feedOffPlaceholder
             }
         }
         .frame(maxWidth: .infinity)
@@ -163,8 +145,10 @@ struct CameraFeedWidget: View {
                 .stroke(
                     LinearGradient(
                         colors: [
-                            appState.cameraEnabled ? Color.cyan.opacity(0.3) : appearance.borderOff,
-                            appState.cameraEnabled ? Color.cyan.opacity(0.08) : appearance.borderLow,
+                            (cameraActive || screenActive)
+                                ? Color.cyan.opacity(0.3) : appearance.borderOff,
+                            (cameraActive || screenActive)
+                                ? Color.cyan.opacity(0.08) : appearance.borderLow,
                         ],
                         startPoint: .top, endPoint: .bottom
                     ),
@@ -173,44 +157,83 @@ struct CameraFeedWidget: View {
         )
     }
 
-    // MARK: - Face Bounding Box
+    // MARK: - Camera Content
 
-    /// Draws a bounding box for a tracked face.
-    /// Vision normalized coords: origin bottom-left, y-up. Camera is mirrored.
-    private func faceBoundingBox(face: FaceTracker.TrackedFace, in size: CGSize) -> some View {
-        // Vision bbox: origin is bottom-left, y goes up. Mirror X for front camera.
-        let bbox = face.boundingBox
-        let x = (1 - bbox.origin.x - bbox.width) * size.width   // mirror X
-        let y = (1 - bbox.origin.y - bbox.height) * size.height  // flip Y to top-left origin
-        let w = bbox.width * size.width
-        let h = bbox.height * size.height
-        let borderColor: Color = face.isSpeaking ? .green : .cyan
+    private var cameraContent: some View {
+        ZStack {
+            CameraPreviewView(session: appState.cameraService.captureSession)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-        return ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 4)
-                .stroke(borderColor.opacity(0.7), lineWidth: 1.5)
-                .frame(width: w, height: h)
+            if appState.faceTrackingEnabled {
+                GeometryReader { geo in
+                    ForEach(appState.faceTracker.trackedFaces) { face in
+                        faceBoundingBox(face: face, in: geo.size)
+                    }
+                }
+            }
 
-            // Label above box
-            Text(face.label)
-                .font(.system(size: 7, weight: .bold, design: .monospaced))
-                .foregroundColor(borderColor)
-                .padding(.horizontal, 3)
-                .padding(.vertical, 1)
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(2)
-                .offset(y: -12)
+            feedHUD(isScreen: false)
         }
-        .position(x: x + w / 2, y: y + h / 2)
     }
 
-    // MARK: - Camera Off Button
+    // MARK: - Screen Content
 
-    private var cameraOffButton: some View {
+    private var screenContent: some View {
+        ZStack {
+            if let image = appState.screenPreviewImage {
+                Image(decorative: image, scale: 1.0)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            } else {
+                VStack(spacing: 6) {
+                    Image(systemName: "rectangle.on.rectangle")
+                        .font(.system(size: 18))
+                        .foregroundColor(appearance.textDim)
+                    Text("Waiting for screen…")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(appearance.textDim)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            feedHUD(isScreen: true)
+        }
+    }
+
+    // MARK: - Feed HUD
+
+    private func feedHUD(isScreen: Bool) -> some View {
+        VStack {
+            HStack {
+                if !isScreen && appState.faceTrackingEnabled && appState.detectedFaceCount > 0 {
+                    faceCountBadge
+                        .onTapGesture { appState.presentFaceLinkingOptions() }
+                }
+                Spacer()
+                if !isScreen, let gesture = appState.lastConfirmedGesture {
+                    gestureIndicatorBadge(gesture)
+                }
+                if hasBothSources {
+                    cycleButton
+                }
+            }
+            Spacer()
+            HStack {
+                if isScreen { screenBadge } else { liveBadge }
+                Spacer()
+            }
+        }
+        .padding(8)
+    }
+
+    // MARK: - Cycle Button
+
+    private var cycleButton: some View {
         Button {
-            appState.cameraEnabled = false
+            appState.feedViewMode = appState.feedViewMode == .camera ? .screen : .camera
         } label: {
-            Image(systemName: "camera.fill")
+            Image(systemName: "arrow.triangle.2.circlepath")
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundColor(.white.opacity(0.8))
                 .padding(5)
@@ -221,6 +244,33 @@ struct CameraFeedWidget: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Face Bounding Box
+
+    private func faceBoundingBox(face: FaceTracker.TrackedFace, in size: CGSize) -> some View {
+        let bbox = face.boundingBox
+        let x = (1 - bbox.origin.x - bbox.width) * size.width
+        let y = (1 - bbox.origin.y - bbox.height) * size.height
+        let w = bbox.width * size.width
+        let h = bbox.height * size.height
+        let borderColor: Color = face.isSpeaking ? .green : .cyan
+
+        return ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(borderColor.opacity(0.7), lineWidth: 1.5)
+                .frame(width: w, height: h)
+
+            Text(face.label)
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .foregroundColor(borderColor)
+                .padding(.horizontal, 3)
+                .padding(.vertical, 1)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(2)
+                .offset(y: -12)
+        }
+        .position(x: x + w / 2, y: y + h / 2)
     }
 
     // MARK: - Sub-views
@@ -288,7 +338,24 @@ struct CameraFeedWidget: View {
         )
     }
 
-    private var cameraOffPlaceholder: some View {
+    private var screenBadge: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(Color.cyan)
+                .frame(width: 5, height: 5)
+            Text("SCREEN")
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.8))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(
+            Capsule()
+                .fill(Color.black.opacity(0.55))
+        )
+    }
+
+    private var feedOffPlaceholder: some View {
         VStack(spacing: 6) {
             Image(systemName: "camera.fill")
                 .font(.system(size: 18))

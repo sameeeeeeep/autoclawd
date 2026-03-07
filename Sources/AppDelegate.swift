@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onToggleLocalModel:  { [weak self] in self?.toggleLocalModel() },
             onToggleCode:        { [weak self] in self?.toggleCodeMode() },
             onToggleSpeakerMode: { [weak self] in self?.toggleSpeakerMode() },
-            onToggleMusicMode:   { [weak self] in self?.toggleMusicMode() },
+            onToggleScreenShare: { [weak self] in self?.toggleScreenShare() },
             onCollapseChange:    { [weak self] level in self?.pillWindow?.setCollapseLevel(level) },
             onCameraVisibilityChange: { [weak self] visible in self?.pillWindow?.showsCameraFeed = visible }
         )
@@ -113,10 +113,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.info(.ui, "Speaker mode → \(appState.speakerMode.rawValue)")
     }
 
-    /// Toggle music detection (Shazam) on/off.
-    private func toggleMusicMode() {
-        appState.musicModeEnabled.toggle()
-        Log.info(.ui, "Music mode \(appState.musicModeEnabled ? "enabled" : "disabled")")
+    /// Toggle system audio capture (screen share) on/off.
+    private func toggleScreenShare() {
+        appState.systemAudioEnabled.toggle()
+        Log.info(.ui, "Screen share \(appState.systemAudioEnabled ? "enabled" : "disabled")")
     }
 
     private func toggleMinimal() {
@@ -310,7 +310,7 @@ struct PillContentView: View {
     let onToggleLocalModel:   () -> Void
     let onToggleCode:         () -> Void
     let onToggleSpeakerMode:  () -> Void
-    let onToggleMusicMode:    () -> Void
+    let onToggleScreenShare:  () -> Void
     let onCollapseChange:     (WidgetCollapseLevel) -> Void
     let onCameraVisibilityChange: (Bool) -> Void
 
@@ -354,7 +354,7 @@ struct PillContentView: View {
             onToggleLocalModel:     onToggleLocalModel,
             onToggleCode:           onToggleCode,
             onToggleSpeakerMode:    onToggleSpeakerMode,
-            onToggleMusicMode:      onToggleMusicMode,
+            onToggleScreenShare:    onToggleScreenShare,
             onToggleCamera:         { appState.cameraEnabled.toggle() },
             onToggleWhatsApp: {
                 SettingsManager.shared.whatsAppEnabled.toggle()
@@ -382,12 +382,13 @@ struct PillContentView: View {
             isLocalModelEnabled:    isLocalModelEnabled,
             isCodeEnabled:          isCodeEnabled,
             isMultiSpeaker:         appState.speakerMode == .multiple,
-            isMusicMode:            appState.musicModeEnabled,
+            isScreenShareEnabled:   appState.systemAudioEnabled,
             isCameraEnabled:        appState.cameraEnabled,
             isWhatsAppEnabled:      isWhatsAppEnabled,
             sessionLifecycle:       appState.sessionLifecycle,
             logLines:               logLines,
             isSessionProcessing:    appState.isSessionProcessing,
+            isExecutionGlowActive:  appState.canvasExecutingTask != nil,
             aiCanvasContent:        canvasForCurrentMode,
             analysisIdleSubtitle:   analysisIdleSubtitle,
             executionIdleSubtitle:  executionIdleSubtitle,
@@ -397,13 +398,25 @@ struct PillContentView: View {
         )
         .onChange(of: collapseLevel) { level in onCollapseChange(level) }
         .onChange(of: appState.cameraEnabled) { enabled in
-            onCameraVisibilityChange(enabled && appState.cameraService.isRunning)
-            // Re-trigger collapse to resize window
+            let feedVisible = (enabled && appState.cameraService.isRunning) || appState.systemAudioEnabled
+            onCameraVisibilityChange(feedVisible)
             onCollapseChange(collapseLevel)
         }
         .onChange(of: appState.cameraService.isRunning) { running in
-            onCameraVisibilityChange(appState.cameraEnabled && running)
+            onCameraVisibilityChange((appState.cameraEnabled && running) || appState.systemAudioEnabled)
             onCollapseChange(collapseLevel)
+        }
+        .onChange(of: appState.systemAudioEnabled) { enabled in
+            let feedVisible = enabled || (appState.cameraEnabled && appState.cameraService.isRunning)
+            onCameraVisibilityChange(feedVisible)
+            onCollapseChange(collapseLevel)
+        }
+        .onChange(of: appState.isAmbientReviewActive) { isActive in
+            // Expand pill when the post-session review canvas opens; shrink back when done.
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+                collapseLevel = isActive ? .expanded : .full
+            }
+            onCollapseChange(isActive ? .expanded : .full)
         }
         .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
             displayLevel = appState.chunkManager.audioLevel
@@ -479,7 +492,9 @@ struct PillContentView: View {
     }
 
     private var cameraFeedView: AnyView? {
-        guard appState.cameraEnabled, appState.cameraService.isRunning else { return nil }
+        let cameraOn = appState.cameraEnabled && appState.cameraService.isRunning
+        let screenOn = appState.systemAudioEnabled
+        guard cameraOn || screenOn else { return nil }
         return AnyView(CameraFeedWidget(appState: appState, appearance: widgetAppearance))
     }
 
@@ -604,6 +619,33 @@ struct PillContentView: View {
         // ── Face linking canvas (auto-triggered or manual) ────────────────────────
         if appState.showFaceLinkingOverlay {
             return AnyView(FaceLinkingCanvasView(appState: appState))
+        }
+
+        // ── Canvas task execution (streams Claude Code output inline) ────────────
+        if let execTask = appState.canvasExecutingTask {
+            return AnyView(TaskExecutionCanvasView(
+                task:     execTask,
+                appState: appState,
+                onDone:   { appState.doneWithCanvasExecution() }
+            ))
+        }
+
+        // ── Post-session ambient review (task approval + project assignment) ────────
+        if let review = appState.ambientReview {
+            let reviewTasks = appState.pipelineTasks.filter {
+                review.sessionTaskIDs.contains($0.id) && $0.createdAt >= review.startedAt
+            }
+            return AnyView(AmbientSessionReviewView(
+                review:          review,
+                tasks:           reviewTasks,
+                projects:        appState.projects,
+                skills:          appState.skills,
+                onApproveTask:   { id in appState.reviewApproveTask(id) },
+                onSkipTask:      { id in appState.reviewSkipTask(id) },
+                onApproveAll:    { appState.approveAllReviewTasks() },
+                onSelectProject: { project in appState.reviewSelectProject(project) },
+                onDone:          { appState.dismissAmbientReview() }
+            ))
         }
 
         // ── Cleaning level picker (post-session transcript quality) ─────────────

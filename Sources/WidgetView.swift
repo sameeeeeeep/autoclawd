@@ -169,7 +169,7 @@ struct WidgetView: View {
     let onToggleLocalModel:   () -> Void
     let onToggleCode:         () -> Void
     let onToggleSpeakerMode:  () -> Void
-    let onToggleMusicMode:    () -> Void
+    let onToggleScreenShare:  () -> Void
     let onToggleCamera:       () -> Void
     let onToggleWhatsApp:     () -> Void
     let onSessionConfigure:   () -> Void
@@ -182,14 +182,16 @@ struct WidgetView: View {
     var isLocalModelEnabled: Bool = true
     var isCodeEnabled:       Bool = false
     var isMultiSpeaker:      Bool = false
-    var isMusicMode:         Bool = false
+    var isScreenShareEnabled: Bool = false
     var isCameraEnabled:     Bool = false
     var isWhatsAppEnabled:   Bool = false
     var sessionLifecycle: SessionLifecycleState = .undefined
     /// Live log lines (max 2) from AutoClawdLogger
     var logLines: [(dot: Color, text: String, time: String)] = []
-    /// True while session-end cleaning is in progress (drives canvas border glow).
+    /// True while session-end cleaning is in progress (drives cyan canvas border glow).
     var isSessionProcessing: Bool = false
+    /// True while a review task is executing on the canvas (drives purple border glow).
+    var isExecutionGlowActive: Bool = false
     /// Current AI canvas content
     var aiCanvasContent: AnyView? = nil
     /// Subtitle shown on Analysis row when enabled but idle (e.g. "14 tasks found")
@@ -204,8 +206,9 @@ struct WidgetView: View {
     var cameraFeedContent: AnyView? = nil
     @State private var historyIndex: Int = 0
     @State private var processingGlowOpacity: Double = 0.3
+    @State private var executionGlowOpacity: Double = 0.3
 
-    private var showsCameraFeed: Bool { cameraFeedContent != nil }
+    private var showsCameraFeed: Bool { cameraFeedContent != nil || isScreenShareEnabled }
 
     var body: some View {
         Group {
@@ -686,8 +689,13 @@ struct WidgetView: View {
             }
         }
         .overlay {
-            // Processing glow — pulsing cyan border while cleaning is in progress
-            if isSessionProcessing {
+            if isExecutionGlowActive {
+                // Purple pulsing border during task execution
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.purple.opacity(executionGlowOpacity), lineWidth: 1.5)
+                    .shadow(color: .purple.opacity(executionGlowOpacity * 0.6), radius: 8)
+            } else if isSessionProcessing {
+                // Cyan pulsing border during transcript cleaning / analysis
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(Color.cyan.opacity(processingGlowOpacity), lineWidth: 1.5)
                     .shadow(color: .cyan.opacity(processingGlowOpacity * 0.5), radius: 6)
@@ -702,6 +710,17 @@ struct WidgetView: View {
             } else {
                 withAnimation(.easeOut(duration: 0.4)) {
                     processingGlowOpacity = 0.0
+                }
+            }
+        }
+        .onChange(of: isExecutionGlowActive) { active in
+            if active {
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                    executionGlowOpacity = 0.75
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.4)) {
+                    executionGlowOpacity = 0.0
                 }
             }
         }
@@ -788,12 +807,12 @@ struct WidgetView: View {
 
             Rectangle().fill(appearance.dockSeparator).frame(width: 1, height: 20)
 
-            // Music mode toggle
+            // Screen share toggle
             dockToggle(
-                icon:    "music.note",
-                active:  isMusicMode,
-                color:   Color(red: 1.0, green: 0.5, blue: 0.1),
-                action:  onToggleMusicMode
+                icon:    isScreenShareEnabled ? "tv.fill" : "tv",
+                active:  isScreenShareEnabled,
+                color:   Color(red: 0.0, green: 0.78, blue: 0.9),
+                action:  onToggleScreenShare
             )
 
             Rectangle().fill(appearance.dockSeparator).frame(width: 1, height: 20)

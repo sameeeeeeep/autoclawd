@@ -142,6 +142,7 @@ Groq is optional and used only for transcription speed. All analysis runs locall
 | File | Purpose |
 |------|---------|
 | `AudioRecorder.swift` | Always-on AVAudioEngine capture; engine stays hot between chunks |
+| `SystemAudioCapturer.swift` | ScreenCaptureKit system audio + screen preview capture; `SystemAudioMixer` for thread-safe mixing |
 | `SpeechService.swift` | Groq / Apple SFSpeech transcription of committed audio chunks |
 | `TranscriptionService.swift` | Transcription orchestration |
 | `TranscriptionPasteService.swift` | Paste cleaned transcript to frontmost app |
@@ -361,6 +362,10 @@ All settings live in `SettingsManager.shared`:
 | `locationEnabled` | — | Bool |
 | `screenshotContextEnabled` | — | Bool |
 | `shazamEnabled` | — | Bool |
+| `systemAudioEnabled` | — | Bool |
+| `cameraEnabled` | — | Bool |
+| `gestureControlEnabled` | — | Bool |
+| `faceTrackingEnabled` | — | Bool |
 
 ## Development Conventions
 
