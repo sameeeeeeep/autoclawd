@@ -230,6 +230,8 @@ final class AppState: ObservableObject {
     }
     @Published var systemAudioLevel: Float = 0
     @Published var screenPreviewImage: CGImage? = nil
+    /// Most recent on-demand screen snapshot (set by captureScreenNow / captureWithSelectionNow).
+    @Published var lastScreenSnapshot: ScreenSnapshot? = nil
     @Published var feedViewMode: FeedViewMode = .camera
 
     // Camera & gesture state
@@ -303,6 +305,9 @@ final class AppState: ObservableObject {
     let cameraService = CameraService()
     let handGestureRecognizer = HandGestureRecognizer()
     let faceTracker = FaceTracker()
+    let visualContextSampler = VisualContextSampler()
+    let speakerAttributionTracker = SpeakerAttributionTracker()
+    let screenVisionAnalyzer = ScreenVisionAnalyzer()
 
     // Pipeline v2 services
     let pipelineStore: PipelineStore
@@ -510,7 +515,7 @@ final class AppState: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Wire camera frame handlers → gesture recognizer + face tracker
+        // Wire camera frame handlers → gesture recognizer + face tracker + visual context sampler
         cameraService.onFrame = { [weak self] sampleBuffer in
             guard let self else { return }
             if self.gestureControlEnabled {
@@ -519,6 +524,12 @@ final class AppState: ObservableObject {
             if self.faceTrackingEnabled {
                 self.faceTracker.isAudioActive = self.audioLevel > 0.01
                 self.faceTracker.processFrame(sampleBuffer)
+            }
+            // VisualContextSampler is internally throttled — safe to call every frame
+            if self.sessionLifecycle == .active {
+                self.visualContextSampler.processFrame(
+                    sampleBuffer, personCount: self.faceTracker.faceCount
+                )
             }
         }
 
@@ -530,13 +541,16 @@ final class AppState: ObservableObject {
             }
         }
 
-        // Wire face tracker → speaker tagging + face count
+        // Wire face tracker → speaker tagging + face count + attribution log
         faceTracker.onSpeakerChanged = { [weak self] personID in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if let personID {
                     self.currentSpeakerID = personID
                 }
+                // Log speaker change for session-end attribution
+                let name = personID.flatMap { id in self.people.first(where: { $0.id == id })?.name }
+                self.speakerAttributionTracker.logSpeakerChange(personID: personID, name: name)
             }
         }
         faceTracker.onFaceCountChanged = { [weak self] count in
@@ -619,6 +633,10 @@ final class AppState: ObservableObject {
             startWhatsApp()
         }
 
+        // Wire face embedding store → cross-session face recognition
+        faceTracker.embeddingStore = FaceEmbeddingStore.shared
+        faceTracker.loadStoredEmbeddings()
+
         // Start camera if enabled
         if cameraEnabled {
             startCamera()
@@ -692,6 +710,8 @@ final class AppState: ObservableObject {
         }
         // Wire screen preview frames
         chunkManager.systemAudioCapturer.onFrame = { [weak self] image in
+            // Run Vision OCR on screen frames (throttled to every 10s internally)
+            self?.screenVisionAnalyzer.processFrame(image)
             Task { @MainActor [weak self] in
                 self?.screenPreviewImage = image
             }
@@ -1036,6 +1056,11 @@ final class AppState: ObservableObject {
             pillMode = .ambientIntelligence
         }
 
+        // Reset session-scoped trackers
+        speakerAttributionTracker.beginSession()
+        visualContextSampler.resetForNewSession()
+        screenVisionAnalyzer.resetForNewSession()
+
         chunkManager.startListening(sessionConfig: config)
         Log.info(.system, "User session started (project: \(config.projectName ?? "none"))")
     }
@@ -1080,14 +1105,50 @@ final class AppState: ObservableObject {
         default:              source = .ambient
         }
 
+        // Capture speaker attribution and visual context before async dispatch
+        let speakerSummary = speakerAttributionTracker.sessionSpeakerSummary()
+        speakerAttributionTracker.endSession()
+
+        let visualCtx = visualContextSampler.finalizeContext()
+        if let sid = capturedSessionID, let json = visualCtx.asJSON() {
+            SessionStore.shared.updateSessionVisualContext(id: sid, json: json)
+            Log.info(.pipeline, "Session visual context saved: \(visualCtx.summary())")
+        }
+
+        // Background OCR rolling buffer — lightweight metadata for Llama.
+        // If the user triggered an on-demand capture, its execution context flows
+        // via lastScreenSnapshot (set by captureScreenNow / captureWithSelectionNow).
+        let screenSummary = screenVisionAnalyzer.recentContext()
+        let capturedLastSnapshot = lastScreenSnapshot
+
+        // Build split contexts:
+        //   analysisCtx  → Llama (lightweight: background OCR or manual metadata + cropped OCR)
+        //   executionCtx → Claude Code task prompts only (full / cropped OCR text)
+        let screenAnalysisCtx: String? = {
+            if let snap = capturedLastSnapshot {
+                // Manual capture: give Llama only the metadata context (app/window/dialog/URLs)
+                // plus cropped OCR if the user made a selection (small enough for Llama).
+                let meta = snap.metadataContext()
+                return meta.isEmpty ? nil : meta
+            }
+            // No manual capture: fall back to rolling background OCR summary.
+            return screenSummary
+        }()
+
+        let screenExecutionCtx: String? = capturedLastSnapshot?.executionContext()
+
         // Dispatch session-end pipeline processing
         if !fullRawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let orchestrator = pipelineOrchestrator
+            let capturedSpeakerSummary = speakerSummary
             Task.detached {
                 await orchestrator.processSessionEnd(
                     fullText: fullRawText,
                     sessionID: capturedSessionID,
                     sessionContext: capturedConfig,
+                    speakerContext: capturedSpeakerSummary,
+                    screenAnalysisContext: screenAnalysisCtx,
+                    screenExecutionContext: screenExecutionCtx,
                     source: source
                 )
             }
@@ -1119,6 +1180,56 @@ final class AppState: ObservableObject {
         sessionLifecycle = .undefined
         sessionConfig = nil
         dismissedFaceTrackIDs.removeAll()
+    }
+
+    // MARK: - Screen Capture (On-Demand)
+
+    /// Manually captures the frontmost window: OCR + barcode + rectangle detection + screenshot.
+    /// Stores result in `lastScreenSnapshot` so it's included in the next session-end pipeline run.
+    /// The screenshot image auto-attaches to the next task via ContextCaptureStore.
+    @discardableResult
+    func captureScreenNow() async -> ScreenSnapshot? {
+        let snapshot = await screenVisionAnalyzer.captureNow()
+        if let snap = snapshot {
+            let desc = [snap.appName, snap.windowTitle].compactMap { $0 }.joined(separator: " – ")
+            Log.info(.ui, "Screen captured: \(desc.isEmpty ? "frontmost window" : desc)")
+            await MainActor.run { self.lastScreenSnapshot = snap }
+        }
+        return snapshot
+    }
+
+    /// Captures the frontmost window then presents a fullscreen selection overlay.
+    /// After the user drags a region (or clicks to point), crops the snapshot to that region
+    /// and re-runs OCR on just the selection — yielding a small, focused execution context.
+    ///
+    /// - Returns: The snapshot with `croppedText` set, or nil if cancelled.
+    @discardableResult
+    func captureWithSelectionNow() async -> ScreenSnapshot? {
+        // 1. Capture the window first (so Vision runs before the overlay appears)
+        guard let snapshot = await screenVisionAnalyzer.captureNow() else {
+            Log.warn(.ui, "captureWithSelectionNow: capture failed")
+            return nil
+        }
+
+        // 2. Show the selection overlay — returns a normalised rect or nil (cancel)
+        guard let normRect = await ScreenSelectionPanel.present() else {
+            Log.info(.ui, "captureWithSelectionNow: cancelled by user")
+            return nil
+        }
+
+        // 3. Apply the selection: crop + OCR on just the selected region
+        let final = await screenVisionAnalyzer.applySelection(normalizedRect: normRect, to: snapshot)
+
+        let desc = [final.appName, final.windowTitle].compactMap { $0 }.joined(separator: " – ")
+        Log.info(.ui, "Screen capture with selection: \(desc) — cropped OCR \(final.croppedText?.count ?? 0) chars")
+
+        await MainActor.run { self.lastScreenSnapshot = final }
+        return final
+    }
+
+    /// Clear the last manual snapshot (e.g. after session end processes it).
+    func clearLastScreenSnapshot() {
+        lastScreenSnapshot = nil
     }
 
     // MARK: - Cleaning Level Chooser

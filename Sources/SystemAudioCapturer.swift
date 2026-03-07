@@ -52,10 +52,10 @@ final class SystemAudioCapturer: NSObject, ObservableObject, @unchecked Sendable
         config.channelCount = 1                     // mono for transcription
         config.sampleRate = 48000                   // match common system rate
 
-        // Low-res video for screen preview
-        config.width = 320
-        config.height = 180
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 2) // ~2 fps
+        // 1280×720 at 1 fps — high enough for OCR; Vision only samples every 10s anyway
+        config.width = 1280
+        config.height = 720
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 1) // 1 fps
         config.showsCursor = true
         config.pixelFormat = kCVPixelFormatType_32BGRA
 

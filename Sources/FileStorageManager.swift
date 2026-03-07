@@ -24,6 +24,9 @@ final class FileStorageManager: @unchecked Sendable {
     var pipelineDatabaseURL: URL {
         rootDirectory.appendingPathComponent("pipeline.db")
     }
+    var facesDatabaseURL: URL {
+        rootDirectory.appendingPathComponent("faces.db")
+    }
 
     private init() {
         let home = FileManager.default.homeDirectoryForCurrentUser

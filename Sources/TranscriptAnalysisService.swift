@@ -21,7 +21,8 @@ final class TranscriptAnalysisService: @unchecked Sendable {
 
     // MARK: - Public API
 
-    func analyze(cleaned: CleanedTranscript, sessionContext: SessionConfig? = nil) async -> TranscriptAnalysis? {
+    func analyze(cleaned: CleanedTranscript, sessionContext: SessionConfig? = nil,
+                 screenContext: String? = nil) async -> TranscriptAnalysis? {
         // 1. Pre-LLM: detect dot-words as hints
         let dotWords = Self.detectDotWords(in: cleaned.cleanedText)
         let dotPriority = dotWords.first(where: { $0.hasPrefix("p") })
@@ -40,11 +41,14 @@ final class TranscriptAnalysisService: @unchecked Sendable {
         }
 
         // Build session context preamble if available
-        let sessionPreamble: String
+        var sessionPreamble: String = ""
         if let ctx = sessionContext, ctx.hasContext {
-            sessionPreamble = "SESSION CONTEXT:\n\(ctx.promptContext())\n"
-        } else {
-            sessionPreamble = ""
+            sessionPreamble += "SESSION CONTEXT:\n\(ctx.promptContext())\n"
+        }
+        if let screen = screenContext, !screen.isEmpty {
+            // Truncate to avoid blowing the context window (keep last 2000 chars of screen text)
+            let truncated = screen.count > 2000 ? String(screen.suffix(2000)) : screen
+            sessionPreamble += "SCREEN CONTEXT (what was visible on screen during the session):\n\(truncated)\n"
         }
 
         // 3. LLM call: full semantic analysis

@@ -92,7 +92,8 @@ final class TranscriptCleaningService: @unchecked Sendable {
         sessionID: String?,
         sessionChunkSeq: Int,
         durationSeconds: Int,
-        speakerName: String?
+        speakerName: String?,
+        speakerContext: String? = nil
     ) async -> CleanedTranscript? {
         // If this chunk is part of a session, check for continuation
         if let sid = sessionID {
@@ -133,7 +134,8 @@ final class TranscriptCleaningService: @unchecked Sendable {
                 chunkCount: sortedChunks.count,
                 sessionID: sid,
                 durationSeconds: totalDuration,
-                speakerName: speaker
+                speakerName: speaker,
+                speakerContext: speakerContext
             )
         } else {
             // No session — clean as single chunk
@@ -144,7 +146,8 @@ final class TranscriptCleaningService: @unchecked Sendable {
                 chunkCount: 1,
                 sessionID: nil,
                 durationSeconds: durationSeconds,
-                speakerName: speakerName
+                speakerName: speakerName,
+                speakerContext: speakerContext
             )
         }
     }
@@ -158,9 +161,10 @@ final class TranscriptCleaningService: @unchecked Sendable {
         chunkCount: Int,
         sessionID: String?,
         durationSeconds: Int,
-        speakerName: String?
+        speakerName: String?,
+        speakerContext: String? = nil
     ) async -> CleanedTranscript? {
-        let cleanedText = await cleanWithLLM(rawText: rawText)
+        let cleanedText = await cleanWithLLM(rawText: rawText, speakerContext: speakerContext)
 
         guard !cleanedText.isEmpty else {
             Log.warn(.cleaning, "Cleaning produced empty output for \(sourceTranscriptIDs)")
@@ -215,7 +219,7 @@ final class TranscriptCleaningService: @unchecked Sendable {
         }
     }
 
-    private func cleanWithLLM(rawText: String) async -> String {
+    private func cleanWithLLM(rawText: String, speakerContext: String? = nil) async -> String {
         // Load prompt template from skill (user-editable)
         let skill = skillStore.load(id: "transcript-cleaning")
         let template = skill?.promptTemplate ?? """
@@ -229,7 +233,21 @@ final class TranscriptCleaningService: @unchecked Sendable {
             CLEANED:
             """
 
-        let prompt = template.replacingOccurrences(of: "{{transcript}}", with: rawText)
+        var prompt = template.replacingOccurrences(of: "{{transcript}}", with: rawText)
+
+        // Inject speaker attribution context when multiple identified speakers were detected.
+        // The LLM uses this as a hint to prefix speaker changes where context makes it clear.
+        if let ctx = speakerContext, ctx.contains(",") {
+            let speakerHint = """
+
+            SPEAKER CONTEXT (detected via face tracking — use as a hint to attribute dialogue where clear):
+            \(ctx)
+
+            If you can identify speaker transitions from context, prefix each speaker's contribution \
+            with [Name]: — but only where you are confident. Do not guess.
+            """
+            prompt += speakerHint
+        }
 
         do {
             let response = try await ollama.generate(prompt: prompt, numPredict: 512)
