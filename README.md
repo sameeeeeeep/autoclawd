@@ -91,6 +91,31 @@ You talk
 - World model: a per-project knowledge base that compounds across every conversation
 - Interactive world model graph visualization
 
+**Camera Vision**
+- Real-time face detection and tracking using Apple Vision framework
+- Speaker identification — detects who is talking by tracking mouth movement synced with audio
+- Deterministic pixel-art avatars generated from face feature prints — every person gets a unique 5×7 avatar
+- Face re-identification — recognizes people when they leave and return to frame using ML embeddings
+- Auto face linking — new faces trigger a gesture-based flow to assign them to known people
+
+**Hand Gesture Control**
+- Right hand spread open → start session
+- Right hand pinch → pause session
+- Right hand thumbs up → end session / confirm
+- Left hand finger count (1–5) → select options, switch modes, pick projects, choose cleaning levels
+- Debounced gesture recognition with cooldown — gestures must be held for 0.5s before firing
+
+**User-Defined Sessions**
+- Gesture-driven session lifecycle: start → pause → resume → end, all hands-free
+- Pre-session project picker — raise left hand to select which project you're working on
+- Session context capture: project, people present, objectives
+- Session-level processing — full pipeline runs at session end with accumulated context
+- Post-session transcript cleaning with three quality tiers:
+  - **Raw** — unprocessed original
+  - **Minimal** — grammar fixed, filler removed
+  - **Polished** — coherent, well-structured paragraphs
+- Gesture-based cleaning level switcher — raise 1–3 fingers to preview each tier
+
 **Autonomous Execution**
 - Configurable rules for which tasks run without approval
 - Task approval queue for anything that needs a confirm
@@ -101,7 +126,7 @@ You talk
 
 **Context Awareness**
 - People tagging — identifies and tracks who you mention across sessions
-- Location awareness — knows where you are
+- Location awareness — knows where you are, ties sessions to places via WiFi SSID
 - Now Playing via ShazamKit — captures what's on in the background
 - Screenshot context — optional ambient screen capture
 - Clipboard monitoring — clipboard changes woven into context
@@ -114,6 +139,7 @@ You talk
 
 **UI**
 - Floating pill widget, always on top, snaps to screen edges
+- Live camera feed with face bounding boxes, speaker highlighting, and gesture indicators
 - Mission Control HQ — live pixel-art room where pipeline agents walk desk-to-desk in real time
 - Appearance modes: frosted glass or solid, light/dark/system, custom fonts
 - Session timeline, Q&A against your context, structured todo queue
@@ -180,6 +206,15 @@ cd WhatsAppSidecar && npm install && npm start
 | `⌃3` | AI Search mode |
 | `⌃4` | Claude Code co-pilot mode |
 
+**Hand Gestures (with camera enabled):**
+
+| Gesture | Hand | Action |
+|---|---|---|
+| Spread open | Right | Start session |
+| Pinch closed | Right | Pause session |
+| Thumbs up | Right | End session / confirm |
+| 1–5 fingers | Left | Select option / switch mode / pick project |
+
 ---
 
 ## Architecture
@@ -194,16 +229,24 @@ AutoClawd.app (Swift/SwiftUI)
 │     ├── StreamingLocalTranscriber   live SFSpeech word-by-word partials
 │     └── ChunkManager               30s cycles, session end on 10s silence
 │
+├── CameraService           AVFoundation frame capture (~8 fps)
+│     ├── FaceTracker                 Vision-based detection + re-identification
+│     └── HandGestureRecognizer       hand pose → session/option gestures
+│
 ├── PipelineOrchestrator
 │     ├── Stage 1: TranscriptCleaningService    local Llama 3.2
 │     ├── Stage 2: TranscriptAnalysisService    local Llama 3.2
 │     ├── Stage 3: TaskCreationService
 │     └── Stage 4: TaskExecutionService         Claude Code SDK
 │
+├── Sessions
+│     ├── SessionStore       SQLite persistence, place + project linking
+│     └── SessionConfig      pre-session context (project, people, objectives)
+│
 ├── Context (parallel)
 │     ├── ScreenshotService · ClipboardMonitor · LocationService
 │     ├── ShazamKitService · PeopleTaggingService · ExtractionService
-│     └── WorldModelService + WorldModelGraph*
+│     └── WorldModelService + WorldModelGraph
 │
 ├── Integrations
 │     ├── WhatsAppPoller       polls Node.js sidecar, self-chat only
@@ -260,6 +303,10 @@ Everything lives in `~/.autoclawd/` — SQLite and markdown, fully local.
 - [ ] Scheduled tasks and calendar integration
 - [ ] Multi-language transcription
 - [ ] Shared world model across devices
+- [x] Camera vision — real-time face detection, speaker tagging, pixel-art avatars
+- [x] Hand gesture control — session lifecycle, mode switching, option selection
+- [x] User-defined sessions — gesture-driven start/pause/end with project + people context
+- [x] Post-session transcript cleaning — three quality tiers with gesture-based switching
 - [x] Live word-by-word streaming transcript
 - [x] Session-persistent transcript (accumulates across modes, resets on silence)
 - [x] Fully local transcription + analysis (Apple + Ollama)
