@@ -10,7 +10,7 @@
   [![Local AI](https://img.shields.io/badge/AI-Runs%20Locally-5C6BC0?style=flat-square)](https://ollama.ai)
   [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
 
-  105 source files &nbsp;·&nbsp; ~29K lines of Swift &nbsp;·&nbsp; entirely self-built with Claude Code
+  100 source files &nbsp;·&nbsp; ~27K lines of Swift &nbsp;·&nbsp; entirely self-built with Claude Code
 
 </div>
 

@@ -1,5 +1,48 @@
 import SwiftUI
 
+// MARK: - FlowLayout
+
+/// A simple wrapping layout that arranges children left-to-right,
+/// breaking to the next line when the available width is exceeded.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxW = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowH: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x + size.width > maxW, x > 0 {
+                x = 0
+                y += rowH + spacing
+                rowH = 0
+            }
+            x += size.width + spacing
+            rowH = max(rowH, size.height)
+        }
+        return CGSize(width: maxW, height: y + rowH)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowH: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX, x > bounds.minX {
+                x = bounds.minX
+                y += rowH + spacing
+                rowH = 0
+            }
+            sub.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
+            x += size.width + spacing
+            rowH = max(rowH, size.height)
+        }
+    }
+}
+
 // MARK: - View Mode
 
 private enum PipelineViewMode: String, CaseIterable {

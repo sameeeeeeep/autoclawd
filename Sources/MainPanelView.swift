@@ -21,22 +21,11 @@ enum PanelTab: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - World Sub-Tab
-
-enum WorldSubTab: String, CaseIterable, Identifiable {
-    case time  = "Time"
-    case space = "Space"
-    case hq    = "HQ"
-
-    var id: String { rawValue }
-}
-
 // MARK: - MainPanelView
 
 struct MainPanelView: View {
     @ObservedObject var appState: AppState
     @State private var selectedTab: PanelTab = .world
-    @State private var selectedWorldSubTab: WorldSubTab = .hq
 
     var body: some View {
         NavigationSplitView {
@@ -72,11 +61,8 @@ struct MainPanelView: View {
     @ViewBuilder
     private var content: some View {
         ZStack {
-            VStack(spacing: 0) {
-                worldSubTabBar
-                worldSubTabContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+            PixelWorldView(appState: appState)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             .opacity(selectedTab == .world ? 1 : 0)
             .allowsHitTesting(selectedTab == .world)
 
@@ -98,42 +84,6 @@ struct MainPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - World Sub-Tab Bar
-
-    private var worldSubTabBar: some View {
-        Picker("View", selection: $selectedWorldSubTab) {
-            ForEach(WorldSubTab.allCases) { subTab in
-                Text(subTab.rawValue).tag(subTab)
-            }
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
-
-    // MARK: - World Sub-Tab Content
-    // ZStack keeps all sub-tabs alive — PixelWorldView is never destroyed,
-    // its WKWebView keeps running and its .onReceive subscriptions stay active.
-
-    @ViewBuilder
-    private var worldSubTabContent: some View {
-        ZStack {
-            WorldTimeView(appState: appState)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .opacity(selectedWorldSubTab == .time ? 1 : 0)
-                .allowsHitTesting(selectedWorldSubTab == .time)
-
-            WorldSpaceView(appState: appState)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .opacity(selectedWorldSubTab == .space ? 1 : 0)
-                .allowsHitTesting(selectedWorldSubTab == .space)
-
-            PixelWorldView(appState: appState)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .opacity(selectedWorldSubTab == .hq ? 1 : 0)
-                .allowsHitTesting(selectedWorldSubTab == .hq)
-        }
-    }
 }
 
 // MARK: - ExecutionOutputView

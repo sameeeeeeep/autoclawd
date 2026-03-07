@@ -231,15 +231,6 @@ Groq is optional and used only for transcription speed. All analysis runs locall
 | `WidgetCanvasViews.swift` | Per-mode canvas content (AmbientCanvasView, TranscriptCanvasView, etc.) |
 | `WidgetPanelViews.swift` | Expanded pill panel views |
 
-#### UI — World Views
-| File | Purpose |
-|------|---------|
-| `WorldView.swift` | World model overview |
-| `WorldSpaceView.swift` | Geographic space visualization |
-| `WorldTimeView.swift` | Temporal timeline of episodes |
-| `AmbientMapView.swift` | Live location map for ambient context |
-| `MapEditorView.swift` | Map annotation editor |
-
 #### Integrations & System
 | File | Purpose |
 |------|---------|
