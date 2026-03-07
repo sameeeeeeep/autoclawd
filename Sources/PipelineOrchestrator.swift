@@ -102,12 +102,7 @@ final class PipelineOrchestrator: @unchecked Sendable {
         let sessionID        = job.sessionID
         let source           = job.source
 
-        // Code mode: the widget manages its own execution — no pipeline stages needed.
-        if source == .code {
-            Log.info(.pipeline, "Pipeline[code]: skipping all stages (code widget handles execution)")
-            await notifyUpdate()
-            return
-        }
+        // (Code mode removed — all modes use the full pipeline)
 
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // SESSION-END: Full pipeline on accumulated text
@@ -228,11 +223,7 @@ final class PipelineOrchestrator: @unchecked Sendable {
         Log.info(.pipeline, "Pipeline[session-end]: \(tasks.count) task(s) created" +
                  (capturePaths.isEmpty ? "" : " with \(capturePaths.count) attachment(s)"))
 
-        // Tasks mode: stop after task creation — no auto-execution
-        if source == .tasks {
-            Log.info(.pipeline, "Pipeline[session-end/tasks]: task creation complete — skipping execution")
-            return
-        }
+        // (Tasks-only mode removed — execution proceeds for all pipeline sources)
 
         // Stage 4: Execute auto tasks
         let execOn = SettingsManager.shared.isCodeExecutionEnabled

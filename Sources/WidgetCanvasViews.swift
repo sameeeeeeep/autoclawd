@@ -1,82 +1,121 @@
 import SwiftUI
 
-// MARK: - Ambient Intelligence Canvas
+// MARK: - Canvas Text Input Bar
 
-/// Shows accumulated session transcript text across all modes.
-/// Three opacity layers: cleaned (bright) → pending-raw (medium) → live partial (faint).
-/// Falls back to a minimal "listening" idle state when nothing has been spoken yet.
-struct AmbientCanvasView: View {
-    /// Accumulated cleaned chunks for this session — full opacity.
-    let cleanedText:  String
-    /// Latest committed chunk awaiting Ollama cleaning — medium opacity.
-    let pendingText:  String
-    /// Current streaming partial (word-by-word from SFSpeech) — faint.
-    let incomingText: String
-
-    private var hasContent: Bool {
-        !cleanedText.isEmpty || !pendingText.isEmpty || !incomingText.isEmpty
-    }
+/// Compact typed-text input shown at the bottom of the AI canvas.
+/// Lets users type or paste context alongside their spoken transcript.
+/// Clipboard auto-paste (via ClipboardMonitor) appends text here automatically.
+struct CanvasTextInputBar: View {
+    @Binding var text: String
+    var placeholder: String = "Type to add context…"
 
     var body: some View {
-        Group {
-            if hasContent {
-                liveState
-            } else {
-                idleState
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 8, weight: .medium))
+                .foregroundColor(.white.opacity(0.25))
+                .padding(.top, 2)
+            ZStack(alignment: .topLeading) {
+                if text.isEmpty {
+                    Text(placeholder)
+                        .font(.system(size: 9))
+                        .foregroundColor(.white.opacity(0.18))
+                        .padding(.top, 1)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $text)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.72))
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
+                    .frame(minHeight: 28, maxHeight: 52)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Color.white.opacity(0.09), lineWidth: 0.6))
+        )
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
+    }
+}
+
+// MARK: - Unified Canvas Text Box
+// Used by all transcript-accumulating canvas views.
+// One editable TextEditor for STT+typing, with a faint ghost line for the live streaming partial.
+
+struct UnifiedCanvasTextBox: View {
+    /// Combined STT + typed text — editable.
+    @Binding var text: String
+    /// Live streaming partial from SFSpeech — faint ghost, not editable.
+    var streamingPartial: String = ""
+    var placeholder: String = "Speak or type…"
+
+    private var hasContent: Bool { !text.isEmpty || !streamingPartial.isEmpty }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                // Placeholder when completely empty
+                if !hasContent {
+                    Text(placeholder)
+                        .font(.system(size: 10, design: .default))
+                        .foregroundColor(.white.opacity(0.18))
+                        .padding(.horizontal, 14)
+                        .padding(.top, 11)
+                        .allowsHitTesting(false)
+                }
+
+                // Editable body — cleaned STT appended here by AppState + user typing
+                TextEditor(text: $text)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundColor(.white.opacity(0.82))
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
+                    .lineSpacing(3)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+            }
+
+            // Live streaming partial shown below as a faint ghost
+            if !streamingPartial.isEmpty {
+                Text(streamingPartial)
+                    .font(.system(size: 10, weight: .regular).italic())
+                    .foregroundColor(.white.opacity(0.28))
+                    .lineSpacing(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 6)
+                    .allowsHitTesting(false)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
 
-    private var idleState: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 3) {
-                // Static decorative waveform bars
-                ForEach([8, 13, 6, 16, 10, 7, 12], id: \.self) { h in
-                    RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(Color.white.opacity(0.07))
-                        .frame(width: 3, height: CGFloat(h))
-                }
-            }
-            Text("Ambient listening…")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(.white.opacity(0.18))
-        }
-    }
+// MARK: - Ambient Intelligence Canvas
 
-    private var liveState: some View {
-        ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    // One continuous inline text run: cleaned → pending → streaming
-                    (
-                        Text(cleanedText)
-                            .foregroundColor(.white.opacity(0.82))
-                        +
-                        Text(pendingText.isEmpty ? "" : (cleanedText.isEmpty ? "" : " ") + pendingText)
-                            .foregroundColor(.white.opacity(0.52))
-                            .italic()
-                        +
-                        Text(incomingText.isEmpty ? "" : (cleanedText.isEmpty && pendingText.isEmpty ? "" : " ") + incomingText)
-                            .foregroundColor(.white.opacity(0.28))
-                            .italic()
-                    )
-                    .font(.system(size: 10, weight: .regular))
-                    .lineSpacing(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+/// Single unified text box — STT text is appended here automatically by AppState,
+/// and the user can type/edit freely in the same field.
+struct AmbientCanvasView: View {
+    /// Accumulated cleaned chunks — passed so AppDelegate can snapshot; not shown separately.
+    let cleanedText:  String
+    let pendingText:  String
+    /// Current streaming partial (word-by-word from SFSpeech) — shown as ghost below editor.
+    let incomingText: String
+    /// Unified editable text (STT + typed). Bound to AppState.canvasTypedText.
+    @Binding var typedText: String
 
-                    Color.clear.frame(height: 1).id("bottom")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-            }
-            .onChange(of: incomingText) { _ in
-                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
-            }
-            .onChange(of: cleanedText) { _ in
-                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
-            }
-        }
+    var body: some View {
+        UnifiedCanvasTextBox(
+            text: $typedText,
+            streamingPartial: incomingText,
+            placeholder: "Speak or type to add context…"
+        )
     }
 }
 
@@ -171,29 +210,21 @@ struct AmbientTaggingCanvasView: View {
 
 // MARK: - Transcription Canvas
 
-/// Live transcription canvas — shows accumulated cleaned text with raw incoming preview.
+/// Live transcription canvas — single unified text box (STT appended + user can type).
 struct TranscriptCanvasView: View {
-    /// Accumulated cleaned transcript chunks — full opacity.
     let cleanedText: String
-    /// Committed chunk awaiting Ollama cleaning — medium opacity (never disappears between chunks).
     let pendingText: String
-    /// Latest streaming partial (word-by-word from SFSpeech) — faint.
     let incomingText: String
     let onApply: () -> Void
     let onClear: () -> Void
+    @Binding var typedText: String
 
-    @State private var scrollID = "bottom"
-
-    private var totalWordCount: Int {
-        let all = [cleanedText, pendingText, incomingText].joined(separator: " ")
-        return all.split(separator: " ").count
-    }
-
-    private var hasContent: Bool { !cleanedText.isEmpty || !pendingText.isEmpty || !incomingText.isEmpty }
+    private var wordCount: Int { typedText.split(separator: " ").count }
+    private var hasContent: Bool { !typedText.isEmpty }
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── Header row ──────────────────────────────────────────────────
+            // ── Header ───────────────────────────────────────────────────────
             HStack(spacing: 6) {
                 Image(systemName: "text.cursor")
                     .font(.system(size: 9, weight: .semibold))
@@ -202,8 +233,8 @@ struct TranscriptCanvasView: View {
                     .font(.system(size: 8, weight: .bold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.45))
                 Spacer()
-                if totalWordCount > 0 {
-                    Text("\(totalWordCount) words")
+                if wordCount > 0 {
+                    Text("\(wordCount) words")
                         .font(.system(size: 8, design: .monospaced))
                         .foregroundColor(.white.opacity(0.28))
                 }
@@ -214,63 +245,14 @@ struct TranscriptCanvasView: View {
 
             Divider().opacity(0.12)
 
-            // ── Scrolling transcript body ────────────────────────────────────
-            // All three layers rendered as one continuous flowing text block.
-            // cleaned (bright) → pending-raw (medium, italic) → streaming (faint, italic)
-            ScrollViewReader { proxy in
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if hasContent {
-                            // Build one inline run: cleaned + pending + streaming
-                            (
-                                Text(cleanedText)
-                                    .foregroundColor(.white.opacity(0.82))
-                                +
-                                Text(pendingText.isEmpty ? "" : (cleanedText.isEmpty ? "" : " ") + pendingText)
-                                    .foregroundColor(.white.opacity(0.52))
-                                    .italic()
-                                +
-                                Text(incomingText.isEmpty ? "" : (cleanedText.isEmpty && pendingText.isEmpty ? "" : " ") + incomingText)
-                                    .foregroundColor(.white.opacity(0.28))
-                                    .italic()
-                            )
-                            .font(.system(size: 10, weight: .regular))
-                            .lineSpacing(4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        } else {
-                            Text("Speak to transcribe…")
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.18))
-                                .italic()
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
+            // ── Unified text box ──────────────────────────────────────────────
+            UnifiedCanvasTextBox(
+                text: $typedText,
+                streamingPartial: incomingText,
+                placeholder: "Speak to transcribe…"
+            )
 
-                        // Anchor for auto-scroll
-                        Color.clear.frame(height: 1).id("bottom")
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                }
-                .frame(maxHeight: .infinity)
-                .onChange(of: incomingText) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-                .onChange(of: pendingText) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-                .onChange(of: cleanedText) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-            }
-            .frame(maxHeight: .infinity)
-
-            // ── Action row ──────────────────────────────────────────────────
+            // ── Action row ────────────────────────────────────────────────────
             if hasContent {
                 HStack(spacing: 6) {
                     Button(action: onClear) {
@@ -279,27 +261,22 @@ struct TranscriptCanvasView: View {
                             .foregroundColor(.white.opacity(0.45))
                             .frame(maxWidth: .infinity)
                             .frame(height: 28)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(Color.white.opacity(0.07))
-                            )
+                            .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.white.opacity(0.07)))
                     }
                     .buttonStyle(.plain)
 
                     Button(action: onApply) {
                         HStack(spacing: 4) {
-                            Image(systemName: "text.insert")
-                                .font(.system(size: 9))
+                            Image(systemName: "text.insert").font(.system(size: 9))
                             Text("Paste")
                         }
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .frame(height: 28)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(Color.accentColor.opacity(0.75))
-                        )
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.75)))
                     }
                     .buttonStyle(.plain)
                 }
@@ -319,37 +296,46 @@ struct TranscriptCanvasView: View {
 struct AISearchCanvasView: View {
     let question: String
     let answer:   String
+    /// Typed/clipboard-pasted text input (bound to AppState.canvasTypedText).
+    @Binding var typedText: String
 
     var body: some View {
-        Group {
-            if question.isEmpty {
-                VStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 16, weight: .ultraLight))
-                        .foregroundColor(.white.opacity(0.1))
-                    Text("Ask a question…")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(.white.opacity(0.18))
+        VStack(spacing: 0) {
+            Group {
+                if question.isEmpty {
+                    VStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 16, weight: .ultraLight))
+                            .foregroundColor(.white.opacity(0.1))
+                        Text("Ask a question…")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.white.opacity(0.18))
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(question)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.38))
+                            .lineLimit(2)
+                        Text(answer)
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundColor(.white.opacity(0.72))
+                            .lineSpacing(2)
+                            .lineLimit(6)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(question)
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.38))
-                        .lineLimit(2)
-                    Text(answer)
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundColor(.white.opacity(0.72))
-                        .lineSpacing(2)
-                        .lineLimit(6)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            UnifiedCanvasTextBox(text: $typedText, placeholder: "Speak or type a question…")
+                .frame(maxHeight: 80)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -399,6 +385,46 @@ struct TasksCanvasView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
+    }
+}
+
+// MARK: - Meeting Canvas
+
+/// Live meeting notes canvas — single unified text box.
+/// STT text is appended automatically; user can also type/edit inline.
+struct MeetingCanvasView: View {
+    let cleanedText:  String
+    let pendingText:  String
+    let incomingText: String
+    @Binding var typedText: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "person.2.wave.2")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.purple)
+                Text("MEETING")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.45))
+                Spacer()
+                Text("analysed at session end")
+                    .font(.system(size: 7))
+                    .foregroundColor(.white.opacity(0.20))
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            Divider().opacity(0.12)
+
+            UnifiedCanvasTextBox(
+                text: $typedText,
+                streamingPartial: incomingText,
+                placeholder: "Speak or type to add notes…"
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -912,20 +938,24 @@ struct CleaningPickerCanvasView: View {
                     let available = results[level] != nil
 
                     Button { onSelect(level) } label: {
-                        HStack(spacing: 3) {
-                            Text("\(level.index)")
-                                .font(.system(size: 7, weight: .bold, design: .monospaced))
-                                .foregroundColor(isActive ? .cyan : .white.opacity(0.3))
-                            Text(level.displayName)
-                                .font(.system(size: 9, weight: isActive ? .semibold : .regular))
-                                .foregroundColor(isActive ? .white.opacity(0.85) : .white.opacity(available ? 0.40 : 0.18))
+                        VStack(spacing: 3) {
+                            HStack(spacing: 3) {
+                                Text("\(level.index)")
+                                    .font(.system(size: 7, weight: .bold, design: .monospaced))
+                                    .foregroundColor(isActive ? .cyan : .white.opacity(0.3))
+                                Text(level.displayName)
+                                    .font(.system(size: 9, weight: isActive ? .semibold : .regular))
+                                    .foregroundColor(isActive ? .white.opacity(0.85) : .white.opacity(available ? 0.40 : 0.18))
+                            }
+                            // Underline indicator — no conflicting box
+                            Rectangle()
+                                .fill(isActive ? Color.cyan.opacity(0.75) : Color.clear)
+                                .frame(height: 1.5)
+                                .cornerRadius(1)
                         }
                         .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(isActive ? Color.cyan.opacity(0.12) : Color.clear)
-                        )
+                        .padding(.top, 4)
+                        .padding(.bottom, 2)
                     }
                     .buttonStyle(.plain)
                 }

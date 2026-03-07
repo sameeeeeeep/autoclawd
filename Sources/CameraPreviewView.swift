@@ -102,10 +102,13 @@ final class CameraPreviewNSView: NSView {
 // MARK: - CameraFeedWidget
 
 /// Dual-purpose feed tile for the pill widget — shows camera feed or screen share preview.
-/// When both camera and screen share are active, a cycle button switches between them.
+/// When both camera and screen share are active, a chevron on the center-right switches between them.
+/// Gesture detection can be toggled with a button on the top-left.
+/// A capture button on the bottom takes a snapshot.
 struct CameraFeedWidget: View {
     @ObservedObject var appState: AppState
     let appearance: WidgetAppearance
+    var onCapture: (() -> Void)? = nil
 
     private var cameraActive: Bool {
         appState.cameraEnabled && appState.cameraService.isRunning
@@ -204,43 +207,94 @@ struct CameraFeedWidget: View {
     // MARK: - Feed HUD
 
     private func feedHUD(isScreen: Bool) -> some View {
-        VStack {
-            HStack {
-                if !isScreen && appState.faceTrackingEnabled && appState.detectedFaceCount > 0 {
-                    faceCountBadge
-                        .onTapGesture { appState.presentFaceLinkingOptions() }
+        ZStack {
+            VStack {
+                // Top row: gesture toggle (left), face badge + gesture indicator (right)
+                HStack {
+                    if !isScreen {
+                        gestureToggleButton
+                    }
+                    Spacer()
+                    if !isScreen && appState.faceTrackingEnabled && appState.detectedFaceCount > 0 {
+                        faceCountBadge
+                            .onTapGesture { appState.presentFaceLinkingOptions() }
+                    }
+                    if !isScreen, let gesture = appState.lastConfirmedGesture {
+                        gestureIndicatorBadge(gesture)
+                    }
                 }
                 Spacer()
-                if !isScreen, let gesture = appState.lastConfirmedGesture {
-                    gestureIndicatorBadge(gesture)
-                }
-                if hasBothSources {
-                    cycleButton
+                // Bottom row: live/screen badge (left), capture button (right)
+                HStack {
+                    if isScreen { screenBadge } else { liveBadge }
+                    Spacer()
+                    if !isScreen {
+                        captureButton
+                    }
                 }
             }
-            Spacer()
-            HStack {
-                if isScreen { screenBadge } else { liveBadge }
-                Spacer()
+            .padding(8)
+
+            // Center-right chevron (only when both sources are active)
+            if hasBothSources {
+                HStack {
+                    Spacer()
+                    chevronCycleButton
+                }
             }
         }
-        .padding(8)
     }
 
-    // MARK: - Cycle Button
+    // MARK: - Gesture Toggle Button
 
-    private var cycleButton: some View {
+    private var gestureToggleButton: some View {
         Button {
-            appState.feedViewMode = appState.feedViewMode == .camera ? .screen : .camera
+            appState.gestureControlEnabled.toggle()
         } label: {
-            Image(systemName: "arrow.triangle.2.circlepath")
+            Image(systemName: appState.gestureControlEnabled ? "hand.raised.fill" : "hand.raised.slash.fill")
                 .font(.system(size: 8, weight: .semibold))
-                .foregroundColor(.white.opacity(0.8))
+                .foregroundColor(appState.gestureControlEnabled ? .green : .white.opacity(0.5))
                 .padding(5)
                 .background(
                     Circle()
                         .fill(Color.black.opacity(0.55))
-                        .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
+                        .overlay(Circle().stroke(
+                            appState.gestureControlEnabled ? Color.green.opacity(0.4) : Color.white.opacity(0.2),
+                            lineWidth: 0.5
+                        ))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Capture Button
+
+    private var captureButton: some View {
+        Button { onCapture?() } label: {
+            Image(systemName: "camera.circle.fill")
+                .font(.system(size: 14))
+                .foregroundColor(.white.opacity(0.85))
+                .shadow(color: .black.opacity(0.4), radius: 2)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Center-right Chevron Cycle Button
+
+    private var chevronCycleButton: some View {
+        Button {
+            appState.feedViewMode = appState.feedViewMode == .camera ? .screen : .camera
+        } label: {
+            Image(systemName: appState.feedViewMode == .camera ? "chevron.right" : "chevron.left")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(.white.opacity(0.85))
+                .padding(.vertical, 10)
+                .padding(.horizontal, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.black.opacity(0.50))
+                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 0.5))
                 )
         }
         .buttonStyle(.plain)
@@ -295,18 +349,20 @@ struct CameraFeedWidget: View {
     private func gestureIndicatorBadge(_ gesture: HandGestureRecognizer.Gesture) -> some View {
         let color: Color = {
             switch gesture {
-            case .rightSpreadOpen:  return .green
-            case .rightPinchClosed: return .orange
-            case .rightThumbsUp:    return .yellow
-            case .leftFingerCount:  return .cyan
+            case .rightSpreadOpen:     return .green
+            case .rightThumbIndexOpen: return .yellow
+            case .rightPinchClosed:    return .orange
+            case .rightThumbsUp:       return .white.opacity(0.4)
+            case .leftFingerCount:     return .cyan
             }
         }()
         let icon: String = {
             switch gesture {
-            case .rightSpreadOpen:  return "hand.raised.fill"
-            case .rightPinchClosed: return "hand.point.up.braille.fill"
-            case .rightThumbsUp:    return "hand.thumbsup.fill"
-            case .leftFingerCount:  return "hand.point.up.left.fill"
+            case .rightSpreadOpen:     return "hand.raised.fill"
+            case .rightThumbIndexOpen: return "hand.point.up.fill"
+            case .rightPinchClosed:    return "hand.point.up.braille.fill"
+            case .rightThumbsUp:       return "hand.thumbsup.fill"
+            case .leftFingerCount:     return "hand.point.up.left.fill"
             }
         }()
 

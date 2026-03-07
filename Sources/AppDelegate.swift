@@ -141,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Ambient Mode  ⌃A",    action: #selector(menuAmbient),    keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "AI Search Mode  ⌃S",  action: #selector(menuSearch),     keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Transcribe Mode  ⌃X", action: #selector(menuTranscribe), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Code Mode  ⌃D",      action: #selector(menuCode),       keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Meeting Mode  ⌃D",   action: #selector(menuMeeting),    keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "View Logs",           action: #selector(menuViewLogs),   keyEquivalent: ""))
         menu.addItem(.separator())
@@ -160,7 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func menuAmbient()      { appState.pillMode = .ambientIntelligence; if !appState.isListening { appState.startListening() } }
     @objc private func menuSearch()       { appState.pillMode = .aiSearch;            if !appState.isListening { appState.startListening() } }
     @objc private func menuTranscribe()   { appState.pillMode = .transcription;       if !appState.isListening { appState.startListening() } }
-    @objc private func menuCode()         { appState.pillMode = .code }
+    @objc private func menuMeeting()      { appState.pillMode = .meeting; if !appState.isListening { appState.startListening() } }
 
     // MARK: - Toast
 
@@ -349,7 +349,7 @@ struct PillContentView: View {
             onCycleMode:            { appState.cyclePillMode() },
             onSetMode: { mode in
                 appState.pillMode = mode
-                if mode != .code && !appState.isListening { appState.startListening() }
+                if !appState.isListening { appState.startListening() }
             },
             onToggleLocalModel:     onToggleLocalModel,
             onToggleCode:           onToggleCode,
@@ -418,6 +418,13 @@ struct PillContentView: View {
             }
             onCollapseChange(isActive ? .expanded : .full)
         }
+        .onChange(of: appState.showCleaningPicker) { isShowing in
+            // Expand pill when the cleaning level chooser appears so it's fully visible.
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+                collapseLevel = isShowing ? .expanded : .full
+            }
+            onCollapseChange(isShowing ? .expanded : .full)
+        }
         .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
             displayLevel = appState.chunkManager.audioLevel
         }
@@ -434,16 +441,7 @@ struct PillContentView: View {
                 prevTranscript = newChunk
                 return
             }
-            let label = "\(Self.snapTimeFmt.string(from: Date())) · \(appState.pillMode.shortLabel)"
-            let snapshot = CanvasSnapshot(
-                mode:    appState.pillMode,
-                label:   label,
-                content: AnyView(AmbientCanvasView(
-                    cleanedText:  appState.liveTranscriptText,
-                    pendingText:  "",
-                    incomingText: prevTranscript
-                ))
-            )
+            let snapshot = makeTranscriptSnapshot(prevTranscript: prevTranscript)
             canvasSnapshots = Array(([snapshot] + canvasSnapshots).prefix(8))
             prevTranscript = newChunk
         }
@@ -452,12 +450,7 @@ struct PillContentView: View {
             guard count > prevQACount, let item = appState.qaStore.items.first else {
                 prevQACount = count; return
             }
-            let label = "\(Self.snapTimeFmt.string(from: Date())) · Q"
-            let snapshot = CanvasSnapshot(
-                mode:    .aiSearch,
-                label:   label,
-                content: AnyView(AISearchCanvasView(question: item.question, answer: item.answer))
-            )
+            let snapshot = makeQASnapshot(question: item.question, answer: item.answer)
             canvasSnapshots = Array(([snapshot] + canvasSnapshots).prefix(8))
             prevQACount = count
         }
@@ -472,8 +465,7 @@ struct PillContentView: View {
                 content: AnyView(TasksCanvasView(
                     latestTaskTitle: task?.title ?? "",
                     taskCount:       count,
-                    projectName:     appState.tasksSelectedProject?.name
-                        ?? appState.codeSelectedProject?.name
+                    projectName:     task?.projectName
                 ))
             )
             canvasSnapshots = Array(([snapshot] + canvasSnapshots).prefix(8))
@@ -483,6 +475,37 @@ struct PillContentView: View {
         .onChange(of: appState.speakerMode) { mode in
             showMultiSpeakerPrompt = (mode == .multiple)
         }
+    }
+
+    // MARK: - Snapshot helpers (extracted from body to reduce type-checker complexity)
+
+    private func makeTranscriptSnapshot(prevTranscript: String) -> CanvasSnapshot {
+        let label = "\(Self.snapTimeFmt.string(from: Date())) · \(appState.pillMode.shortLabel)"
+        let empty: Binding<String> = .constant("")
+        let view = AmbientCanvasView(
+            cleanedText:  appState.liveTranscriptText,
+            pendingText:  "",
+            incomingText: prevTranscript,
+            typedText:    empty
+        )
+        return CanvasSnapshot(mode: appState.pillMode, label: label, content: AnyView(view))
+    }
+
+    private func makeQASnapshot(question: String, answer: String) -> CanvasSnapshot {
+        let label = "\(Self.snapTimeFmt.string(from: Date())) · Q"
+        let empty: Binding<String> = .constant("")
+        let view = AISearchCanvasView(question: question, answer: answer, typedText: empty)
+        return CanvasSnapshot(mode: .aiSearch, label: label, content: AnyView(view))
+    }
+
+    // MARK: - Canvas typed text binding
+
+    /// Stable Binding<String> for canvasTypedText — avoids type-checker complexity in body.
+    private var typedTextBinding: Binding<String> {
+        Binding(
+            get: { self.appState.canvasTypedText },
+            set: { self.appState.canvasTypedText = $0 }
+        )
     }
 
     // MARK: - Camera feed
@@ -572,7 +595,7 @@ struct PillContentView: View {
                 color: Color(red: 0.58, green: 0.2, blue: 0.92),
                 title: "Claude Code",
                 sub1:  appState.codeCurrentToolName ?? "Running…",
-                sub2:  appState.codeSelectedProject?.name ?? ""
+                sub2:  appState.pipelineTasks.last?.projectName ?? ""
             ))
         }
 
@@ -598,24 +621,6 @@ struct PillContentView: View {
             ))
         }
 
-        // ── Session project picker (gesture-triggered session start) ──────────────
-        if appState.showSessionProjectPicker {
-            return AnyView(SessionProjectPickerCanvasView(
-                projects: appState.projects,
-                onSelect: { project in
-                    appState.showSessionProjectPicker = false
-                    var config = SessionConfig()
-                    config.projectID = project.id
-                    config.projectName = project.name
-                    appState.startUserSession(config: config)
-                },
-                onSkip: {
-                    appState.showSessionProjectPicker = false
-                    appState.startUserSession(config: SessionConfig())
-                }
-            ))
-        }
-
         // ── Face linking canvas (auto-triggered or manual) ────────────────────────
         if appState.showFaceLinkingOverlay {
             return AnyView(FaceLinkingCanvasView(appState: appState))
@@ -627,6 +632,19 @@ struct PillContentView: View {
                 task:     execTask,
                 appState: appState,
                 onDone:   { appState.doneWithCanvasExecution() }
+            ))
+        }
+
+        // ── Cleaning level picker (post-session transcript quality) ─────────────
+        // Shown first — takes priority so the user always gets to refine their transcript
+        // before seeing task review. Ambient review appears after cleaning picker is dismissed.
+        if appState.showCleaningPicker {
+            return AnyView(CleaningPickerCanvasView(
+                results: appState.cleaningResults,
+                selected: appState.selectedCleaningLevel,
+                isProcessing: appState.isSessionProcessing,
+                onSelect: { level in appState.selectCleaningLevel(level) },
+                onDismiss: { appState.dismissCleaningPicker() }
             ))
         }
 
@@ -648,17 +666,6 @@ struct PillContentView: View {
             ))
         }
 
-        // ── Cleaning level picker (post-session transcript quality) ─────────────
-        if appState.showCleaningPicker {
-            return AnyView(CleaningPickerCanvasView(
-                results: appState.cleaningResults,
-                selected: appState.selectedCleaningLevel,
-                isProcessing: appState.isSessionProcessing,
-                onSelect: { level in appState.selectCleaningLevel(level) },
-                onDismiss: { appState.dismissCleaningPicker() }
-            ))
-        }
-
         // ── Smart prompt: multi-speaker "who are you with?" ──────────────────────
         if showMultiSpeakerPrompt {
             return AnyView(MultiSpeakerPromptCanvasView(
@@ -673,71 +680,47 @@ struct PillContentView: View {
         }
 
         // ── Mode-specific state machines ─────────────────────────────────────────
+        return modeSpecificCanvas
+    }
+
+    /// Extracted to a separate property so the compiler can type-check it independently.
+    private var modeSpecificCanvas: AnyView? {
+        let typed = typedTextBinding
         switch appState.pillMode {
-
         case .ambientIntelligence:
-            return AnyView(AmbientCanvasView(
-                cleanedText:  appState.liveTranscriptText,
-                pendingText:  appState.pendingRawSegment,
-                incomingText: appState.latestTranscriptChunk
-            ))
-
-        case .transcription:
-            return AnyView(TranscriptCanvasView(
+            let v = AmbientCanvasView(
                 cleanedText:  appState.liveTranscriptText,
                 pendingText:  appState.pendingRawSegment,
                 incomingText: appState.latestTranscriptChunk,
-                onApply: { appState.applyLatestTranscript() },
-                onClear: { appState.clearSessionTranscript() }
-            ))
-
+                typedText:    typed
+            )
+            return AnyView(v)
+        case .transcription:
+            let v = TranscriptCanvasView(
+                cleanedText:  appState.liveTranscriptText,
+                pendingText:  appState.pendingRawSegment,
+                incomingText: appState.latestTranscriptChunk,
+                onApply:      { self.appState.applyLatestTranscript() },
+                onClear:      { self.appState.clearSessionTranscript() },
+                typedText:    typed
+            )
+            return AnyView(v)
         case .aiSearch:
             let item = appState.qaStore.items.first
-            return AnyView(AISearchCanvasView(
-                question: item?.question ?? "",
-                answer:   item?.answer   ?? ""
-            ))
-
-        case .tasks:
-            // State 1: no project → picker
-            guard let proj = appState.tasksSelectedProject else {
-                return AnyView(ProjectPickerCanvasView(
-                    projects: appState.projects,
-                    title:    "Select project · Tasks",
-                    onSelect: { appState.tasksSelectedProject = $0 }
-                ))
-            }
-            // State 2: project selected → active tasks view
-            let task = appState.pipelineTasks.last
-            return AnyView(TasksCanvasView(
-                latestTaskTitle: task?.title ?? "",
-                taskCount:       appState.pipelineTasks.count,
-                projectName:     proj.name
-            ))
-
-        case .code:
-            switch appState.codeWidgetStep {
-            case .projectSelect:
-                // State 1: no project → picker
-                guard let proj = appState.codeSelectedProject else {
-                    return AnyView(ProjectPickerCanvasView(
-                        projects: appState.projects,
-                        title:    "Select project · Code",
-                        onSelect: { appState.codeSelectedProject = $0 }
-                    ))
-                }
-                // State 2: project chosen → confirm + auto/ask + start
-                return AnyView(CodeSetupCanvasView(
-                    project:             proj,
-                    skipPermissions:     appState.codeSkipPermissions,
-                    onTogglePermissions: { appState.codeSkipPermissions.toggle() },
-                    onStart:             { appState.startCodeSession() },
-                    onChangeProject:     { appState.codeSelectedProject = nil }
-                ))
-            case .copilot:
-                // State 3: session running → streaming status
-                return AnyView(CodeCanvasView(appState: appState))
-            }
+            let v = AISearchCanvasView(
+                question:  item?.question ?? "",
+                answer:    item?.answer   ?? "",
+                typedText: typed
+            )
+            return AnyView(v)
+        case .meeting:
+            let v = MeetingCanvasView(
+                cleanedText:  appState.liveTranscriptText,
+                pendingText:  appState.pendingRawSegment,
+                incomingText: appState.latestTranscriptChunk,
+                typedText:    typed
+            )
+            return AnyView(v)
         }
     }
 }

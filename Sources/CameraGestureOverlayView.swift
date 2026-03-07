@@ -50,6 +50,7 @@ struct CameraGestureOverlayView: View {
     private func gestureIcon(_ gesture: HandGestureRecognizer.Gesture) -> String {
         switch gesture {
         case .rightSpreadOpen:     return "hand.raised.fill"
+        case .rightThumbIndexOpen: return "hand.point.up.fill"
         case .rightPinchClosed:    return "hand.point.up.braille.fill"
         case .rightThumbsUp:       return "hand.thumbsup.fill"
         case .leftFingerCount:     return "hand.point.up.left.fill"
@@ -58,9 +59,10 @@ struct CameraGestureOverlayView: View {
 
     private func gestureLabel(_ gesture: HandGestureRecognizer.Gesture) -> String {
         switch gesture {
-        case .rightSpreadOpen:        return "Session Start"
-        case .rightPinchClosed:       return "Session Pause"
-        case .rightThumbsUp:          return "Session Done"
+        case .rightSpreadOpen:        return "Start / Pause"
+        case .rightThumbIndexOpen:    return "Session Done"
+        case .rightPinchClosed:       return "Dismiss"
+        case .rightThumbsUp:          return "—"
         case .leftFingerCount(let n): return "Option \(n)"
         }
     }
@@ -68,8 +70,9 @@ struct CameraGestureOverlayView: View {
     private func gestureColor(_ gesture: HandGestureRecognizer.Gesture) -> Color {
         switch gesture {
         case .rightSpreadOpen:     return .green
+        case .rightThumbIndexOpen: return .yellow
         case .rightPinchClosed:    return .orange
-        case .rightThumbsUp:       return .yellow
+        case .rightThumbsUp:       return .white.opacity(0.4)
         case .leftFingerCount:     return .cyan
         }
     }

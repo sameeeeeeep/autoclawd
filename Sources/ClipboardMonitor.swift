@@ -27,6 +27,10 @@ final class ClipboardMonitor: @unchecked Sendable {
     /// The current listening session ID (set by ChunkManager when listening starts).
     var currentSessionID: String?
 
+    /// Called on the main thread when new text is copied to clipboard during an active session.
+    /// Wire this up in AppState to auto-paste into the canvas text input.
+    var onTextCopied: ((String) -> Void)?
+
     private init() {}
 
     func start() {
@@ -83,6 +87,15 @@ final class ClipboardMonitor: @unchecked Sendable {
         }
 
         Log.info(.clipboard, "\(type) copied: \(charCount) chars — '\(preview)'")
+
+        // Auto-paste text into canvas if a session is active
+        if type == "text", currentSessionID != nil {
+            let fullText: String = pasteboard.string(forType: .string) ?? preview
+            guard !fullText.isEmpty else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.onTextCopied?(fullText)
+            }
+        }
     }
 
     /// Save clipboard image data to disk via ContextCaptureStore.

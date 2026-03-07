@@ -7,9 +7,9 @@ import Vision
 /// Processes camera frames to detect hand gestures using Apple Vision.
 ///
 /// **Right hand:**
-/// - Spread open (all fingers extended, spread apart) → session start
-/// - Pinch closed (thumb + index touching) → session pause
-/// - Thumbs up (only thumb extended) → session done
+/// - Spread open (all fingers extended, spread apart) → toggle session start/pause
+/// - Thumb + index open (thumb + index extended, not pinching, other fingers closed) → session done
+/// - Thumbs up (only thumb extended) → reserved / unused
 ///
 /// **Left hand:**
 /// - Finger count (1-5 extended fingers) → option selection
@@ -21,10 +21,11 @@ final class HandGestureRecognizer: @unchecked Sendable {
     // MARK: - Types
 
     enum Gesture: Equatable {
-        case rightSpreadOpen
-        case rightPinchClosed
-        case rightThumbsUp
-        case leftFingerCount(Int)
+        case rightSpreadOpen       // all fingers apart → toggle session start/pause
+        case rightThumbIndexOpen   // thumb + index extended, others closed → session done
+        case rightPinchClosed      // thumb + index touching → (reserved)
+        case rightThumbsUp         // only thumb extended → (reserved)
+        case leftFingerCount(Int)  // 1-5 fingers → option selection
     }
 
     private enum State {
@@ -100,6 +101,9 @@ final class HandGestureRecognizer: @unchecked Sendable {
             // far from wrist during a pinch. Pinch is more specific.
             if isPinchClosed(right) {
                 detected = .rightPinchClosed
+            } else if isThumbIndexOpen(right) {
+                // Thumb + index both extended, others closed → done gesture
+                detected = .rightThumbIndexOpen
             } else if isThumbsUp(right) {
                 detected = .rightThumbsUp
             } else if isSpreadOpen(right) {
@@ -289,6 +293,26 @@ final class HandGestureRecognizer: @unchecked Sendable {
 
         let dist = distance(thumbTip.location, indexTip.location)
         return dist < 0.10  // relaxed from 0.05 — aligned with reference
+    }
+
+    /// Thumb and index finger both extended, other 3 fingers closed, and NOT pinching.
+    /// The "L-shape" / gun gesture → session done.
+    private func isThumbIndexOpen(_ observation: VNHumanHandPoseObservation) -> Bool {
+        guard isThumbExtended(observation) else { return false }
+        guard isFingerExtended(observation: observation, tip: .indexTip, pip: .indexPIP, mcp: .indexMCP) else { return false }
+        // Other fingers must be closed
+        let otherFingers: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
+            (.middleTip, .middlePIP, .middleMCP),
+            (.ringTip, .ringPIP, .ringMCP),
+            (.littleTip, .littlePIP, .littleMCP),
+        ]
+        for (tip, pip, mcp) in otherFingers {
+            if isFingerExtended(observation: observation, tip: tip, pip: pip, mcp: mcp) {
+                return false  // another finger is up → not this gesture
+            }
+        }
+        // Must NOT be pinching
+        return !isPinchClosed(observation)
     }
 
     private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
