@@ -83,9 +83,7 @@ final class AppState: ObservableObject {
             chunkManager.pillMode = pillMode
             // Force a new audio chunk on mode change so the new mode gets clean context.
             chunkManager.forceNewChunk()
-            if oldValue == .code && pillMode != .code {
-                resetCodeWidget()
-            }
+            // (code mode removed — no code widget reset needed)
             // Transcript accumulates across all modes within a session.
             // clearSessionTranscript() is called only on new session start or manual Clear.
             // Mode changes never clear the transcript — text stays visible.
@@ -120,6 +118,10 @@ final class AppState: ObservableObject {
 
     /// Project selected for Tasks mode (nil = show project picker in canvas).
     @Published var tasksSelectedProject: Project? = nil
+
+    /// Text typed (or auto-pasted from clipboard) into the AI canvas during a session.
+    /// Accumulated alongside spoken transcript; included in pipeline at session end.
+    @Published var canvasTypedText: String = ""
 
     /// Whether background music is likely present (enables Shazam detection).
     @Published var musicModeEnabled: Bool {
@@ -542,7 +544,11 @@ final class AppState: ObservableObject {
                 guard let self else { return }
                 self.detectedFaceCount = count
                 self.syncAvatarSeedsFromFaces()
-                self.checkForUnlinkedFaces()
+                // Delay the mapping prompt by 2s — combined with the 5s FaceTracker stability
+                // threshold this gives a 7s total window before asking the user to identify a face.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    self?.checkForUnlinkedFaces()
+                }
             }
         }
     }
@@ -552,6 +558,16 @@ final class AppState: ObservableObject {
     func applicationDidFinishLaunching() {
         Log.info(.system, "AutoClawd started. Mode: \(transcriptionMode.rawValue). RAM: (not measured)")
         ClipboardMonitor.shared.start()
+        ClipboardMonitor.shared.onTextCopied = { [weak self] text in
+            guard let self, self.sessionLifecycle == .active else { return }
+            // Append clipboard text to the canvas typed input with a newline separator
+            if self.canvasTypedText.isEmpty {
+                self.canvasTypedText = text
+            } else {
+                self.canvasTypedText += "\n" + text
+            }
+            Log.info(.system, "Clipboard text auto-pasted to canvas (\(text.count) chars)")
+        }
         locationService.onUnknownSSID = { [weak self] ssid in
             self?.pendingUnknownSSID = ssid
         }
@@ -585,7 +601,8 @@ final class AppState: ObservableObject {
         hotkeys.onCodeMode = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                self.pillMode = .code
+                self.pillMode = .meeting
+                if !self.isListening { self.startListening() }
             }
         }
         hotkeys.start()
@@ -737,70 +754,40 @@ final class AppState: ObservableObject {
 
         switch gesture {
         case .rightSpreadOpen:
-            // Session start — uses PR#5 session lifecycle so dock buttons sync
+            // Toggle session start/pause — fingers apart = start if not running, pause if active, resume if paused
+            // Project is NOT selected at session start — it's assigned at session end during review.
             switch sessionLifecycle {
             case .undefined:
-                if projects.isEmpty {
-                    // No projects — quick-start with default config
-                    startUserSession(config: SessionConfig())
-                } else if projects.count == 1 {
-                    // Single project — auto-select
-                    var config = SessionConfig()
-                    config.projectID = projects[0].id
-                    config.projectName = projects[0].name
-                    startUserSession(config: config)
-                } else {
-                    // Multiple projects — show canvas picker for gesture selection
-                    showSessionProjectPicker = true
-                }
+                startUserSession(config: SessionConfig())
             case .paused:
                 resumeUserSession()
             case .active:
-                break  // already active
+                pauseUserSession()
             default:
                 break
             }
-            Log.info(.camera, "Gesture: session start (right spread) → lifecycle: \(sessionLifecycle)")
+            Log.info(.camera, "Gesture: toggle start/pause (right spread) → lifecycle: \(sessionLifecycle)")
 
-        case .rightPinchClosed:
-            // Dismiss project picker without starting
-            if showSessionProjectPicker {
-                showSessionProjectPicker = false
-                Log.info(.camera, "Gesture: dismissed project picker (pinch)")
-            } else {
-                // Session pause
-                switch sessionLifecycle {
-                case .active:
-                    pauseUserSession()
-                default:
-                    break
-                }
-                Log.info(.camera, "Gesture: session pause (right pinch) → lifecycle: \(sessionLifecycle)")
-            }
-
-        case .rightThumbsUp:
-            // Dismiss overlays or end session
+        case .rightThumbIndexOpen:
+            // Thumb + index open (L-shape) → session done / dismiss overlays
             if showCleaningPicker {
                 showCleaningPicker = false
-                Log.info(.camera, "Gesture: dismissed cleaning picker (thumbs up)")
+                Log.info(.camera, "Gesture: dismissed cleaning picker (thumb+index)")
             } else if showSessionProjectPicker {
                 showSessionProjectPicker = false
-                Log.info(.camera, "Gesture: dismissed project picker (thumbs up)")
+                Log.info(.camera, "Gesture: dismissed project picker (thumb+index)")
             } else if showFaceLinkingOverlay {
-                // Mark remaining unlinked faces as dismissed so they don't re-trigger
                 for i in faceLinkingIndex..<faceLinkingQueue.count {
                     dismissedFaceTrackIDs.insert(faceLinkingQueue[i].id)
                 }
                 showFaceLinkingOverlay = false
-                Log.info(.camera, "Gesture: dismissed face linking (thumbs up)")
+                Log.info(.camera, "Gesture: dismissed face linking (thumb+index)")
             } else if let review = ambientReview, review.phase == .tasksReady {
-                // Approve all session tasks and start sequential execution
                 approveAllReviewTasks()
-                Log.info(.camera, "Gesture: approve all review tasks (thumbs up)")
+                Log.info(.camera, "Gesture: approve all review tasks (thumb+index)")
             } else if ambientReview?.phase == .done {
-                // Dismiss the done-state review
                 dismissAmbientReview()
-                Log.info(.camera, "Gesture: dismiss done review (thumbs up)")
+                Log.info(.camera, "Gesture: dismiss done review (thumb+index)")
             } else {
                 switch sessionLifecycle {
                 case .active, .paused:
@@ -808,8 +795,19 @@ final class AppState: ObservableObject {
                 default:
                     break
                 }
-                Log.info(.camera, "Gesture: session done (thumbs up) → lifecycle: \(sessionLifecycle)")
+                Log.info(.camera, "Gesture: session done (thumb+index) → lifecycle: \(sessionLifecycle)")
             }
+
+        case .rightPinchClosed:
+            // Dismiss project picker without starting (reserved)
+            if showSessionProjectPicker {
+                showSessionProjectPicker = false
+                Log.info(.camera, "Gesture: dismissed project picker (pinch)")
+            }
+
+        case .rightThumbsUp:
+            // Reserved — no action assigned
+            Log.info(.camera, "Gesture: thumbs up (reserved)")
 
         case .leftFingerCount(let count):
             if showCleaningPicker {
@@ -947,7 +945,7 @@ final class AppState: ObservableObject {
 
     /// Switch pill mode via left-hand gesture (1-5) when idle.
     private func switchModeByGesture(index: Int) {
-        let modes: [PillMode] = [.ambientIntelligence, .transcription, .aiSearch, .tasks, .code]
+        let modes: [PillMode] = [.ambientIntelligence, .transcription, .aiSearch, .meeting]
         guard index >= 1, index <= modes.count else { return }
         pillMode = modes[index - 1]
     }
@@ -982,6 +980,9 @@ final class AppState: ObservableObject {
     func appendChunkToSession(_ text: String) {
         let separator = liveTranscriptText.isEmpty ? "" : " "
         liveTranscriptText += separator + text
+        // Also feed into the unified canvas text box so STT and typing share one field
+        let canvasSep = canvasTypedText.isEmpty ? "" : "\n"
+        canvasTypedText += canvasSep + text
         latestTranscriptChunk = ""   // next chunk's streaming will start fresh
         pendingRawSegment = ""       // no pending layer in session model
     }
@@ -993,6 +994,7 @@ final class AppState: ObservableObject {
         liveTranscriptText = ""
         pendingRawSegment = ""
         latestTranscriptChunk = ""
+        canvasTypedText = ""
         Log.info(.ui, "Session transcript cleared (new session)")
     }
 
@@ -1030,7 +1032,7 @@ final class AppState: ObservableObject {
         showSessionProjectPicker = false
 
         // Derive pill mode from context — default to ambient intelligence
-        if pillMode != .ambientIntelligence && pillMode != .transcription && pillMode != .tasks {
+        if pillMode != .ambientIntelligence && pillMode != .transcription && pillMode != .meeting {
             pillMode = .ambientIntelligence
         }
 
@@ -1058,8 +1060,11 @@ final class AppState: ObservableObject {
     func stopUserSession() {
         guard sessionLifecycle == .active || sessionLifecycle == .paused else { return }
 
-        // Capture the full accumulated raw text BEFORE stopping
-        let fullRawText = liveTranscriptText
+        // canvasTypedText is the single source of truth for the session — it accumulates
+        // both STT text (appended by appendChunkToSession) and anything the user typed/pasted.
+        // Fall back to liveTranscriptText only if the user cleared the text box manually.
+        let canvas = canvasTypedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fullRawText = canvas.isEmpty ? liveTranscriptText : canvas
         let capturedConfig = sessionConfig
         let capturedSessionID = chunkManager.currentSessionID
         let capturedPillMode = pillMode
@@ -1070,8 +1075,8 @@ final class AppState: ObservableObject {
         // Determine pipeline source based on current mode
         let source: PipelineSource
         switch capturedPillMode {
-        case .tasks:          source = .tasks
         case .transcription:  source = .transcription
+        case .meeting:        source = .ambient  // meeting mode uses full pipeline at session end
         default:              source = .ambient
         }
 
@@ -1100,9 +1105,9 @@ final class AppState: ObservableObject {
                 ambientReview = review
             }
 
-            // Transcription mode: show cleaning level chooser on canvas
+            // Transcription mode only: show cleaning level chooser on canvas.
+            // Paste raw immediately — will be upgraded after the user picks a level.
             if capturedPillMode == .transcription {
-                // Paste raw immediately — will be upgraded after cleaning
                 pasteService.paste(text: fullRawText)
                 showCleaningLevelChooser(rawText: fullRawText)
             }

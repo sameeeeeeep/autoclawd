@@ -31,7 +31,23 @@ final class FaceTracker: @unchecked Sendable {
         }
     }
 
+    // MARK: - Types (internal)
+
+    /// A face observation that has not yet been stable long enough to become a TrackedFace.
+    private struct PendingObservation {
+        var id: UUID
+        var box: CGRect
+        var firstSeen: Date
+        var lastSeen: Date
+        var featurePrint: VNFeaturePrintObservation?
+        var seed: UInt64
+        var label: String
+    }
+
     // MARK: - Configuration
+
+    /// A new face must be continuously visible for this long before becoming a TrackedFace.
+    var newFaceStabilityInterval: TimeInterval = 5.0
 
     /// Faces not seen for this long are removed from active tracking.
     var expirationInterval: TimeInterval = 2.0
@@ -61,8 +77,13 @@ final class FaceTracker: @unchecked Sendable {
 
     // MARK: - State
 
+    /// Lock protecting all mutable state — processFrame runs on the AVFoundation
+    /// camera thread, while trackedFaces / faceCount are read from the main thread.
+    private let lock = NSLock()
     private var faces: [TrackedFace] = []
     private var recentlyExpired: [TrackedFace] = []  // for re-identification
+    /// New faces that haven't yet passed the stability threshold.
+    private var pendingObservations: [PendingObservation] = []
     private var currentSpeakerTrackID: UUID?
     private var nextLabel = 1
     private var lastFeaturePrintTime: Date = .distantPast
@@ -71,9 +92,9 @@ final class FaceTracker: @unchecked Sendable {
     var isAudioActive: Bool = false
 
     /// Thread-safe snapshot of currently tracked faces.
-    var trackedFaces: [TrackedFace] { faces }
+    var trackedFaces: [TrackedFace] { lock.withLock { faces } }
 
-    var faceCount: Int { faces.count }
+    var faceCount: Int { lock.withLock { faces.count } }
 
     // MARK: - Process Frame
 
@@ -93,6 +114,9 @@ final class FaceTracker: @unchecked Sendable {
         let faceObservations = faceRequest.results ?? []
         let landmarkObservations = landmarkRequest.results ?? []
         let now = Date()
+
+        lock.lock()
+        defer { lock.unlock() }
 
         // Match observations to existing tracked faces via IoU
         var matchedExisting = Set<UUID>()
@@ -127,14 +151,13 @@ final class FaceTracker: @unchecked Sendable {
             }
         }
 
-        // Create new tracked faces for unmatched observations
+        // Handle unmatched observations — re-identify or queue in pending pool
         let oldCount = faces.count
         for (obsIndex, obs) in faceObservations.enumerated() where !matchedObservations.contains(obsIndex) {
-            // Try re-identification against recently expired faces
             let featurePrint = extractFeaturePrint(from: pixelBuffer, faceBox: obs.boundingBox)
 
             if let fp = featurePrint, let reIdMatch = findReIdMatch(featurePrint: fp) {
-                // Re-identified! Reuse identity from expired face
+                // Re-identified — bypass pending pool, restore identity immediately
                 var reusedFace = TrackedFace(
                     id: UUID(),
                     boundingBox: obs.boundingBox,
@@ -148,28 +171,33 @@ final class FaceTracker: @unchecked Sendable {
                     reusedFace.lastMouthOpenness = measureMouthOpenness(landmarkObservations[obsIndex])
                 }
                 faces.append(reusedFace)
-                // Remove from expired pool so we don't double-match
                 recentlyExpired.removeAll { $0.label == reIdMatch.label }
             } else {
-                // Brand new face
-                let label = "Person \(Character(UnicodeScalar(64 + nextLabel)!))"
-                nextLabel += 1
-                if nextLabel > 26 { nextLabel = 1 }
-
-                let seed = featurePrint.map { computeAvatarSeed(from: $0) } ?? UInt64.random(in: 0...UInt64.max)
-
-                var newFace = TrackedFace(
-                    id: UUID(),
-                    boundingBox: obs.boundingBox,
-                    lastSeenTime: now,
-                    label: label,
-                    featurePrint: featurePrint,
-                    avatarSeed: seed
-                )
-                if obsIndex < landmarkObservations.count {
-                    newFace.lastMouthOpenness = measureMouthOpenness(landmarkObservations[obsIndex])
+                // Brand new face — add/update in pending pool.
+                // Must persist for newFaceStabilityInterval before becoming a TrackedFace.
+                if let pendingIdx = pendingObservations.indices.first(where: {
+                    computeIoU(pendingObservations[$0].box, obs.boundingBox) > iouThreshold
+                }) {
+                    pendingObservations[pendingIdx].box = obs.boundingBox
+                    pendingObservations[pendingIdx].lastSeen = now
+                    if let fp = featurePrint {
+                        pendingObservations[pendingIdx].featurePrint = fp
+                    }
+                } else {
+                    let label = "Person \(Character(UnicodeScalar(64 + nextLabel)!))"
+                    nextLabel += 1
+                    if nextLabel > 26 { nextLabel = 1 }
+                    let seed = featurePrint.map { computeAvatarSeed(from: $0) } ?? UInt64.random(in: 0...UInt64.max)
+                    pendingObservations.append(PendingObservation(
+                        id: UUID(),
+                        box: obs.boundingBox,
+                        firstSeen: now,
+                        lastSeen: now,
+                        featurePrint: featurePrint,
+                        seed: seed,
+                        label: label
+                    ))
                 }
-                faces.append(newFace)
             }
         }
 
@@ -198,6 +226,30 @@ final class FaceTracker: @unchecked Sendable {
 
         // Expire old re-id candidates
         recentlyExpired.removeAll { now.timeIntervalSince($0.lastSeenTime) > reIdRetentionInterval }
+
+        // Promote stable pending observations → tracked faces (5s stability threshold)
+        pendingObservations = pendingObservations.compactMap { pending in
+            guard now.timeIntervalSince(pending.lastSeen) <= expirationInterval else {
+                return nil  // expired without becoming stable
+            }
+            guard now.timeIntervalSince(pending.firstSeen) >= newFaceStabilityInterval else {
+                return pending  // still building stability
+            }
+            // Stable enough — promote to tracked face
+            var newFace = TrackedFace(
+                id: UUID(),
+                boundingBox: pending.box,
+                lastSeenTime: pending.lastSeen,
+                label: pending.label,
+                featurePrint: pending.featurePrint,
+                avatarSeed: pending.seed
+            )
+            if let fp = pending.featurePrint, newFace.avatarSeed == 0 {
+                newFace.avatarSeed = computeAvatarSeed(from: fp)
+            }
+            faces.append(newFace)
+            return nil
+        }
 
         // Notify face count change
         if faces.count != oldCount {

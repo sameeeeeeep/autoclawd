@@ -2,39 +2,35 @@ import Foundation
 import SwiftUI
 
 enum PillMode: String, CaseIterable {
-    case ambientIntelligence = "ambientIntelligence"
+    case ambientIntelligence = "ambientIntelligence"  // Tasks mode: text → clean → extract → execute
     case transcription       = "transcription"
     case aiSearch            = "aiSearch"
-    case tasks               = "tasks"
-    case code                = "code"
+    case meeting             = "meeting"              // Meeting notes: accumulate → analyse at end
 
     var displayName: String {
         switch self {
-        case .ambientIntelligence: return "Ambient"
+        case .ambientIntelligence: return "Tasks"
         case .transcription:       return "Transcribe"
         case .aiSearch:            return "AI Search"
-        case .tasks:               return "Tasks"
-        case .code:                return "Code"
+        case .meeting:             return "Meeting"
         }
     }
 
     var icon: String {
         switch self {
-        case .ambientIntelligence: return "brain"
+        case .ambientIntelligence: return "checklist"
         case .transcription:       return "text.cursor"
         case .aiSearch:            return "magnifyingglass"
-        case .tasks:               return "checklist"
-        case .code:                return "chevron.left.forwardslash.chevron.right"
+        case .meeting:             return "person.2.wave.2"
         }
     }
 
     var shortLabel: String {
         switch self {
-        case .ambientIntelligence: return "[AMB]"
+        case .ambientIntelligence: return "[TSK]"
         case .transcription:       return "[TRS]"
         case .aiSearch:            return "[SRC]"
-        case .tasks:               return "[TSK]"
-        case .code:                return "[COD]"
+        case .meeting:             return "[MTG]"
         }
     }
 
@@ -43,8 +39,7 @@ enum PillMode: String, CaseIterable {
         case .ambientIntelligence: return .green
         case .transcription:       return .accentColor
         case .aiSearch:            return .accentColor
-        case .tasks:               return .orange
-        case .code:                return .blue
+        case .meeting:             return .purple
         }
     }
 

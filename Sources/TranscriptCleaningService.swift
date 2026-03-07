@@ -189,10 +189,11 @@ final class TranscriptCleaningService: @unchecked Sendable {
 
     private func cleanPolished(rawText: String) async -> String {
         let prompt = """
-            Rewrite this spoken transcript as a polished, well-structured document. \
-            Create coherent paragraphs with proper flow. Fix all grammar, remove all filler words, \
-            and improve clarity while preserving ALL meaning and key details. \
-            Output ONLY the polished text, nothing else.
+            Rewrite this spoken transcript for better readability. \
+            Fix grammar, remove filler words, and improve sentence flow where it helps clarity. \
+            Keep the same vocabulary and tone — do NOT make it formal or flowery. \
+            Preserve ALL meaning and details exactly. \
+            Output ONLY the rewritten text, nothing else.
 
             RAW TRANSCRIPT:
             \(rawText)
@@ -218,7 +219,9 @@ final class TranscriptCleaningService: @unchecked Sendable {
         // Load prompt template from skill (user-editable)
         let skill = skillStore.load(id: "transcript-cleaning")
         let template = skill?.promptTemplate ?? """
-            Clean this spoken transcript. Remove filler words (um, uh, like, you know, so, basically), fix grammar, merge broken sentences. Keep ALL meaning. Output ONLY the cleaned text.
+            Fix only grammar, spelling, and punctuation in this spoken transcript. \
+            Do NOT remove words, change vocabulary, reorder sentences, or alter meaning in any way. \
+            Output ONLY the corrected text, nothing else.
 
             RAW TRANSCRIPT:
             {{transcript}}

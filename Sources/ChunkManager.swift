@@ -14,8 +14,8 @@ enum ChunkManagerState: Equatable {
 
 // MARK: - ChunkManager
 
-/// Orchestrates the sentence-aware 10–30s always-on recording cycle.
-/// Flushes at natural silence boundaries (≥10s + 0.8s silence) or force-flushes at 30s.
+/// Orchestrates the sentence-aware 10–180s always-on recording cycle.
+/// Flushes at natural silence boundaries (≥10s + 0.8s silence) or force-flushes at 3 minutes.
 /// Recording of chunk N+1 starts immediately after chunk N stops — seamless.
 /// Processing (transcription + extraction) happens in a background Task.
 @MainActor
@@ -39,7 +39,7 @@ final class ChunkManager: ObservableObject {
     private let locationService = LocationService.shared
 
     private let minChunkSeconds: TimeInterval = 10
-    private let maxChunkSeconds: TimeInterval = 30
+    private let maxChunkSeconds: TimeInterval = 180  // 3 minutes
     private let silenceGapSeconds: TimeInterval = 0.8
     private var transcriptBuffer: [String] = []
 
@@ -52,13 +52,7 @@ final class ChunkManager: ObservableObject {
     private var forceFlushNext: Bool = false   // set by forceNewChunk()
     /// Updated by the streaming transcriber's onPartial callback.
     /// Used to detect session end (10s of silence since last word).
-    private var lastSpeechTime: Date? = nil
     private var transcriptionService: (any Transcribable)?
-    // Streaming transcription for local mode — receives live PCM buffers and
-    // delivers word-by-word partials without waiting for a 30s audio file.
-    private var streamingTranscriber: StreamingLocalTranscriber?
-    // Shazam handler held separately so we can fan out to both Shazam + streaming.
-    private var shazamBufferHandler: ((AVAudioPCMBuffer) -> Void)?
     // System audio capture (ScreenCaptureKit)
     let systemAudioCapturer = SystemAudioCapturer()
     let systemAudioMixer = SystemAudioMixer()
@@ -74,7 +68,7 @@ final class ChunkManager: ObservableObject {
 
     let chunkDuration: TimeInterval  // configurable for testing
 
-    init(chunkDuration: TimeInterval = 30) {
+    init(chunkDuration: TimeInterval = 180) {
         self.chunkDuration = chunkDuration
     }
 
@@ -98,15 +92,12 @@ final class ChunkManager: ObservableObject {
     }
 
     /// Forwards raw PCM buffers from the mic to an external handler (e.g. ShazamKitService).
-    /// Also fans out to StreamingLocalTranscriber when active.
     /// When system audio capture is active, mixes system audio into the buffer before forwarding.
     func setBufferHandler(_ handler: @escaping (AVAudioPCMBuffer) -> Void) {
-        shazamBufferHandler = handler
         audioRecorder.onBuffer = { [weak self] buffer in
             // Mix system audio into mic buffer if active
             self?.systemAudioMixer.mix(into: buffer)
             handler(buffer)
-            self?.streamingTranscriber?.appendBuffer(buffer)
         }
     }
 
@@ -144,7 +135,6 @@ final class ChunkManager: ObservableObject {
         Log.info(.system, "ChunkManager: startListening() called")
         sessionChunkSeq = 0
         previousChunkTrail = ""
-        startStreamingTranscriberIfNeeded()
         beginChunkCycle()
         // Begin a new session row (with optional user-defined config)
         let ssid = locationService.currentSSID
@@ -154,7 +144,6 @@ final class ChunkManager: ObservableObject {
     }
 
     func stopListening() {
-        stopStreamingTranscriber()
         chunkTimer?.cancel()
         chunkTimer = nil
         audioRecorder.shutdown()   // fully release CoreAudio tap
@@ -193,7 +182,6 @@ final class ChunkManager: ObservableObject {
     func pause() {
         guard case .listening(let index) = state else { return }
         // Pause does NOT end the session — session stays open until user stops.
-        stopStreamingTranscriber()
         let silenceRatio = audioRecorder.silenceRatio
         let duration = Int(Date().timeIntervalSince(chunkStartTime ?? Date()))
         let savedURL = audioRecorder.stopRecording()   // get URL + mark _recording=false
@@ -251,7 +239,6 @@ final class ChunkManager: ObservableObject {
         guard case .paused = state else { return }
         Log.info(.system, "ChunkManager: resuming (session \(currentSessionID ?? "none") continues)")
         // Session stays open across pause/resume — no new session created.
-        startStreamingTranscriberIfNeeded()
         beginChunkCycle()
     }
 
@@ -260,63 +247,6 @@ final class ChunkManager: ObservableObject {
     private func latestTranscriptSnippet() -> String {
         let combined = transcriptBuffer.suffix(3).joined(separator: " ")
         return String(combined.prefix(120))
-    }
-
-    // MARK: - Streaming Transcriber Lifecycle
-
-    private func startStreamingTranscriberIfNeeded() {
-        // Always start the streaming transcriber for live word-by-word preview,
-        // regardless of transcription mode (Groq or local).
-        // In Groq mode the SFSpeech result is discarded at commit time — Groq transcribes
-        // the audio file for accuracy. In local mode SFSpeech provides both preview and text.
-        let streamer = StreamingLocalTranscriber()
-        streamer.onPartial = { [weak self] partial in
-            guard let self else { return }
-            // Live word-by-word update — visible in the transcript widget immediately.
-            self.appState?.latestTranscriptChunk = partial
-            // Track last-word time for session-end detection (10s silence = new session).
-            if !partial.isEmpty {
-                self.lastSpeechTime = Date()
-            }
-        }
-        do {
-            try streamer.start()
-            streamingTranscriber = streamer
-            // Re-wire the buffer handler so the new streamer receives buffers.
-            if let shazam = shazamBufferHandler {
-                audioRecorder.onBuffer = { [weak self] buf in
-                    self?.systemAudioMixer.mix(into: buf)
-                    shazam(buf)
-                    self?.streamingTranscriber?.appendBuffer(buf)
-                }
-            } else {
-                audioRecorder.onBuffer = { [weak self] buf in
-                    self?.systemAudioMixer.mix(into: buf)
-                    self?.streamingTranscriber?.appendBuffer(buf)
-                }
-            }
-            Log.info(.audio, "ChunkManager: streaming transcriber started")
-        } catch {
-            Log.warn(.audio, "ChunkManager: streaming transcriber failed to start — \(error.localizedDescription); falling back to file-based")
-            streamingTranscriber = nil
-        }
-    }
-
-    private func stopStreamingTranscriber() {
-        streamingTranscriber?.stop()
-        streamingTranscriber = nil
-        lastSpeechTime = nil   // reset so next session starts clean
-        // Restore plain Shazam-only handler (still with system audio mixing).
-        if let shazam = shazamBufferHandler {
-            audioRecorder.onBuffer = { [weak self] buf in
-                self?.systemAudioMixer.mix(into: buf)
-                shazam(buf)
-            }
-        } else {
-            audioRecorder.onBuffer = { [weak self] buf in
-                self?.systemAudioMixer.mix(into: buf)
-            }
-        }
     }
 
     // MARK: - Chunk Cycle
@@ -387,47 +317,14 @@ final class ChunkManager: ObservableObject {
         let duration = Int(elapsed)
         guard let savedURL = audioRecorder.stopRecording() else { return }
 
-        // Commit the streaming transcriber at every chunk boundary to:
-        //   1. Reset the SFSpeech request for the next chunk (prevents text carry-over).
-        //   2. Clear the live partial preview in the UI (chunk boundary is a natural break).
-        //   3. Obtain the SFSpeech text — used directly in local mode, discarded in Groq mode.
-        //
-        // Hybrid model: the streaming transcriber always runs for live word-by-word preview.
-        // In Groq mode the audio file is sent to Groq Whisper for the committed transcript,
-        // giving accurate final text without the text-disappearing behaviour of SFSpeech finals.
-        let streamedTranscript: String?
-        if let streamer = streamingTranscriber {
-            let t = await streamer.commitAndReset()
-            // Always clear the live streaming preview — the chunk committed, preview resets.
-            appState?.latestTranscriptChunk = ""
-
-            if SettingsManager.shared.transcriptionMode == .local {
-                // Local mode: SFSpeech result IS the committed transcript.
-                streamedTranscript = t.isEmpty ? nil : t
-                if streamedTranscript == nil {
-                    Log.info(.audio, "Chunk \(index): empty streaming transcript, skipping")
-                    return
-                }
-                if let committed = streamedTranscript {
-                    appState?.appendChunkToSession(committed)
-                }
-            } else {
-                // Groq mode: discard SFSpeech result — Groq transcribes the audio file.
-                // Silence detection falls through to the silence-ratio check below.
-                streamedTranscript = nil
-            }
-        } else {
-            streamedTranscript = nil
-        }
-
         let fileSizeMB = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))
             .flatMap { $0.fileSize }
             .map { Double($0) / 1_048_576 } ?? 0
 
         Log.info(.audio, "Chunk \(index) recorded: \(duration)s, \(String(format: "%.1f", fileSizeMB))MB")
 
-        // Skip near-silence chunks (file-based mode only; streaming already filtered empties above)
-        if streamedTranscript == nil && (silenceRatio > 0.90 || duration < 2) {
+        // Skip near-silence chunks
+        if silenceRatio > 0.90 || duration < 2 {
             Log.info(.audio, "Chunk \(index) skipped: \(Int(silenceRatio * 100))% silence / \(duration)s")
             return
         }
@@ -446,7 +343,6 @@ final class ChunkManager: ObservableObject {
         let capturedPasteService = pasteService
         let capturedQAService = qaService
         let capturedQAStore = qaStore
-        let capturedStreamedTranscript = streamedTranscript
 
         Task.detached { [weak self] in
             await self?.processChunk(
@@ -455,7 +351,6 @@ final class ChunkManager: ObservableObject {
                 previousChunkTrail: capturedTrail,
                 audioURL: savedURL,
                 duration: max(duration, 1),
-                streamedTranscript: capturedStreamedTranscript,
                 transcriptionService: capturedTranscriptionService,
                 extractionService: capturedExtractionService,
                 pipelineOrchestrator: capturedPipelineOrchestrator,
@@ -480,7 +375,6 @@ final class ChunkManager: ObservableObject {
         previousChunkTrail: String,
         audioURL: URL,
         duration: Int,
-        streamedTranscript: String? = nil,   // non-nil in local streaming mode
         transcriptionService: (any Transcribable)?,
         extractionService: ExtractionService?,
         pipelineOrchestrator: PipelineOrchestrator?,
@@ -492,39 +386,29 @@ final class ChunkManager: ObservableObject {
     ) async {
         let label = sessionLabel(for: sessionChunkSeq)
 
+        // File-based transcription — works for both Groq (Whisper) and local (SFSpeechRecognizer) modes.
+        guard let transcriptionService else {
+            Log.warn(.transcribe, "No transcription service configured")
+            return
+        }
+        Log.info(.transcribe, "Chunk \(index) [sess:\(label)]: starting transcription [\(transcriptionService.modelName)]")
+        let hint = previousChunkTrail.isEmpty ? nil : String(previousChunkTrail.suffix(200))
         let transcript: String
-
-        if let precomputed = streamedTranscript {
-            // Local streaming mode: transcript was already accumulated live, word-by-word.
-            // No file transcription needed — just use what SFSpeech delivered.
-            let wordCount = precomputed.split(separator: " ").count
-            let preview = String(precomputed.prefix(60))
-            Log.info(.transcribe, "Chunk \(index) [sess:\(label)] [streaming]: \(wordCount) words — '\(preview)'")
-            transcript = precomputed
-        } else {
-            // Groq / file-based mode.
-            guard let transcriptionService else {
-                Log.warn(.transcribe, "No transcription service configured")
-                return
+        do {
+            let t0 = Date()
+            transcript = try await transcriptionService.transcribe(fileURL: audioURL, contextHint: hint)
+            let elapsed = Date().timeIntervalSince(t0)
+            let wordCount = transcript.split(separator: " ").count
+            let preview = String(transcript.prefix(60))
+            Log.info(.transcribe, "Chunk \(index) [sess:\(label)] [\(transcriptionService.modelName)]: \(String(format: "%.1f", elapsed))s, \(wordCount) words — '\(preview)'")
+        } catch {
+            let msg = error.localizedDescription
+            if msg.localizedCaseInsensitiveContains("no speech") {
+                Log.info(.transcribe, "Chunk \(index) [sess:\(label)]: no speech detected, skipping")
+            } else {
+                Log.error(.transcribe, "Chunk \(index) [sess:\(label)] [\(transcriptionService.modelName)] failed: \(msg)")
             }
-            Log.info(.transcribe, "Chunk \(index) [sess:\(label)]: starting transcription [\(transcriptionService.modelName)]")
-            do {
-                let t0 = Date()
-                let hint = previousChunkTrail.isEmpty ? nil : String(previousChunkTrail.suffix(200))
-                transcript = try await transcriptionService.transcribe(fileURL: audioURL, contextHint: hint)
-                let elapsed = Date().timeIntervalSince(t0)
-                let wordCount = transcript.split(separator: " ").count
-                let preview = String(transcript.prefix(60))
-                Log.info(.transcribe, "Chunk \(index) [sess:\(label)] [\(transcriptionService.modelName)]: \(String(format: "%.1f", elapsed))s, \(wordCount) words — '\(preview)'")
-            } catch {
-                let msg = error.localizedDescription
-                if msg.localizedCaseInsensitiveContains("no speech") {
-                    Log.info(.transcribe, "Chunk \(index) [sess:\(label)]: no speech detected, skipping")
-                } else {
-                    Log.error(.transcribe, "Chunk \(index) [sess:\(label)] [\(transcriptionService.modelName)] failed: \(msg)")
-                }
-                return
-            }
+            return
         }
 
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -573,17 +457,11 @@ final class ChunkManager: ObservableObject {
         }
 
         switch pillMode {
-        case .ambientIntelligence, .transcription, .tasks:
-            // Session model: per-chunk text is already accumulated in liveTranscriptText
-            // via appendChunkToSession() above. No per-chunk pipeline processing.
+        case .ambientIntelligence, .transcription, .meeting:
+            // Session model: file transcription IS the raw text — append to canvas immediately.
             // Full pipeline runs at session-end via processSessionEnd().
-            //
-            // For file-based (Groq) mode: also append to liveTranscriptText since there's
-            // no streaming partial — the file transcription IS the raw text.
-            if streamedTranscript == nil {
-                await MainActor.run {
-                    self.appState?.appendChunkToSession(transcript)
-                }
+            await MainActor.run {
+                self.appState?.appendChunkToSession(transcript)
             }
             Log.info(.pipeline, "Chunk \(index) [sess:\(label)]: raw text accumulated (pipeline deferred to session end)")
 
@@ -606,11 +484,6 @@ final class ChunkManager: ObservableObject {
                 }
             } catch {
                 Log.error(.qa, "QA failed: \(error.localizedDescription)")
-            }
-
-        case .code:
-            await MainActor.run {
-                self.appState?.feedVoiceToCodeSession(transcript)
             }
         }
 
