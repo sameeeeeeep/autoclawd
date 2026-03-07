@@ -64,8 +64,20 @@ final class FaceTracker: @unchecked Sendable {
     /// Mouth movement threshold to consider a face "speaking".
     var mouthMovementThreshold: CGFloat = 0.015
 
-    /// How often to update feature prints (not every frame — expensive).
+    /// How often to extract/refresh in-memory feature prints for active faces.
     var featurePrintUpdateInterval: TimeInterval = 2.0
+
+    /// How often to re-save enrolled face embeddings to disk (named faces only).
+    var enrollmentRefreshInterval: TimeInterval = 30.0
+
+    // MARK: - Persistent Recognition
+
+    /// Injected by AppState after init. Used to persist and load face embeddings.
+    var embeddingStore: FaceEmbeddingStore?
+
+    /// In-memory cache of stored embeddings loaded at app start.
+    /// Checked in findReIdMatch() so cross-session recognition needs zero disk access per frame.
+    private var storedEmbeddings: [FaceEmbeddingStore.StoredEmbedding] = []
 
     // MARK: - Callbacks
 
@@ -87,6 +99,7 @@ final class FaceTracker: @unchecked Sendable {
     private var currentSpeakerTrackID: UUID?
     private var nextLabel = 1
     private var lastFeaturePrintTime: Date = .distantPast
+    private var lastEnrollmentTime: Date = .distantPast
 
     /// Whether external audio is currently non-silent (set by AppState).
     var isAudioActive: Bool = false
@@ -95,6 +108,15 @@ final class FaceTracker: @unchecked Sendable {
     var trackedFaces: [TrackedFace] { lock.withLock { faces } }
 
     var faceCount: Int { lock.withLock { faces.count } }
+
+    // MARK: - Persistent Recognition
+
+    /// Load stored embeddings from disk into memory. Call once after injecting embeddingStore.
+    func loadStoredEmbeddings() {
+        guard let store = embeddingStore else { return }
+        let loaded = store.loadAll()
+        lock.withLock { storedEmbeddings = loaded }
+    }
 
     // MARK: - Process Frame
 
@@ -214,6 +236,29 @@ final class FaceTracker: @unchecked Sendable {
             }
         }
 
+        // Periodically re-save enrolled (named) faces to disk to improve embedding quality
+        if now.timeIntervalSince(lastEnrollmentTime) >= enrollmentRefreshInterval,
+           let store = embeddingStore {
+            lastEnrollmentTime = now
+            for face in faces where face.assignedPersonID != nil {
+                if let fp = face.featurePrint, let personID = face.assignedPersonID {
+                    store.save(personID: personID, personName: face.label, featurePrint: fp)
+                    // Update in-memory cache
+                    if let idx = storedEmbeddings.firstIndex(where: { $0.personID == personID }) {
+                        storedEmbeddings[idx] = FaceEmbeddingStore.StoredEmbedding(
+                            personID: personID, personName: face.label,
+                            featurePrint: fp, sampleCount: storedEmbeddings[idx].sampleCount + 1
+                        )
+                    } else {
+                        storedEmbeddings.append(FaceEmbeddingStore.StoredEmbedding(
+                            personID: personID, personName: face.label,
+                            featurePrint: fp, sampleCount: 1
+                        ))
+                    }
+                }
+            }
+        }
+
         // Move expired faces to re-id pool before removing
         let expiring = faces.filter { now.timeIntervalSince($0.lastSeenTime) > expirationInterval }
         for face in expiring where face.featurePrint != nil {
@@ -289,22 +334,41 @@ final class FaceTracker: @unchecked Sendable {
         return request.results?.first
     }
 
-    /// Find a matching expired face by feature print similarity.
+    /// Find a matching face by feature print similarity.
+    /// Checks in-session recently-expired pool first (fast path), then cross-session stored embeddings.
+    /// Returns a TrackedFace template to restore identity from.
     private func findReIdMatch(featurePrint: VNFeaturePrintObservation) -> TrackedFace? {
         var bestMatch: TrackedFace?
         var bestDistance: Float = featurePrintDistanceThreshold
 
+        // 1. In-session re-identification (recently left frame)
         for expired in recentlyExpired {
             guard let expiredPrint = expired.featurePrint else { continue }
             var distance: Float = 0
-            do {
-                try featurePrint.computeDistance(&distance, to: expiredPrint)
-            } catch {
-                continue
-            }
+            do { try featurePrint.computeDistance(&distance, to: expiredPrint) } catch { continue }
             if distance < bestDistance {
                 bestDistance = distance
                 bestMatch = expired
+            }
+        }
+        if bestMatch != nil { return bestMatch }
+
+        // 2. Cross-session recognition (stored embeddings from previous sessions)
+        for stored in storedEmbeddings {
+            var distance: Float = 0
+            do { try featurePrint.computeDistance(&distance, to: stored.featurePrint) } catch { continue }
+            if distance < bestDistance {
+                bestDistance = distance
+                // Synthesise a TrackedFace shell carrying the stored person identity
+                bestMatch = TrackedFace(
+                    id: UUID(),
+                    boundingBox: .zero,
+                    lastSeenTime: Date(),
+                    assignedPersonID: stored.personID,
+                    label: stored.personName,
+                    featurePrint: featurePrint,
+                    avatarSeed: computeAvatarSeed(from: featurePrint)
+                )
             }
         }
         return bestMatch
@@ -353,10 +417,25 @@ final class FaceTracker: @unchecked Sendable {
     // MARK: - Person Assignment
 
     func assignPerson(trackID: UUID, personID: UUID, personName: String? = nil) {
-        if let idx = faces.firstIndex(where: { $0.id == trackID }) {
+        lock.withLock {
+            guard let idx = faces.firstIndex(where: { $0.id == trackID }) else { return }
             faces[idx].assignedPersonID = personID
-            if let name = personName {
-                faces[idx].label = name
+            if let name = personName { faces[idx].label = name }
+
+            // Immediately enroll — persist embedding so the person is recognised next session
+            if let fp = faces[idx].featurePrint, let store = embeddingStore {
+                let name = faces[idx].label
+                store.save(personID: personID, personName: name, featurePrint: fp)
+                // Update in-memory cache
+                let entry = FaceEmbeddingStore.StoredEmbedding(
+                    personID: personID, personName: name, featurePrint: fp, sampleCount: 1
+                )
+                if let ei = storedEmbeddings.firstIndex(where: { $0.personID == personID }) {
+                    storedEmbeddings[ei] = entry
+                } else {
+                    storedEmbeddings.append(entry)
+                }
+                Log.info(.camera, "FaceTracker: enrolled \(name) → persisted embedding")
             }
         }
     }
