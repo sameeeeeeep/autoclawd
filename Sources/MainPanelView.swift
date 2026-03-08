@@ -61,10 +61,18 @@ struct MainPanelView: View {
     @ViewBuilder
     private var content: some View {
         ZStack {
+            // PixelWorldView is always alive to preserve WKWebView state,
+            // but hidden during Call Mode (replaced by zoom-call view).
             PixelWorldView(appState: appState)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .opacity(selectedTab == .world ? 1 : 0)
-            .allowsHitTesting(selectedTab == .world)
+                .opacity(selectedTab == .world && appState.pillMode != .callMode ? 1 : 0)
+                .allowsHitTesting(selectedTab == .world && appState.pillMode != .callMode)
+
+            // Zoom-call layout: replaces HQ view when Call Mode is active.
+            CallModeZoomView(appState: appState)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selectedTab == .world && appState.pillMode == .callMode ? 1 : 0)
+                .allowsHitTesting(selectedTab == .world && appState.pillMode == .callMode)
 
             ProjectsListView(appState: appState)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -84,6 +92,207 @@ struct MainPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+}
+
+// MARK: - CallModeZoomView
+
+/// 3-panel "zoom call" layout shown in the panel's World tab when Call Mode is active.
+/// Top: scrollable Claude message thread. Bottom: camera (left) + screen preview (right).
+struct CallModeZoomView: View {
+    @ObservedObject var appState: AppState
+
+    var body: some View {
+        VStack(spacing: 1) {
+            // Top: Claude messages thread
+            messagesPanel
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Bottom: camera + screen side by side
+            HStack(spacing: 1) {
+                cameraPanel
+                screenPanel
+            }
+            .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 220)
+        }
+        .background(Color.black)
+    }
+
+    // MARK: - Messages Panel
+
+    private var messagesPanel: some View {
+        ZStack(alignment: .topLeading) {
+            Color(nsColor: .windowBackgroundColor).opacity(0.05)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(appState.callModeSession.messages) { msg in
+                            CallZoomMessageRow(message: msg)
+                                .id(msg.id)
+                        }
+                    }
+                    .padding(16)
+                }
+                .onChange(of: appState.callModeSession.messages.count) { _ in
+                    if let last = appState.callModeSession.messages.last {
+                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+            }
+
+            // Processing indicator
+            if appState.callModeSession.isProcessing {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini).tint(.cyan)
+                        Text("Claude thinking…")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.cyan.opacity(0.7))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                }
+            }
+
+            // Empty state
+            if appState.callModeSession.messages.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "phone.bubble")
+                        .font(.system(size: 32))
+                        .foregroundColor(.cyan.opacity(0.25))
+                    Text("CALL MODE ACTIVE")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.cyan.opacity(0.3))
+                    Text("Speak to start the call")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.2))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    // MARK: - Camera Panel
+
+    private var cameraPanel: some View {
+        ZStack {
+            Color.black
+            if appState.cameraEnabled && appState.cameraService.isRunning {
+                CameraPreviewView(session: appState.cameraService.captureSession)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VStack(spacing: 4) {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.white.opacity(0.15))
+                    Text("Camera Off")
+                        .font(.system(size: 8, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.2))
+                }
+            }
+            VStack {
+                Spacer()
+                HStack {
+                    feedBadge(label: "LIVE", color: .red)
+                    Spacer()
+                }
+                .padding(8)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 0))
+    }
+
+    // MARK: - Screen Panel
+
+    private var screenPanel: some View {
+        ZStack {
+            Color.black
+            if let img = appState.screenPreviewImage {
+                Image(decorative: img, scale: 1.0)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VStack(spacing: 4) {
+                    Image(systemName: "rectangle.on.rectangle")
+                        .font(.system(size: 18))
+                        .foregroundColor(.white.opacity(0.15))
+                    Text("No Screen")
+                        .font(.system(size: 8, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.2))
+                }
+            }
+            VStack {
+                Spacer()
+                HStack {
+                    feedBadge(label: "SCREEN", color: .cyan)
+                    Spacer()
+                }
+                .padding(8)
+            }
+        }
+    }
+
+    // MARK: - Badge
+
+    private func feedBadge(label: String, color: Color) -> some View {
+        HStack(spacing: 3) {
+            Circle().fill(color).frame(width: 5, height: 5)
+            Text(label)
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.8))
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(Color.black.opacity(0.6)))
+    }
+}
+
+// MARK: - CallZoomMessageRow
+
+private struct CallZoomMessageRow: View {
+    let message: CallMessage
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Circle()
+                .fill(roleColor)
+                .frame(width: 7, height: 7)
+                .padding(.top, 4)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(roleLabel)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundColor(roleColor.opacity(0.6))
+                Text(message.text)
+                    .font(.system(size: 12,
+                                  design: message.role == .tool ? .monospaced : .default))
+                    .foregroundColor(.primary.opacity(message.role == .user ? 1.0 : 0.85))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var roleColor: Color {
+        switch message.role {
+        case .user:      return .white
+        case .assistant: return .cyan
+        case .tool:      return .yellow
+        case .error:     return .red
+        case .external:  return .green
+        }
+    }
+
+    private var roleLabel: String {
+        switch message.role {
+        case .user:      return "YOU"
+        case .assistant: return "CLAUDE"
+        case .tool:      return "TOOL"
+        case .error:     return "ERR"
+        case .external:  return "CC"
+        }
+    }
 }
 
 // MARK: - ExecutionOutputView

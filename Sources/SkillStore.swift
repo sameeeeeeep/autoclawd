@@ -280,5 +280,64 @@ final class SkillStore: @unchecked Sendable {
             category: .marketing,
             isBuiltin: true
         ),
+        // Skill for Claude Code / CLI to know how to start and use Call Mode
+        Skill(
+            id: "call-mode-init",
+            name: "Start Call Mode",
+            description: "Tells Claude Code or Claude CLI how to switch AutoClawd into Call Mode and use the AutoClawd MCP tools for real-time screen and audio access during a call.",
+            promptTemplate: """
+            To start Call Mode in AutoClawd:
+
+            1. Make sure AutoClawd is running (look for the floating pill widget on your screen).
+            2. Click the mode icon on the pill widget and cycle to "Call" (cyan phone icon), OR say "call mode" aloud — the widget will switch automatically.
+            3. Once in Call Mode, your voice is forwarded directly to Claude without Llama analysis.
+
+            As Claude Code / Claude CLI, you have access to these AutoClawd MCP tools via the autoclawd MCP server:
+            - autoclawd_get_screen — full screen or region: Vision OCR text + JPEG screenshot
+            - autoclawd_get_cursor_context — 600×400 crop around cursor; use when user points at something
+            - autoclawd_get_selection — currently highlighted text + selection screenshot
+            - autoclawd_get_audio_transcript — recent spoken audio transcript (last 2000 chars)
+
+            USAGE PATTERN:
+            - Call autoclawd_get_screen immediately to see what the user is looking at.
+            - Call autoclawd_get_cursor_context when user says "this", "here", or "that thing".
+            - Call autoclawd_get_selection when user highlights text before speaking.
+            - Keep responses short and conversational — this is a live call.
+
+            To end Call Mode: cycle the widget back to any other mode.
+
+            {{prompt}}
+            """,
+            workflowID: nil,
+            category: .development,
+            isBuiltin: true
+        ),
+        // Call Mode skill for the AutoClawd widget itself
+        Skill(
+            id: "call-mode",
+            name: "Call Mode",
+            description: "Activates when joining a video or voice call. Claude gets real-time access to your screen, cursor position, and selected text via AutoClawd MCP tools — acting like a meeting co-pilot that can see exactly what you see.",
+            promptTemplate: """
+            You are now in Call Mode via AutoClawd. You have real-time sensory access to the user's environment through these MCP tools:
+
+            AVAILABLE TOOLS:
+            - autoclawd_get_screen: Capture the full screen (or a pixel region) with Vision OCR text + JPEG screenshot. Call this first to orient yourself whenever the topic changes.
+            - autoclawd_get_cursor_context: Capture a 600×400 screenshot centred on the cursor with OCR. Use when the user says "this", "here", "that thing", or points at something without naming it.
+            - autoclawd_get_selection: Get the user's currently highlighted/selected text and a screenshot of that region. Use whenever the user selects code, an error, a file path, or any text before speaking.
+            - autoclawd_get_audio_transcript: Get the recent spoken transcript from the user's microphone. Use to review what was just said without the user repeating themselves.
+
+            CALL MODE BEHAVIOUR:
+            - Call get_screen at the start of each new topic to understand context.
+            - Prefer get_cursor_context when spatial references are used ("this panel", "that button").
+            - Prefer get_selection when the user has highlighted something — always check before answering questions about specific text.
+            - Keep responses concise and spoken-word friendly — this is a real-time call.
+            - Proactively mention what you can see to confirm your understanding.
+
+            {{prompt}}
+            """,
+            workflowID: nil,
+            category: .development,
+            isBuiltin: true
+        ),
     ]
 }

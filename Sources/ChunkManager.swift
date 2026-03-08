@@ -465,6 +465,15 @@ final class ChunkManager: ObservableObject {
             }
             Log.info(.pipeline, "Chunk \(index) [sess:\(label)]: raw text accumulated (pipeline deferred to session end)")
 
+        case .callMode:
+            // Bypass all Llama stages — send directly to Claude via CallModeSession.
+            let chunk = transcript
+            await MainActor.run {
+                guard let appState = self.appState else { return }
+                Task { await appState.callModeSession.send(text: chunk) }
+            }
+            Log.info(.pipeline, "Chunk \(index) [call]: forwarded to CallModeSession")
+
         case .aiSearch:
             guard let qaService, let qaStore else { break }
             do {

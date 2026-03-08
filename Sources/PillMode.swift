@@ -6,6 +6,7 @@ enum PillMode: String, CaseIterable {
     case transcription       = "transcription"
     case aiSearch            = "aiSearch"
     case meeting             = "meeting"              // Meeting notes: accumulate → analyse at end
+    case callMode            = "callMode"             // Direct Claude via Anthropic API; Llama bypassed
 
     var displayName: String {
         switch self {
@@ -13,6 +14,7 @@ enum PillMode: String, CaseIterable {
         case .transcription:       return "Transcribe"
         case .aiSearch:            return "AI Search"
         case .meeting:             return "Meeting"
+        case .callMode:            return "Call"
         }
     }
 
@@ -22,6 +24,7 @@ enum PillMode: String, CaseIterable {
         case .transcription:       return "text.cursor"
         case .aiSearch:            return "magnifyingglass"
         case .meeting:             return "person.2.wave.2"
+        case .callMode:            return "phone.bubble"
         }
     }
 
@@ -31,6 +34,7 @@ enum PillMode: String, CaseIterable {
         case .transcription:       return "[TRS]"
         case .aiSearch:            return "[SRC]"
         case .meeting:             return "[MTG]"
+        case .callMode:            return "[CLL]"
         }
     }
 
@@ -40,6 +44,7 @@ enum PillMode: String, CaseIterable {
         case .transcription:       return .accentColor
         case .aiSearch:            return .accentColor
         case .meeting:             return .purple
+        case .callMode:            return .cyan
         }
     }
 

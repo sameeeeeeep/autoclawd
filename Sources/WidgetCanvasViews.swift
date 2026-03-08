@@ -428,6 +428,121 @@ struct MeetingCanvasView: View {
     }
 }
 
+// MARK: - Call Mode Canvas
+
+/// Canvas for Call Mode — shows the real-time Claude conversation thread.
+/// Voice chunks are sent directly to Claude; Claude calls screen/cursor/selection tools inline.
+struct CallModeCanvasView: View {
+    @ObservedObject var session: CallModeSession
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack(spacing: 6) {
+                Image(systemName: "phone.bubble")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.cyan)
+                Text("CALL MODE")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.45))
+                Spacer()
+                if session.isProcessing {
+                    HStack(spacing: 3) {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 10, height: 10)
+                        Text("thinking")
+                            .font(.system(size: 7))
+                            .foregroundColor(.cyan.opacity(0.60))
+                    }
+                } else {
+                    Text("direct · claude")
+                        .font(.system(size: 7))
+                        .foregroundColor(.white.opacity(0.20))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            Divider().opacity(0.12)
+
+            // Message thread
+            if session.messages.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 20, weight: .ultraLight))
+                        .foregroundColor(.cyan.opacity(0.18))
+                    Text("Speak to start the call")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.22))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(alignment: .leading, spacing: 6) {
+                            ForEach(session.messages) { msg in
+                                CallMessageBubble(message: msg)
+                                    .id(msg.id)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                    }
+                    .onChange(of: session.messages.count) { _ in
+                        if let last = session.messages.last {
+                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Single message bubble in the call mode thread.
+private struct CallMessageBubble: View {
+    let message: CallMessage
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 5) {
+            // Role indicator dot
+            Circle()
+                .fill(roleColor)
+                .frame(width: 5, height: 5)
+                .padding(.top, 4)
+
+            Text(message.text)
+                .font(.system(size: 10, design: message.role == .tool ? .monospaced : .default))
+                .foregroundColor(textColor)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var roleColor: Color {
+        switch message.role {
+        case .user:      return .white.opacity(0.45)
+        case .assistant: return .cyan
+        case .tool:      return .yellow.opacity(0.60)
+        case .error:     return .red
+        case .external:  return .green
+        }
+    }
+
+    private var textColor: Color {
+        switch message.role {
+        case .user:      return .white.opacity(0.72)
+        case .assistant: return .white.opacity(0.88)
+        case .tool:      return .white.opacity(0.38)
+        case .error:     return .red.opacity(0.80)
+        case .external:  return .green.opacity(0.85)
+        }
+    }
+}
+
 // MARK: - Project Picker Canvas  (shared by Code + Tasks modes)
 
 /// Reusable tappable project list — used as the first canvas state in Code and Tasks modes.
