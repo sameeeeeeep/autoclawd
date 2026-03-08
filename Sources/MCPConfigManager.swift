@@ -33,6 +33,54 @@ enum MCPConfigManager {
         }
     }
 
+    // MARK: - Claude Code Hooks Config
+
+    /// Write (or merge) AutoClawd hook entries into ~/.claude/settings.json.
+    ///
+    /// Registers `PostToolUse` and `Stop` hooks that curl the AutoClawd hook
+    /// endpoint on every Claude Code tool event. This lets AutoClawd narrate
+    /// what Claude Code is doing in real time inside the call room feed.
+    ///
+    /// Safe to call repeatedly — only the `hooks` key is overwritten; all
+    /// other existing settings are preserved.
+    static func writeHooksConfig() {
+        let settingsURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude")
+            .appendingPathComponent("settings.json")
+
+        // Load existing settings or start fresh
+        var settings: [String: Any] = [:]
+        if let data = try? Data(contentsOf: settingsURL),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            settings = json
+        }
+
+        let hookCommand = "curl -s -X POST http://localhost:7892/hook -H 'Content-Type: application/json' -d @-"
+        let hookEntry: [String: Any] = ["type": "command", "command": hookCommand]
+        let hookGroup: [String: Any] = ["matcher": "", "hooks": [hookEntry]]
+
+        var hooks = settings["hooks"] as? [String: Any] ?? [:]
+        hooks["PostToolUse"] = [hookGroup]
+        hooks["Stop"]        = [hookGroup]
+        settings["hooks"]    = hooks
+
+        do {
+            try FileManager.default.createDirectory(
+                at: settingsURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            let data = try JSONSerialization.data(
+                withJSONObject: settings,
+                options: [.prettyPrinted, .sortedKeys]
+            )
+            try data.write(to: settingsURL, options: .atomic)
+            Log.info(.system, "MCPConfigManager: hooks written to \(settingsURL.path)")
+        } catch {
+            Log.warn(.system, "MCPConfigManager: failed to write hooks config — \(error)")
+        }
+    }
+
     private static func findMCPBinary() -> String? {
         // 1. Inside the app bundle (distribution)
         let bundleBinary = Bundle.main.bundleURL

@@ -51,6 +51,8 @@ final class MCPServer: @unchecked Sendable {
     private var onParticipantMessage: (@MainActor (String, String, String) -> Void)?
     /// Remove a participant from the call: (id).
     private var onRemoveParticipant: (@MainActor (String) -> Void)?
+    /// Fired on @MainActor when a Claude Code hook event arrives on POST /hook.
+    private var onHookEvent: (@MainActor (HookEvent) -> Void)?
 
     /// Last time any MCP request was received from a Claude Code session.
     private var lastActivityDate: Date?
@@ -69,7 +71,8 @@ final class MCPServer: @unchecked Sendable {
                onInviteParticipant: (@MainActor (String, String, String) -> Void)? = nil,
                onSetParticipantState: (@MainActor (String, String) -> Void)? = nil,
                onParticipantMessage: (@MainActor (String, String, String) -> Void)? = nil,
-               onRemoveParticipant: (@MainActor (String) -> Void)? = nil) {
+               onRemoveParticipant: (@MainActor (String) -> Void)? = nil,
+               onHookEvent: (@MainActor (HookEvent) -> Void)? = nil) {
         guard listener == nil else { return }
         self.screenGrab              = screenGrab
         self.transcriptProvider      = transcriptProvider
@@ -81,6 +84,7 @@ final class MCPServer: @unchecked Sendable {
         self.onSetParticipantState   = onSetParticipantState
         self.onParticipantMessage    = onParticipantMessage
         self.onRemoveParticipant     = onRemoveParticipant
+        self.onHookEvent             = onHookEvent
 
         do {
             let params = NWParameters.tcp
@@ -221,6 +225,18 @@ final class MCPServer: @unchecked Sendable {
         // CORS preflight
         if method == "OPTIONS" {
             sendHTTP(Data(), connection: connection)
+            return
+        }
+
+        // Claude Code hook events — fired by PostToolUse / Stop hooks
+        if path == "/hook" {
+            if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                let event = HookNarrationService.parse(json)
+                if let cb = onHookEvent {
+                    Task { @MainActor in cb(event) }
+                }
+            }
+            sendHTTP(Data("{}".utf8), connection: connection)
             return
         }
 
