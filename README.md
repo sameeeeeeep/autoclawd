@@ -10,7 +10,7 @@
   [![Local AI](https://img.shields.io/badge/AI-Runs%20Locally-5C6BC0?style=flat-square)](https://ollama.ai)
   [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
 
-  100 source files &nbsp;·&nbsp; ~27K lines of Swift &nbsp;·&nbsp; entirely self-built with Claude Code
+  110 source files &nbsp;·&nbsp; ~30K lines of Swift &nbsp;·&nbsp; entirely self-built with Claude Code
 
 </div>
 
@@ -38,9 +38,9 @@ And the recursive form of that idea: AutoClawd builds itself the same way. Every
 
 ---
 
-## Five Modes
+## Six Modes
 
-AutoClawd operates through five pill modes, switchable via keyboard shortcuts or left-hand gestures:
+AutoClawd operates through six pill modes, switchable via keyboard shortcuts or left-hand gestures:
 
 | Mode | Tag | What it does |
 |---|---|---|
@@ -49,6 +49,7 @@ AutoClawd operates through five pill modes, switchable via keyboard shortcuts or
 | **AI Search** | `[SRC]` | Voice-triggered Q&A against your accumulated context and world model |
 | **Tasks** | `[TSK]` | Todo management — view, approve, and manage extracted tasks |
 | **Code** | `[COD]` | Voice-driven Claude Code co-pilot — speak your intent, watch it build |
+| **Call** | `[CAL]` | Live AI collaboration room — see Claw'd work in real time via the Call Stream Widget |
 
 The session transcript persists across mode switches. Only 10 seconds of silence or an explicit end-session gesture resets it.
 
@@ -198,6 +199,50 @@ AutoClawd weaves ambient context from multiple sources into every pipeline run:
 
 ---
 
+## Call Mode — Live Collaboration Room
+
+Call Mode turns a Claude Code session into a live, story-driven group call that anyone can follow — even without a coding background.
+
+When you switch to Call Mode, a floating **Call Stream Widget** appears over your screen:
+
+```
+┌─ ● CALL STREAM ─────────────── 0:42  ✕ ─┐
+│  MISSION                                  │
+│ ▌ fix the auth bug in the login flow      │  ← your spoken goal
+├───────────────────────────────────────────┤
+│  YOU   │  CLAWD  │  PENCIL  │  FIGMA      │  ← participant tiles (no circles)
+├─ TASKS ──────────────── 2 pending ────────┤
+│ → Fix login redirect          ← active    │
+│   Add unit tests                          │
+├─ STREAM ──────────────────────────────────┤
+│  YOU ──────────────────────── 14:02       │
+│  can you look at that component?          │
+│  AUTOCLAWD ────────────────── 14:03       │
+│  Claw'd grabbed a screenshot of the UI   │
+│  PENCIL ───────────────────── 14:03       │
+│  [screenshot inline]                      │
+├─ ▌ SPOTLIGHT ─────────────── ✕ ──────────┤
+│  📄 LoginView.swift · swift source        │  ← auto-surfaces active file/image
+├───────────────────────────────────────────┤
+│  ▌▌▌▌▌▌▌     14 events    ■ END CALL     │
+└───────────────────────────────────────────┘
+```
+
+**Design language:** brutalist — no circles, no soft rounding. Thick colored top-border accents on participant tiles. Sharp rectangular geometry throughout.
+
+**What the feed shows:**
+- Every Claude Code tool use narrated as a plain-English sentence by local Llama ("Claw'd read LoginView.swift")
+- MCP tools (Pencil, Figma, GitHub, Linear, Notion, Google Sheets) auto-join as named participants
+- Images returned by tools appear inline in the stream and auto-open in the Spotlight panel
+- AutoClawd generates a reaction for interesting tool events ("Looks like a layout issue in that component")
+- Your live mic transcript appears in real time as `YOU` messages
+
+**Participant mascots:** drop `mascot-{id}.png` files into `Resources/` (e.g. `mascot-pencil.png`) for custom icons. Falls back to SF Symbols.
+
+**Hook integration:** every Claude Code PostToolUse / Stop hook fires through `HookNarrationService`, which parses the event, extracts any image data, asks Llama for a short narration, and posts a structured message to the feed.
+
+---
+
 ## Mission Control HQ
 
 A live pixel-art visualization of the pipeline, rendered as a WebKit canvas overlay.
@@ -276,7 +321,8 @@ AutoClawd.app (Swift / SwiftUI / AppKit)
 │     ├── PillWindow (NSPanel)          floating widget, always on top, snap-to-edge
 │     ├── MainPanelWindow               dashboard — pipeline, tasks, world model, settings
 │     ├── ToastWindow                   non-intrusive execution feedback
-│     └── SetupWindow                   first-run dependency wizard
+│     ├── SetupWindow                   first-run dependency wizard
+│     └── CallStreamWidget (NSPanel)    always-on-top call room overlay (420×560)
 │
 ├── Audio
 │     ├── AudioRecorder                 always-on AVAudioEngine (stays hot between chunks)
@@ -313,6 +359,13 @@ AutoClawd.app (Swift / SwiftUI / AppKit)
 ├── Skills
 │     ├── SkillStore                   built-in + custom skill persistence
 │     └── OpenClawSkillLoader          SKILL.md file discovery and parsing
+│
+├── Call Mode
+│     ├── CallRoom                     participant model — state machine, tile color, mascot
+│     ├── CallModeSession              Anthropic API conversation with screen/mic tools
+│     ├── CallStreamWidget             floating NSPanel overlay with animate in/out
+│     ├── CallStreamWidgetView         brutalist feed — mission bar, tiles, tasks, spotlight
+│     └── HookNarrationService         Claude Code hook → NarrationBundle via Llama
 │
 ├── Integrations
 │     ├── WhatsAppPoller/Service       Node.js sidecar, self-chat only
@@ -370,6 +423,7 @@ Everything lives in `~/.autoclawd/` — SQLite databases and markdown files, ful
 - [ ] Scheduled tasks and calendar integration
 - [ ] Multi-language transcription
 - [ ] Shared world model across devices
+- [x] **Call Mode** — live brutalist call room with storytelling feed, participant tiles, spotlight, hook narration
 - [x] Camera vision — face detection, speaker tagging, pixel-art avatars
 - [x] Hand gesture control — session lifecycle, mode switching, option selection
 - [x] User-defined sessions — gesture-driven with project + people context
