@@ -85,12 +85,12 @@ struct CallModeRoomView: View {
                             )
                             .id("transcript")
                         }
-                        // Messages from participants (Claude Code / external)
+                        // Messages from participants (Claude Code / external / plugin)
                         ForEach(appState.callModeSession.messages) { msg in
                             CallFeedMessageRow(
-                                participantName: feedLabel(for: msg.role),
-                                color: feedColor(for: msg.role),
-                                icon: feedIcon(for: msg.role),
+                                participantName: msg.participantName ?? feedLabel(for: msg.role),
+                                color: participantFeedColor(for: msg),
+                                icon: participantFeedIcon(for: msg),
                                 text: msg.text
                             )
                             .id(msg.id)
@@ -239,7 +239,7 @@ struct CallModeRoomView: View {
                     .foregroundColor(.white.opacity(0.3))
                 Image(systemName: active.mascotSystemImage)
                     .font(.system(size: 10))
-                    .foregroundColor(participantColor(active.kind))
+                    .foregroundColor(active.tileColor)
                 Text(active.displayName)
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.5))
@@ -257,40 +257,53 @@ struct CallModeRoomView: View {
 
     private func feedLabel(for role: CallMessage.Role) -> String {
         switch role {
-        case .user:      return "You"
-        case .assistant: return "AutoClawd"
-        case .tool:      return "Tool"
-        case .error:     return "Error"
-        case .external:  return "Claw'd"
+        case .user:        return "You"
+        case .assistant:   return "AutoClawd"
+        case .tool:        return "Tool"
+        case .error:       return "Error"
+        case .external:    return "Claw'd"
+        case .participant: return "Plugin"
         }
     }
 
     private func feedColor(for role: CallMessage.Role) -> Color {
         switch role {
-        case .user:      return .white
-        case .assistant: return .teal
-        case .tool:      return .yellow
-        case .error:     return .red
-        case .external:  return .orange
+        case .user:        return .white
+        case .assistant:   return .teal
+        case .tool:        return .yellow
+        case .error:       return .red
+        case .external:    return .orange
+        case .participant: return .purple
         }
     }
 
     private func feedIcon(for role: CallMessage.Role) -> String {
         switch role {
-        case .user:      return "mic.fill"
-        case .assistant: return "brain"
-        case .tool:      return "wrench.adjustable"
-        case .error:     return "exclamationmark.triangle"
-        case .external:  return "terminal"
+        case .user:        return "mic.fill"
+        case .assistant:   return "brain"
+        case .tool:        return "wrench.adjustable"
+        case .error:       return "exclamationmark.triangle"
+        case .external:    return "terminal"
+        case .participant: return "cable.connector"
         }
     }
 
-    private func participantColor(_ kind: ParticipantKind) -> Color {
-        switch kind {
-        case .llama:      return .teal
-        case .claudeCode: return .orange
-        case .connection: return .purple
+    /// Feed color for a message — uses the participant's tile color when available.
+    private func participantFeedColor(for msg: CallMessage) -> Color {
+        if msg.role == .participant, let pid = msg.participantID,
+           let p = appState.callRoom.participants.first(where: { $0.id == pid }) {
+            return p.tileColor
         }
+        return feedColor(for: msg.role)
+    }
+
+    /// Feed icon for a message — uses the participant's mascot icon when available.
+    private func participantFeedIcon(for msg: CallMessage) -> String {
+        if msg.role == .participant, let pid = msg.participantID,
+           let p = appState.callRoom.participants.first(where: { $0.id == pid }) {
+            return p.mascotSystemImage
+        }
+        return feedIcon(for: msg.role)
     }
 }
 
@@ -303,13 +316,7 @@ struct ParticipantTileView: View {
     let onPause:  () -> Void
     let onRemove: (() -> Void)?
 
-    private var tileColor: Color {
-        switch participant.kind {
-        case .llama:      return .teal
-        case .claudeCode: return .orange
-        case .connection: return .purple
-        }
-    }
+    private var tileColor: Color { participant.tileColor }
 
     var body: some View {
         VStack(spacing: 5) {
@@ -323,9 +330,10 @@ struct ParticipantTileView: View {
 
             // Mascot
             ParticipantMascotView(
-                kind:     participant.kind,
-                state:    participant.state,
-                isPaused: participant.isPaused
+                kind:      participant.kind,
+                state:     participant.state,
+                isPaused:  participant.isPaused,
+                tileColor: participant.tileColor
             )
             .frame(width: 54, height: 54)
 
@@ -422,28 +430,23 @@ struct ParticipantTileView: View {
 // MARK: - ParticipantMascotView
 
 struct ParticipantMascotView: View {
-    let kind:     ParticipantKind
-    let state:    ParticipantState
-    let isPaused: Bool
+    let kind:      ParticipantKind
+    let state:     ParticipantState
+    let isPaused:  Bool
+    let tileColor: Color
 
     @State private var breathe = false
     @State private var shimmer = false
 
     private var mascotIcon: String {
         switch kind {
-        case .llama:      return "brain"
-        case .claudeCode: return "hammer.fill"
-        case .connection(_, _): return "cable.connector"
+        case .llama:                           return "brain"
+        case .claudeCode:                      return "hammer.fill"
+        case .connection(_, _, let icon):      return icon
         }
     }
 
-    private var mascotColor: Color {
-        switch kind {
-        case .llama:      return .teal
-        case .claudeCode: return .orange
-        case .connection: return .purple
-        }
-    }
+    private var mascotColor: Color { tileColor }
 
     var body: some View {
         ZStack {

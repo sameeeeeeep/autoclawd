@@ -72,6 +72,12 @@ final class CallModeSession: ObservableObject {
         messages.append(CallMessage(role: .external, text: text))
     }
 
+    /// Append a message attributed to a named plugin participant (via autoclawd_send_participant_message).
+    func appendParticipantMessage(id: String, name: String, text: String) {
+        messages.append(CallMessage(role: .participant, text: text,
+                                    participantID: id, participantName: name))
+    }
+
     // MARK: - Agent Loop
 
     /// Tool-use loop: request → if tool_use → execute → continue → until end_turn.
@@ -294,11 +300,14 @@ final class CallModeSession: ObservableObject {
 // MARK: - Supporting Types
 
 struct CallMessage: Identifiable {
-    let id   = UUID()
-    let role: Role
-    let text: String
+    let id:              UUID   = UUID()
+    let role:            Role
+    let text:            String
+    /// Set when the message comes from a plugin participant (autoclawd_send_participant_message).
+    var participantID:   String? = nil
+    var participantName: String? = nil
 
-    enum Role { case user, assistant, tool, error, external }
+    enum Role { case user, assistant, tool, error, external, participant }
 }
 
 enum CallModeError: Error, LocalizedError {

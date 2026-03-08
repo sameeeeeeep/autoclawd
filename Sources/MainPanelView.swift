@@ -276,21 +276,23 @@ private struct CallZoomMessageRow: View {
 
     private var roleColor: Color {
         switch message.role {
-        case .user:      return .white
-        case .assistant: return .cyan
-        case .tool:      return .yellow
-        case .error:     return .red
-        case .external:  return .green
+        case .user:        return .white
+        case .assistant:   return .cyan
+        case .tool:        return .yellow
+        case .error:       return .red
+        case .external:    return .green
+        case .participant: return .purple
         }
     }
 
     private var roleLabel: String {
         switch message.role {
-        case .user:      return "YOU"
-        case .assistant: return "CLAUDE"
-        case .tool:      return "TOOL"
-        case .error:     return "ERR"
-        case .external:  return "CC"
+        case .user:        return "YOU"
+        case .assistant:   return "CLAUDE"
+        case .tool:        return "TOOL"
+        case .error:       return "ERR"
+        case .external:    return "CC"
+        case .participant: return message.participantName?.uppercased() ?? "PLUGIN"
         }
     }
 }
