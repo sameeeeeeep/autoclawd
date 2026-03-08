@@ -68,8 +68,8 @@ struct MainPanelView: View {
                 .opacity(selectedTab == .world && appState.pillMode != .callMode ? 1 : 0)
                 .allowsHitTesting(selectedTab == .world && appState.pillMode != .callMode)
 
-            // Zoom-call layout: replaces HQ view when Call Mode is active.
-            CallModeZoomView(appState: appState)
+            // Call Mode room: replaces HQ view when Call Mode is active.
+            CallModeRoomView(appState: appState)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(selectedTab == .world && appState.pillMode == .callMode ? 1 : 0)
                 .allowsHitTesting(selectedTab == .world && appState.pillMode == .callMode)
