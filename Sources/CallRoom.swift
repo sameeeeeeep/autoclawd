@@ -4,9 +4,9 @@ import SwiftUI
 // MARK: - ParticipantKind
 
 enum ParticipantKind: Equatable {
-    case llama                                        // AutoClawd PM — always present
-    case claudeCode                                   // joins via MCP session
-    case connection(id: String, name: String)         // future plugin integrations
+    case llama                                                      // AutoClawd PM — always present
+    case claudeCode                                                 // joins via MCP session
+    case connection(id: String, name: String, systemImage: String)  // plugin/tool participants
 }
 
 // MARK: - ParticipantState
@@ -29,17 +29,28 @@ struct CallParticipant: Identifiable {
 
     var displayName: String {
         switch kind {
-        case .llama:                          return "AutoClawd"
-        case .claudeCode:                     return "Claw'd"
-        case .connection(_, let name):        return name
+        case .llama:                             return "AutoClawd"
+        case .claudeCode:                        return "Claw'd"
+        case .connection(_, let name, _):        return name
         }
     }
 
     var mascotSystemImage: String {
         switch kind {
-        case .llama:        return "brain"
-        case .claudeCode:   return "terminal"
-        case .connection:   return "plug"
+        case .llama:                             return "brain"
+        case .claudeCode:                        return "hammer.fill"
+        case .connection(_, _, let icon):        return icon
+        }
+    }
+
+    /// Consistent color per participant — connections derive hue from their ID.
+    var tileColor: Color {
+        switch kind {
+        case .llama:      return .teal
+        case .claudeCode: return .orange
+        case .connection(let id, _, _):
+            let hash = id.unicodeScalars.reduce(0) { ($0 &+ Int($1.value)) % 360 }
+            return Color(hue: Double(hash) / 360.0, saturation: 0.65, brightness: 0.95)
         }
     }
 
@@ -102,9 +113,12 @@ final class CallRoom: ObservableObject {
         rebuildSlots()
     }
 
-    func connectionJoined(id: String, name: String) {
-        guard !participants.contains(where: { $0.id == id }) else { return }
-        var p = CallParticipant(id: id, kind: .connection(id: id, name: name))
+    func connectionJoined(id: String, name: String, systemImage: String = "cable.connector") {
+        guard !participants.contains(where: { $0.id == id }) else {
+            updateLastActivity(id: id)
+            return
+        }
+        var p = CallParticipant(id: id, kind: .connection(id: id, name: name, systemImage: systemImage))
         p.gestureSlot = participants.count + 1
         participants.append(p)
         rebuildSlots()

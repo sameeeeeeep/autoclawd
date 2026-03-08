@@ -42,7 +42,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isPausedProvider:   { [weak self] in !(self?.appState.callRoom.claudeCodeIsActive ?? true) },
             canvasWriter: { [weak self] text in self?.appState.callModeSession.appendExternalMessage(text) },
             onJoined: { [weak self] in self?.appState.callRoom.claudeCodeJoined() },
-            onLeft:   { [weak self] in self?.appState.callRoom.claudeCodeLeft() }
+            onLeft:   { [weak self] in self?.appState.callRoom.claudeCodeLeft() },
+            onInviteParticipant: { [weak self] id, name, icon in
+                self?.appState.callRoom.connectionJoined(id: id, name: name, systemImage: icon)
+            },
+            onSetParticipantState: { [weak self] id, stateStr in
+                guard let room = self?.appState.callRoom else { return }
+                let state: ParticipantState
+                switch stateStr {
+                case "thinking":  state = .thinking
+                case "streaming": state = .streaming
+                case "paused":    state = .paused
+                default:          state = .idle
+                }
+                room.setState(state, for: id)
+            },
+            onParticipantMessage: { [weak self] id, name, text in
+                self?.appState.callModeSession.appendParticipantMessage(id: id, name: name, text: text)
+            },
+            onRemoveParticipant: { [weak self] id in
+                self?.appState.callRoom.remove(id: id)
+            }
         )
 
         // Configure call mode session with the same transcript provider.

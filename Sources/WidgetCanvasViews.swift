@@ -524,21 +524,23 @@ private struct CallMessageBubble: View {
 
     private var roleColor: Color {
         switch message.role {
-        case .user:      return .white.opacity(0.45)
-        case .assistant: return .cyan
-        case .tool:      return .yellow.opacity(0.60)
-        case .error:     return .red
-        case .external:  return .green
+        case .user:        return .white.opacity(0.45)
+        case .assistant:   return .cyan
+        case .tool:        return .yellow.opacity(0.60)
+        case .error:       return .red
+        case .external:    return .green
+        case .participant: return .purple
         }
     }
 
     private var textColor: Color {
         switch message.role {
-        case .user:      return .white.opacity(0.72)
-        case .assistant: return .white.opacity(0.88)
-        case .tool:      return .white.opacity(0.38)
-        case .error:     return .red.opacity(0.80)
-        case .external:  return .green.opacity(0.85)
+        case .user:        return .white.opacity(0.72)
+        case .assistant:   return .white.opacity(0.88)
+        case .tool:        return .white.opacity(0.38)
+        case .error:       return .red.opacity(0.80)
+        case .external:    return .green.opacity(0.85)
+        case .participant: return .white.opacity(0.85)
         }
     }
 }

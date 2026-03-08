@@ -43,6 +43,14 @@ final class MCPServer: @unchecked Sendable {
     private var onJoined: (@MainActor () -> Void)?
     /// Fired on @MainActor when no MCP activity for `leaveTimeoutSeconds`.
     private var onLeft: (@MainActor () -> Void)?
+    /// Invite a plugin/tool as a call participant: (id, name, systemImage).
+    private var onInviteParticipant: (@MainActor (String, String, String) -> Void)?
+    /// Set a participant's state: (id, stateString).
+    private var onSetParticipantState: (@MainActor (String, String) -> Void)?
+    /// Append a feed message attributed to a participant: (id, name, text).
+    private var onParticipantMessage: (@MainActor (String, String, String) -> Void)?
+    /// Remove a participant from the call: (id).
+    private var onRemoveParticipant: (@MainActor (String) -> Void)?
 
     /// Last time any MCP request was received from a Claude Code session.
     private var lastActivityDate: Date?
@@ -57,14 +65,22 @@ final class MCPServer: @unchecked Sendable {
                isPausedProvider: (@MainActor () -> Bool)? = nil,
                canvasWriter: (@MainActor (String) -> Void)? = nil,
                onJoined: (@MainActor () -> Void)? = nil,
-               onLeft: (@MainActor () -> Void)? = nil) {
+               onLeft: (@MainActor () -> Void)? = nil,
+               onInviteParticipant: (@MainActor (String, String, String) -> Void)? = nil,
+               onSetParticipantState: (@MainActor (String, String) -> Void)? = nil,
+               onParticipantMessage: (@MainActor (String, String, String) -> Void)? = nil,
+               onRemoveParticipant: (@MainActor (String) -> Void)? = nil) {
         guard listener == nil else { return }
-        self.screenGrab         = screenGrab
-        self.transcriptProvider = transcriptProvider
-        self.isPausedProvider   = isPausedProvider
-        self.canvasWriter       = canvasWriter
-        self.onJoined           = onJoined
-        self.onLeft             = onLeft
+        self.screenGrab              = screenGrab
+        self.transcriptProvider      = transcriptProvider
+        self.isPausedProvider        = isPausedProvider
+        self.canvasWriter            = canvasWriter
+        self.onJoined                = onJoined
+        self.onLeft                  = onLeft
+        self.onInviteParticipant     = onInviteParticipant
+        self.onSetParticipantState   = onSetParticipantState
+        self.onParticipantMessage    = onParticipantMessage
+        self.onRemoveParticipant     = onRemoveParticipant
 
         do {
             let params = NWParameters.tcp
@@ -344,6 +360,75 @@ final class MCPServer: @unchecked Sendable {
                     ],
                     "required": ["text"]
                 ] as [String: Any]
+            ],
+            [
+                "name": "autoclawd_invite_participant",
+                "description": """
+                    Add a plugin, tool, or service as a visible participant tile in the Call Mode room. \
+                    Use this when you start using an external service (GitHub, Gmail, Calendar, \
+                    Remotion, web search, etc.) so the user can see it join the call. \
+                    Participants appear as named tiles with icons and animated states.
+                    """,
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "id":           ["type": "string",
+                                         "description": "Unique stable ID (e.g. \"github\", \"gmail\")."],
+                        "name":         ["type": "string",
+                                         "description": "Display name shown on the tile."],
+                        "system_image": ["type": "string",
+                                         "description": "SF Symbol name (e.g. \"envelope.fill\", \"globe\")."]
+                    ],
+                    "required": ["id", "name", "system_image"]
+                ] as [String: Any]
+            ],
+            [
+                "name": "autoclawd_set_participant_state",
+                "description": """
+                    Update the visual state of a call participant tile. \
+                    Use "thinking" when starting work, "streaming" while producing output, \
+                    "idle" when done, and "paused" to mute/suspend.
+                    """,
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "id":    ["type": "string", "description": "Participant ID to update."],
+                        "state": ["type": "string",
+                                  "enum": ["idle", "thinking", "streaming", "paused"],
+                                  "description": "New visual state."]
+                    ],
+                    "required": ["id", "state"]
+                ] as [String: Any]
+            ],
+            [
+                "name": "autoclawd_send_participant_message",
+                "description": """
+                    Post a message to the shared call feed attributed to a specific participant. \
+                    Use this to surface a plugin's output as a chat bubble from that participant.
+                    """,
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "id":   ["type": "string", "description": "Participant ID sending the message."],
+                        "name": ["type": "string", "description": "Display name for the message header."],
+                        "text": ["type": "string", "description": "Message content to show in the feed."]
+                    ],
+                    "required": ["id", "name", "text"]
+                ] as [String: Any]
+            ],
+            [
+                "name": "autoclawd_remove_participant",
+                "description": """
+                    Remove a plugin participant from the call room when you are done using it. \
+                    The tile will disappear from the participants row.
+                    """,
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "id": ["type": "string", "description": "Participant ID to remove."]
+                    ],
+                    "required": ["id"]
+                ] as [String: Any]
             ]
         ]
     }
@@ -416,6 +501,47 @@ final class MCPServer: @unchecked Sendable {
                 content = [["type": "text", "text": "Canvas updated."]]
             } else {
                 content = [["type": "text", "text": "No text provided or canvas unavailable."]]
+            }
+
+        case "autoclawd_invite_participant":
+            let id    = args["id"]           as? String ?? ""
+            let name  = args["name"]         as? String ?? ""
+            let icon  = args["system_image"] as? String ?? "cable.connector"
+            if !id.isEmpty, let cb = onInviteParticipant {
+                Task { @MainActor in cb(id, name, icon) }
+                content = [["type": "text", "text": "\(name) joined the call."]]
+            } else {
+                content = [["type": "text", "text": "Could not invite participant."]]
+            }
+
+        case "autoclawd_set_participant_state":
+            let id        = args["id"]    as? String ?? ""
+            let stateStr  = args["state"] as? String ?? "idle"
+            if !id.isEmpty, let cb = onSetParticipantState {
+                Task { @MainActor in cb(id, stateStr) }
+                content = [["type": "text", "text": "State updated."]]
+            } else {
+                content = [["type": "text", "text": "Could not update participant state."]]
+            }
+
+        case "autoclawd_send_participant_message":
+            let id   = args["id"]   as? String ?? ""
+            let name = args["name"] as? String ?? ""
+            let text = args["text"] as? String ?? ""
+            if !id.isEmpty, !text.isEmpty, let cb = onParticipantMessage {
+                Task { @MainActor in cb(id, name, text) }
+                content = [["type": "text", "text": "Message posted."]]
+            } else {
+                content = [["type": "text", "text": "Could not post participant message."]]
+            }
+
+        case "autoclawd_remove_participant":
+            let id = args["id"] as? String ?? ""
+            if !id.isEmpty, let cb = onRemoveParticipant {
+                Task { @MainActor in cb(id) }
+                content = [["type": "text", "text": "Participant removed."]]
+            } else {
+                content = [["type": "text", "text": "Could not remove participant."]]
             }
 
         default:
