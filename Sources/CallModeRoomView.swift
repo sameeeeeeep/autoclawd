@@ -89,9 +89,11 @@ struct CallModeRoomView: View {
                         ForEach(appState.callModeSession.messages) { msg in
                             CallFeedMessageRow(
                                 participantName: msg.participantName ?? feedLabel(for: msg.role),
-                                color: participantFeedColor(for: msg),
-                                icon: participantFeedIcon(for: msg),
-                                text: msg.text
+                                color:           participantFeedColor(for: msg),
+                                icon:            participantFeedIcon(for: msg),
+                                text:            msg.text,
+                                imageData:       msg.imageData,
+                                isGenerated:     msg.isGenerated
                             )
                             .id(msg.id)
                         }
@@ -539,28 +541,79 @@ private struct ThinkingDotsView: View {
 
 private struct CallFeedMessageRow: View {
     let participantName: String
-    let color: Color
-    let icon: String
-    let text: String
+    let color:           Color
+    let icon:            String
+    let text:            String
+    var imageData:       Data? = nil
+    /// True for AI-generated narrative messages (AutoClawd reactions).
+    /// Rendered at reduced opacity with a dashed left bar.
+    var isGenerated:     Bool  = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 9))
-                .foregroundColor(color.opacity(0.6))
-                .frame(width: 14)
-                .padding(.top, 2)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(participantName.uppercased())
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundColor(color.opacity(0.5))
-                Text(text)
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.85))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .top, spacing: 0) {
+            // 2px colored left bar — solid for real events, dashed-look for generated
+            if isGenerated {
+                // Dashed effect: two small rectangles with gap
+                VStack(spacing: 0) {
+                    ForEach(0..<8, id: \.self) { i in
+                        Rectangle()
+                            .fill(color.opacity(i % 2 == 0 ? 0.45 : 0.0))
+                            .frame(width: 2, height: 4)
+                    }
+                }
+                .frame(width: 2)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .padding(.top, 4)
+            } else {
+                Rectangle()
+                    .fill(color)
+                    .frame(width: 2)
             }
+
+            // Content
+            VStack(alignment: .leading, spacing: 5) {
+                // Header: icon + name (lowercase monospace) + generated marker
+                HStack(spacing: 5) {
+                    Image(systemName: icon)
+                        .font(.system(size: 9))
+                        .foregroundColor(color.opacity(isGenerated ? 0.5 : 0.7))
+                    Text(participantName.lowercased())
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundColor(color.opacity(isGenerated ? 0.45 : 0.65))
+                    if isGenerated {
+                        Text("~")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(color.opacity(0.3))
+                    }
+                    Spacer()
+                }
+
+                // Body text (skip if empty and we have an image)
+                if !text.isEmpty {
+                    Text(text)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.white.opacity(isGenerated ? 0.55 : 0.85))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // Inline image (Pencil screenshot, ScreenGrab, etc.)
+                if let data = imageData, let nsImage = NSImage(data: data) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 280, maxHeight: 200)
+                        .cornerRadius(6)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(color.opacity(0.25), lineWidth: 0.5)
+                        )
+                }
+            }
+            .padding(.leading, 10)
+            .padding(.vertical, 8)
+            .padding(.trailing, 4)
         }
+        .opacity(isGenerated ? 0.75 : 1.0)
     }
 }

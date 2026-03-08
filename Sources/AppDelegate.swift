@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainPanel: MainPanelWindow?
     private var toastWindow: ToastWindow?
     private var setupWindow: SetupWindow?
+    private var callStreamWidget: CallStreamWidget?
     private var toastDismissWork: DispatchWorkItem?
     private var cancellables = Set<AnyCancellable>()
 
@@ -65,26 +66,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onHookEvent: { [weak self] event in
                 guard let self else { return }
-                // When Claude Code fires a hook, narrate it via Llama and post
-                // the sentence to the call-room feed attributed to the Claw'd tile.
+                // When Claude Code fires a hook, build a NarrationBundle via Llama and post
+                // a two-sided conversation to the call-room feed:
+                //  1. Claw'd tile — real tool narration (solid border)
+                //  2. Tool participant tile — auto-joined; optional image response
+                //  3. AutoClawd tile — generated reaction comment (dashed/faint border)
                 let room    = self.appState.callRoom
                 let session = self.appState.callModeSession
 
                 // Ensure Claw'd is in the room (hooks can arrive before MCP initialize).
                 room.claudeCodeJoined()
-
-                // Show "thinking" state while narration is being generated.
                 room.setState(.thinking, for: "claude-code")
 
                 Task {
-                    let narration = await HookNarrationService().narrate(event)
+                    let bundle = await HookNarrationService().narrate(event)
                     await MainActor.run {
+                        // Auto-join MCP tool participant (e.g. "pencil", "figma")
+                        if let tp = bundle.toolParticipant {
+                            room.connectionJoined(id: tp.id, name: tp.name, systemImage: tp.systemImage)
+                        }
+
+                        // Post Claw'd's real narration (solid left bar)
                         session.appendParticipantMessage(
-                            id:   "claude-code",
-                            name: "Claw'd",
-                            text: narration
+                            id:          "claude-code",
+                            name:        "Claw'd",
+                            text:        bundle.narration,
+                            isGenerated: false
                         )
                         room.setState(event.isStop ? .idle : .streaming, for: "claude-code")
+
+                        // Post tool response if it includes an image or text
+                        if let tp = bundle.toolParticipant {
+                            if bundle.imageData != nil || bundle.toolResponseText != nil {
+                                room.setState(.streaming, for: tp.id)
+                                session.appendParticipantMessage(
+                                    id:          tp.id,
+                                    name:        tp.name,
+                                    text:        bundle.toolResponseText ?? "",
+                                    imageData:   bundle.imageData,
+                                    isGenerated: false
+                                )
+                                room.setState(.idle, for: tp.id)
+                            } else {
+                                room.updateLastActivity(id: tp.id)
+                            }
+                        }
+
+                        // Post AutoClawd's generated reaction (dashed/faint left bar)
+                        if let reaction = bundle.autoClawdReaction {
+                            session.appendParticipantMessage(
+                                id:          "llama",
+                                name:        "AutoClawd",
+                                text:        reaction,
+                                isGenerated: true
+                            )
+                        }
                     }
                 }
             }
@@ -120,6 +156,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             .store(in: &cancellables)
+
+        // Show/hide the Call Stream Widget when pill mode changes.
+        appState.$pillMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mode in
+                guard let self else { return }
+                if mode == .callMode && SettingsManager.shared.callStreamWidgetEnabled {
+                    self.showCallStreamWidget()
+                } else {
+                    self.callStreamWidget?.animateOut()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Call Stream Widget
+
+    private func showCallStreamWidget() {
+        if callStreamWidget == nil {
+            let widget = CallStreamWidget()
+            let view = CallStreamWidgetView(appState: appState) { [weak self] in
+                self?.appState.pillMode = .ambientIntelligence
+                self?.callStreamWidget?.animateOut()
+            }
+            widget.setContent(view)
+            callStreamWidget = widget
+        }
+        callStreamWidget?.animateIn()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

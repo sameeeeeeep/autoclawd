@@ -138,7 +138,8 @@ final class SettingsManager: @unchecked Sendable {
     private let kFaceTrackingEnabled   = "face_tracking_enabled"
     private let kGestureHoldDuration   = "gesture_hold_duration"
     private let kCameraAnalysisFPS     = "camera_analysis_fps"
-    private let kSelectedCameraDeviceID = "selected_camera_device_id"
+    private let kSelectedCameraDeviceID  = "selected_camera_device_id"
+    private let kCallStreamWidgetEnabled = "call_stream_widget_enabled"
 
     // MARK: - Properties
 
@@ -386,6 +387,15 @@ final class SettingsManager: @unchecked Sendable {
     var selectedCameraDeviceID: String? {
         get { defaults.string(forKey: kSelectedCameraDeviceID) }
         set { defaults.set(newValue, forKey: kSelectedCameraDeviceID) }
+    }
+
+    // MARK: - Call Stream Widget
+
+    /// When true, the floating Call Stream Widget appears whenever call mode is active.
+    /// Toggle in Settings → Call Mode.
+    var callStreamWidgetEnabled: Bool {
+        get { defaults.object(forKey: kCallStreamWidgetEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: kCallStreamWidgetEnabled) }
     }
 
     private init() {}
