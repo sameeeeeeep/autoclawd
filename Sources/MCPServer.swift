@@ -361,77 +361,13 @@ final class MCPServer: @unchecked Sendable {
                     "required": ["text"]
                 ] as [String: Any]
             ],
-            [
-                "name": "autoclawd_invite_participant",
-                "description": """
-                    Add a plugin, tool, or service as a visible participant tile in the Call Mode room. \
-                    Use this when you start using an external service (GitHub, Gmail, Calendar, \
-                    Remotion, web search, etc.) so the user can see it join the call. \
-                    Participants appear as named tiles with icons and animated states.
-                    """,
-                "inputSchema": [
-                    "type": "object",
-                    "properties": [
-                        "id":           ["type": "string",
-                                         "description": "Unique stable ID (e.g. \"github\", \"gmail\")."],
-                        "name":         ["type": "string",
-                                         "description": "Display name shown on the tile."],
-                        "system_image": ["type": "string",
-                                         "description": "SF Symbol name (e.g. \"envelope.fill\", \"globe\")."]
-                    ],
-                    "required": ["id", "name", "system_image"]
-                ] as [String: Any]
-            ],
-            [
-                "name": "autoclawd_set_participant_state",
-                "description": """
-                    Update the visual state of a call participant tile. \
-                    Use "thinking" when starting work, "streaming" while producing output, \
-                    "idle" when done, and "paused" to mute/suspend.
-                    """,
-                "inputSchema": [
-                    "type": "object",
-                    "properties": [
-                        "id":    ["type": "string", "description": "Participant ID to update."],
-                        "state": ["type": "string",
-                                  "enum": ["idle", "thinking", "streaming", "paused"],
-                                  "description": "New visual state."]
-                    ],
-                    "required": ["id", "state"]
-                ] as [String: Any]
-            ],
-            [
-                "name": "autoclawd_send_participant_message",
-                "description": """
-                    Post a message to the shared call feed attributed to a specific participant. \
-                    Use this to surface a plugin's output as a chat bubble from that participant.
-                    """,
-                "inputSchema": [
-                    "type": "object",
-                    "properties": [
-                        "id":   ["type": "string", "description": "Participant ID sending the message."],
-                        "name": ["type": "string", "description": "Display name for the message header."],
-                        "text": ["type": "string", "description": "Message content to show in the feed."]
-                    ],
-                    "required": ["id", "name", "text"]
-                ] as [String: Any]
-            ],
-            [
-                "name": "autoclawd_remove_participant",
-                "description": """
-                    Remove a plugin participant from the call room when you are done using it. \
-                    The tile will disappear from the participants row.
-                    """,
-                "inputSchema": [
-                    "type": "object",
-                    "properties": [
-                        "id": ["type": "string", "description": "Participant ID to remove."]
-                    ],
-                    "required": ["id"]
-                ] as [String: Any]
-            ]
         ]
     }
+
+    // NOTE: Participant tile tools (invite/set_state/send_message/remove) are intentionally
+    // NOT exposed via tools/list. Tile management is UI-driven (user taps Invite) or will
+    // be inferred from Claude Code's existing tool-call stream — never by making Claude Code
+    // call extra MCP tools that burn tokens on pure UI bookkeeping.
 
     // MARK: - Tool Execution
 
