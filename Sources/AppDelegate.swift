@@ -62,8 +62,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onRemoveParticipant: { [weak self] id in
                 self?.appState.callRoom.remove(id: id)
+            },
+            onHookEvent: { [weak self] event in
+                guard let self else { return }
+                // When Claude Code fires a hook, narrate it via Llama and post
+                // the sentence to the call-room feed attributed to the Claw'd tile.
+                let room    = self.appState.callRoom
+                let session = self.appState.callModeSession
+
+                // Ensure Claw'd is in the room (hooks can arrive before MCP initialize).
+                room.claudeCodeJoined()
+
+                // Show "thinking" state while narration is being generated.
+                room.setState(.thinking, for: "claude-code")
+
+                Task {
+                    let narration = await HookNarrationService().narrate(event)
+                    await MainActor.run {
+                        session.appendParticipantMessage(
+                            id:   "claude-code",
+                            name: "Claw'd",
+                            text: narration
+                        )
+                        room.setState(event.isStop ? .idle : .streaming, for: "claude-code")
+                    }
+                }
             }
         )
+
+        // Auto-register Claude Code hooks so PostToolUse events arrive at /hook.
+        MCPConfigManager.writeHooksConfig()
 
         // Configure call mode session with the same transcript provider.
         appState.callModeSession.configure(
