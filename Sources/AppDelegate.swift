@@ -33,6 +33,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // recording attempt — preventing the first chunk from silently failing.
         requestPermissionsUpfront()
 
+        // Start embedded MCP server so any Claude Code session can call screen-grab tools.
+        // Configure Claude Code with: { "mcpServers": { "autoclawd": { "type": "http", "url": "http://localhost:7892/mcp" } } }
+        let screenGrab = ScreenGrabService()
+        MCPServer.shared.start(
+            screenGrab: screenGrab,
+            transcriptProvider: { [weak self] in self?.appState.liveTranscriptText ?? "" },
+            isPausedProvider:   { [weak self] in !(self?.appState.callRoom.claudeCodeIsActive ?? true) },
+            canvasWriter: { [weak self] text in self?.appState.callModeSession.appendExternalMessage(text) },
+            onJoined: { [weak self] in self?.appState.callRoom.claudeCodeJoined() },
+            onLeft:   { [weak self] in self?.appState.callRoom.claudeCodeLeft() }
+        )
+
+        // Configure call mode session with the same transcript provider.
+        appState.callModeSession.configure(
+            transcriptProvider: { [weak self] in self?.appState.liveTranscriptText ?? "" }
+        )
+
         // Toast window disabled — logs are now shown inline inside the widget.
         // AutoClawdLogger.toastPublisher
         //     .receive(on: DispatchQueue.main)
@@ -720,6 +737,9 @@ struct PillContentView: View {
                 incomingText: appState.latestTranscriptChunk,
                 typedText:    typed
             )
+            return AnyView(v)
+        case .callMode:
+            let v = CallModeCanvasView(session: appState.callModeSession)
             return AnyView(v)
         }
     }

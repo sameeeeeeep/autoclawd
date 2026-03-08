@@ -209,6 +209,10 @@ final class AppState: ObservableObject {
     @Published var sessionLifecycle: SessionLifecycleState = .undefined
     @Published var sessionConfig: SessionConfig?
 
+    // Call mode state
+    let callModeSession = CallModeSession()
+    let callRoom = CallRoom()
+
     // Code widget state
     @Published var codeWidgetStep: CodeWidgetStep = .projectSelect
     @Published var codeSelectedProject: Project? = nil

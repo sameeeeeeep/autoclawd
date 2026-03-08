@@ -187,6 +187,7 @@ struct CameraFeedWidget: View {
                 Image(decorative: image, scale: 1.0)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             } else {
                 VStack(spacing: 6) {

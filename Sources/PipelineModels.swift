@@ -16,6 +16,10 @@ enum PipelineSource: String, Codable {
     case code
     /// WhatsApp self-chat → full pipeline + QA reply
     case whatsapp
+    /// Call mode — direct to Claude via Anthropic API, Llama bypassed entirely.
+    /// Audio transcript is handed straight to CallModeSession; MCP tools serve
+    /// visual context (screen, cursor, selection) on demand.
+    case callMode
 }
 
 // MARK: - Cleaned Transcript
