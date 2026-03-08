@@ -18,19 +18,45 @@ struct HookEvent {
     var isPreTool: Bool { eventName == "PreToolUse" }
 }
 
+// MARK: - ToolParticipant
+
+/// A tool (MCP server) that used as a participant in the call room feed.
+struct ToolParticipant {
+    let id:          String   // e.g. "pencil"
+    let name:        String   // e.g. "Pencil"
+    let systemImage: String   // SF symbol
+}
+
+// MARK: - NarrationBundle
+
+/// Rich narration package returned for each hook event.
+/// Contains everything needed to post a multi-message "conversation" in the call feed.
+struct NarrationBundle {
+    /// What Claw'd says (real, solid-border message).
+    let narration: String
+    /// The tool participant derived from the MCP tool name (nil for built-in tools).
+    let toolParticipant: ToolParticipant?
+    /// Short summary of the tool's response text (optional).
+    let toolResponseText: String?
+    /// Image bytes extracted from the tool response (e.g. Pencil screenshot).
+    let imageData: Data?
+    /// AutoClawd's generated reaction — rendered as a dashed/faint generated message.
+    let autoClawdReaction: String?
+}
+
 // MARK: - HookNarrationService
 
-/// Translates raw Claude Code hook events into one-sentence human-readable narratives.
+/// Translates raw Claude Code hook events into NarrationBundles for the call-room feed.
 ///
 /// Pipeline:
 ///   1. Parse the raw JSON from `/hook` into a `HookEvent`.
-///   2. `narrate(_:)` builds a compact summary string.
-///   3. If Ollama is reachable, sends a short prompt to Llama and returns its response.
-///   4. If Ollama is unavailable or slow, falls back to the template summary.
+///   2. Extract tool participant (for MCP tools like `mcp__pencil__*`).
+///   3. Extract image data from the tool response if present.
+///   4. `narrate(_:)` calls Ollama Llama for a short narration; falls back to template.
+///   5. Optionally generates an AutoClawd reaction via a second Ollama call.
 ///
-/// The narrated sentence is then shown in the call-room feed attributed to the
-/// Claude Code participant tile — turning the call view into a live running
-/// commentary of what Claude Code is doing.
+/// The bundle is then used by AppDelegate to auto-join tool participants and post
+/// a two-sided conversation in the feed (Claw'd speaks, tool responds, AutoClawd reacts).
 final class HookNarrationService: @unchecked Sendable {
 
     private let ollama = OllamaService()
@@ -53,16 +79,24 @@ final class HookNarrationService: @unchecked Sendable {
 
     // MARK: - Narrate
 
-    /// Returns a short, natural-language sentence describing what just happened.
-    /// Uses Llama if available; falls back to a template description otherwise.
-    func narrate(_ event: HookEvent) async -> String {
-        // Stop events don't need an LLM call
+    /// Returns a NarrationBundle describing what just happened.
+    func narrate(_ event: HookEvent) async -> NarrationBundle {
         if event.isStop {
-            return "Claw'd finished the task."
+            return NarrationBundle(
+                narration: "Claw'd finished the task.",
+                toolParticipant: nil,
+                toolResponseText: nil,
+                imageData: nil,
+                autoClawdReaction: nil
+            )
         }
 
-        let summary = templateSummary(event)
+        let tp        = HookNarrationService.toolParticipant(from: event.toolName)
+        let imageData = HookNarrationService.extractImageData(from: event.toolResponse)
+        let summary   = templateSummary(event)
 
+        // Ask Llama for a casual narration sentence
+        var narration = summary
         do {
             let prompt = """
                 You are a narrator watching an AI coding assistant named "Claw'd" work. \
@@ -74,17 +108,119 @@ final class HookNarrationService: @unchecked Sendable {
 
                 Narration:
                 """
-            var narration = try await ollama.generate(prompt: prompt, numPredict: 60)
-            // Strip any trailing artefacts that Llama sometimes adds
-            narration = narration
-                .components(separatedBy: "\n").first ?? narration
-            narration = narration
+            var llm = try await ollama.generate(prompt: prompt, numPredict: 60)
+            llm = llm.components(separatedBy: "\n").first ?? llm
+            llm = llm
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-            return narration.isEmpty ? summary : narration
+            if !llm.isEmpty { narration = llm }
+        } catch {}
+
+        // Generate AutoClawd reaction for interesting MCP events or image results
+        var reaction: String? = nil
+        if tp != nil || imageData != nil {
+            reaction = await generateAutoClawdReaction(for: narration, hasImage: imageData != nil)
+        }
+
+        return NarrationBundle(
+            narration:         narration,
+            toolParticipant:   tp,
+            toolResponseText:  nil,
+            imageData:         imageData,
+            autoClawdReaction: reaction
+        )
+    }
+
+    // MARK: - Tool Participant Extraction
+
+    /// Parses `mcp__server__tool` tool names and returns a ToolParticipant.
+    static func toolParticipant(from toolName: String?) -> ToolParticipant? {
+        guard let name = toolName, name.hasPrefix("mcp__") else { return nil }
+        let parts = name.components(separatedBy: "__")
+        guard parts.count >= 2 else { return nil }
+        let serverID = parts[1]
+        return ToolParticipant(
+            id:          serverID,
+            name:        serverID.capitalized,
+            systemImage: systemImageForServer(serverID)
+        )
+    }
+
+    private static func systemImageForServer(_ server: String) -> String {
+        switch server {
+        case "pencil":        return "paintpalette"
+        case "figma":         return "rectangle.3.group"
+        case "github":        return "cat"
+        case "linear":        return "square.and.pencil"
+        case "notion":        return "doc.text"
+        case "googlesheets":  return "tablecells"
+        default:              return "cable.connector"
+        }
+    }
+
+    // MARK: - Image Extraction
+
+    /// Extracts raw JPEG/PNG bytes from a tool_response JSON payload.
+    /// Handles several content formats used by MCP tools.
+    static func extractImageData(from toolResponse: [String: Any]?) -> Data? {
+        guard let resp = toolResponse else { return nil }
+
+        // Pattern 1: {"type": "image", "data": "base64..."} (direct)
+        if resp["type"] as? String == "image",
+           let dataStr = resp["data"] as? String,
+           let d = Data(base64Encoded: dataStr) {
+            return d
+        }
+
+        // Pattern 2: {"content": [{"type": "image", "data": "..."}]}
+        if let content = resp["content"] as? [[String: Any]] {
+            for item in content {
+                if item["type"] as? String == "image" {
+                    if let dataStr = item["data"] as? String,
+                       let d = Data(base64Encoded: dataStr) { return d }
+                    if let source = item["source"] as? [String: Any],
+                       let dataStr = source["data"] as? String,
+                       let d = Data(base64Encoded: dataStr) { return d }
+                }
+            }
+        }
+
+        // Pattern 3: {"result": [{"type": "image", "source": {"data": "..."}}]}
+        if let result = resp["result"] as? [[String: Any]] {
+            for item in result {
+                if item["type"] as? String == "image",
+                   let source = item["source"] as? [String: Any],
+                   let dataStr = source["data"] as? String,
+                   let d = Data(base64Encoded: dataStr) { return d }
+            }
+        }
+
+        return nil
+    }
+
+    // MARK: - AutoClawd Reaction
+
+    private func generateAutoClawdReaction(for narration: String, hasImage: Bool) async -> String? {
+        let imageHint = hasImage ? " A screenshot or image was returned." : ""
+        let prompt = """
+            You are AutoClawd, an AI project manager watching Claw'd (your coding AI) work.
+            In one casual, short sentence (8–12 words), react to what just happened.\(imageHint)
+            Be observant — sometimes curious, sometimes encouraging, sometimes dry.
+            Never start with "I". Don't add quotes.
+
+            What happened: \(narration)
+
+            Your reaction:
+            """
+        do {
+            var reaction = try await ollama.generate(prompt: prompt, numPredict: 40)
+            reaction = reaction.components(separatedBy: "\n").first ?? reaction
+            reaction = reaction
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            return reaction.isEmpty ? nil : reaction
         } catch {
-            // Ollama not running — use template
-            return summary
+            return nil
         }
     }
 
@@ -167,6 +303,13 @@ final class HookNarrationService: @unchecked Sendable {
             return "Editing a notebook cell"
 
         default:
+            // MCP tools: mcp__server__action -> "Using Pencil: batch_design"
+            if tool.hasPrefix("mcp__") {
+                let parts = tool.components(separatedBy: "__")
+                if parts.count >= 3 {
+                    return "Using \(parts[1].capitalized): \(parts[2...].joined(separator: "_"))"
+                }
+            }
             return "Using \(tool)"
         }
     }

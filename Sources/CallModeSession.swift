@@ -73,9 +73,11 @@ final class CallModeSession: ObservableObject {
     }
 
     /// Append a message attributed to a named plugin participant (via autoclawd_send_participant_message).
-    func appendParticipantMessage(id: String, name: String, text: String) {
+    func appendParticipantMessage(id: String, name: String, text: String,
+                                  imageData: Data? = nil, isGenerated: Bool = false) {
         messages.append(CallMessage(role: .participant, text: text,
-                                    participantID: id, participantName: name))
+                                    participantID: id, participantName: name,
+                                    imageData: imageData, isGenerated: isGenerated))
     }
 
     // MARK: - Agent Loop
@@ -303,9 +305,16 @@ struct CallMessage: Identifiable {
     let id:              UUID   = UUID()
     let role:            Role
     let text:            String
+    /// Timestamp — used to show time labels in the call feed.
+    let createdAt:       Date   = Date()
     /// Set when the message comes from a plugin participant (autoclawd_send_participant_message).
     var participantID:   String? = nil
     var participantName: String? = nil
+    /// Inline image attached to this message (e.g. Pencil screenshot, ScreenGrab).
+    var imageData:       Data?  = nil
+    /// True for AI-generated narrative messages (AutoClawd reactions, fake conversation).
+    /// These render with a dashed/faint border vs solid for real tool events.
+    var isGenerated:     Bool   = false
 
     enum Role { case user, assistant, tool, error, external, participant }
 }
