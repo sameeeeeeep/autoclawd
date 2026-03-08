@@ -849,6 +849,10 @@ final class AppState: ObservableObject {
                 // Select project during review: 0 = None, 1..N = project by position
                 selectReviewProjectByIndex(count)
                 Log.info(.camera, "Gesture: review project index \(count) selected")
+            } else if pillMode == .callMode {
+                // In call mode, finger count addresses a participant
+                callRoom.selectByGesture(fingerCount: count)
+                Log.info(.camera, "Gesture: call mode participant \(count) selected")
             } else if showOptionSelector {
                 selectOption(index: count)
                 Log.info(.camera, "Gesture: option \(count) selected (left fingers)")
