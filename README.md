@@ -160,13 +160,27 @@ This context feeds back into the pipeline: when AutoClawd analyzes a new transcr
 
 ---
 
-## Skills and OpenClaw
+## Skills, Capabilities, and Workflows
 
-**Built-in skills** ship with AutoClawd and cover common categories: development, analysis, communication, creative, marketing, automation, and more. Each skill has a prompt template and optional workflow binding.
+AutoClawd's automation system is built in three tiers:
 
-**Custom skills** are stored as JSON in `~/.autoclawd/skills/` — create them in the UI or edit the files directly.
+| Tier | Name | Definition |
+|------|------|------------|
+| **1** | **Skill** | Atomic. Often just Claude alone, or a single CLI tool. (`yt-dlp`, `video2ai`, "write a tweet thread") |
+| **2** | **Capability** | Skill(s) + tool access. Built by FUCBC from what it observes you doing. ("Post to all platforms", "Ingest reference video") |
+| **3** | **Workflow** | Ordered sequence of Capabilities → delivers a real output. ("Launch Video", "Podcast to Blog Post", "Meeting to Action Items") |
 
-**OpenClaw compatibility** — AutoClawd loads skills from `SKILL.md` files (YAML frontmatter + markdown instructions), the same format used by the OpenClaw ecosystem. Drop a `SKILL.md` into `~/.autoclawd/openclaw-skills/` and it's available immediately. Skills can declare required binaries and environment variables; AutoClawd checks availability before offering them.
+**FUCBC (Find Use-Case, Build Capability)** watches your screen and voice in Learn Mode. Every 5 seconds it captures a snapshot: what app is open, what URLs you're visiting, what you said. When it has enough context, it sends the full story to Claude Code — which writes an executable `SKILL.md`, creates a `Capability`, and saves it to your Agents panel.
+
+**My Agents panel** — a grid of all capabilities AutoClawd has built. One click runs any of them. Live streaming on the canvas. New agents appear automatically as FUCBC discovers new workflows.
+
+**Pill popup — "Automate Now?"** — when OCR detects you're doing something you've already automated, the pill shows a Cofia-style prompt: the workflow name, the apps involved, and a single button. One tap starts it.
+
+**Skills come from GitHub.** When FUCBC encounters an unfamiliar tool, it web-searches for it, fetches the README, understands its CLI interface, and writes a `SKILL.md` automatically. The skill is immediately available for Capability and Workflow assembly.
+
+**Built-in skills** ship with AutoClawd — development, analysis, communication, creative, marketing, automation, and more.
+
+**Custom skills** are stored in `~/.autoclawd/skills/` (JSON) or `~/.autoclawd/openclaw-skills/{slug}/SKILL.md` (OpenClaw format). Drop a `SKILL.md` into the openclaw-skills directory and it's available immediately.
 
 ---
 
@@ -418,11 +432,29 @@ Everything lives in `~/.autoclawd/` — SQLite databases and markdown files, ful
 
 ## Roadmap
 
+**Phase 3 — Workflow Intelligence (next):**
+- [ ] `WorkflowRecord` + `WorkflowStore` — higher-level construct above Capability; chains steps with shared context
+- [ ] `WorkflowBuilder` — infers workflows from sequences of observed capabilities
+- [ ] `WorkflowExecutor` — runs steps in sequence, passes context (output of step N → input of step N+1)
+- [ ] `WorkflowInputView` — UI for providing references + context + project at run time
+- [ ] `SkillDiscoveryService` — web search → GitHub analysis → auto-SKILL.md for unfamiliar tools
+- [ ] Pre-built workflow library — Launch Video, Podcast to Blog Post, Bug to PR, Meeting to Action Items, and more
+
+**Longer term:**
 - [ ] Self-evolution — daily batched self-improvement cycle
 - [ ] Phone call transcription via Bluetooth mic
 - [ ] Scheduled tasks and calendar integration
 - [ ] Multi-language transcription
 - [ ] Shared world model across devices
+- [ ] Workflow marketplace — share + import community workflows
+
+**Shipped:**
+- [x] **FUCBC** — capability learning from observed screen+voice; builds executable SKILL.md via Claude Code
+- [x] **My Agents panel** — Cofia-style grid of built capabilities; one-click run → streams live on canvas
+- [x] **Pill popup** — OCR auto-trigger → "Automate Now?" (Cofia-style) with app icon strip
+- [x] **144+ OpenClaw skills** — yt-dlp, video2ai, remotion, ffmpeg, gdrive, whatsapp, slack, and more
+- [x] **video2ai** — Python CLI + web UI; converts any .mp4 into frames + Whisper transcript + LLM analysis
+- [x] **Built-in MCP server** (port 7892) — screen/cursor/selection/transcript tools for Claude Code mid-task
 - [x] **Call Mode** — live brutalist call room with storytelling feed, participant tiles, spotlight, hook narration
 - [x] Camera vision — face detection, speaker tagging, pixel-art avatars
 - [x] Hand gesture control — session lifecycle, mode switching, option selection
@@ -432,7 +464,6 @@ Everything lives in `~/.autoclawd/` — SQLite databases and markdown files, ful
 - [x] Session-persistent transcript across all modes
 - [x] Fully local transcription + analysis (Apple + Ollama)
 - [x] Skills system with OpenClaw compatibility
-- [x] MCP server support
 - [x] WhatsApp self-chat integration
 - [x] Mission Control HQ pixel-art visualization
 - [x] People tagging, location, ShazamKit, screenshot context

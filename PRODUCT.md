@@ -142,30 +142,40 @@ Bot proactively messages (morning, evening, insights, open questions)
 | Agent queue + desk-to-desk pipeline visualization | ✅ | adapter.js routing |
 | Settings: API keys, appearance, autonomous task rules | ✅ | SettingsManager |
 | Native Liquid Glass migration (gated on macOS 26 SDK) | ✅ | `#if NATIVE_GLASS_AVAILABLE` |
+| FUCBC — capability learning from observed screen+voice | ✅ | LearnModeService, story builder, executable SKILL.md |
+| Capability suggestion pill popup (Cofia-style) | ✅ | CapabilitySuggestionCanvasView: "Automate Now?" |
+| OCR auto-trigger: detects matching capability from screen | ✅ | CapabilityStore.suggest() with scoring |
+| "My Agents" panel: grid of built capabilities, one-click run | ✅ | AgentsView, 3-col grid, ▶ Run → streams on canvas |
+| 144+ OpenClaw skills in `~/.autoclawd/openclaw-skills/` | ✅ | yt-dlp, remotion, ffmpeg, github, slack, gdrive, and more |
+| video2ai skill: video → frames + transcript + LLM analysis | ✅ | Python CLI + web UI; solves "Claude can't read videos" |
+| Built-in MCP server (port 7892) | ✅ | screen/cursor/selection/transcript tools for Claude Code |
 
-### In Progress / Next
+### In Progress / Upcoming
 
 | Feature | Priority | Notes |
 |---|---|---|
-| Batch intelligence engine | P0 | Multi-transcript Llama pass; project/category batching |
-| World model v2: PageRank + episodic + diff.md | P0 | See Memory Architecture section |
-| Q&A canvas mode | P1 | Open questions in canvas; tagged voice replies |
-| Daily/monthly/yearly journal synthesis | P1 | Narrative from episodes + world model |
-| WhatsApp proactive engagement | P1 | Morning/evening, Wrapped moments, open questions |
-| Idle reprocessing pass | P2 | Re-understand past with updated world model context |
-| Web research integration (tagged as `source: research`) | P2 | Enriches world model without polluting episodic memory |
-| Silence ambient prompts | P2 | Contextual questions during quiet periods |
+| Workflow Intelligence (Phase 3) | P0 | Chain capabilities into end-to-end workflows; see Phase 3 section |
+| WorkflowRecord + WorkflowStore | P0 | Higher-level construct above Capability; `steps`, `inputSpec` |
+| WorkflowBuilder | P0 | Infers workflows from sequences of observed capabilities |
+| WorkflowExecutor | P0 | Runs workflow steps in sequence, passes context between them |
+| WorkflowInputView | P0 | User provides references + context + project at runtime |
+| SkillDiscoveryService | P1 | Auto-creates SKILL.md when new tool encountered mid-workflow |
+| Batch intelligence engine | P1 | Multi-transcript Llama pass; project/category batching |
+| World model v2: PageRank + episodic + diff.md | P1 | See Memory Architecture section |
+| Q&A canvas mode | P2 | Open questions in canvas; tagged voice replies |
+| Daily/monthly/yearly journal synthesis | P2 | Narrative from episodes + world model |
+| WhatsApp proactive engagement | P2 | Morning/evening, Wrapped moments, open questions |
+| Idle reprocessing pass | P3 | Re-understand past with updated world model context |
+| Silence ambient prompts | P3 | Contextual questions during quiet periods |
 
 ### Planned (Roadmap)
 
 - [ ] Phone call transcription (Bluetooth mic capture)
-- [ ] Screen context — periodic screenshot for visual context
-- [ ] MCP server — expose AutoClawd memory to any MCP-compatible tool
-- [ ] Scheduled tasks with system calendar
 - [ ] Multi-language transcription
 - [ ] Location tagging via WiFi SSID → place names
 - [ ] People tagging (manual hint + AI inference)
 - [ ] Execution history and re-run
+- [ ] Workflow marketplace: share/import community workflows
 
 ---
 
@@ -407,7 +417,208 @@ AutoClawd.app (Swift/SwiftUI, macOS 13+)
 | Analysis | Llama 3.2 3B | Ollama (local) |
 | Task framing | Llama 3.2 3B | Ollama (local) |
 | Execution | Claude Code | Anthropic API |
+| FUCBC story builder | Llama 3.2 3B | Ollama (local) |
+| Capability building | Claude Code | Anthropic API |
 | Research (planned) | Web search + Llama synthesis | Local synthesis, web fetch |
+
+---
+
+## Phase 3 — Workflow Intelligence
+
+### Three-Tier Model
+
+Everything in AutoClawd's automation layer is built from three primitives:
+
+| Tier | Name | What it is | Who builds it |
+|------|------|------------|--------------|
+| **1** | **Skill** | An atomic unit — often just Claude alone, or one CLI tool. Does one thing well. | Built-in seed library, FUCBC auto-discovery, user authoring |
+| **2** | **Capability** | A Skill (or a few) **combined with tool access**. Runs a specific job with real external tools. | FUCBC — watches screen+voice, builds automatically |
+| **3** | **Workflow** | AutoClawd + an ordered sequence of Capabilities and Skills + Claude Code → **delivers a real-world output** | WorkflowBuilder — infers from observed sequences; or pre-built |
+
+**Skill** examples: "Write a tweet thread", `yt-dlp {url}`, `video2ai {file}`, "Summarise PDF with key decisions"
+
+**Capability** examples: "Post to all platforms" (Twitter + Threads + Buffer skills + API access), "Ingest reference video" (video2ai + Claude content strategy)
+
+**Workflow** examples: "Launch Video" (8 capabilities chained: download → ingest → strategy → motion graphic → voice → assemble → upload → share), "Podcast to Blog Post" (audio → transcript → article → publish)
+
+The key shift: **Skills are what Claude can do. Capabilities are what Claude can do with tools. Workflows are what AutoClawd assembles and runs for you automatically.**
+
+Most workflows can be **pre-created** — covering common knowledge-worker patterns out of the box — and then personalised as AutoClawd observes how each user actually works.
+
+---
+
+### The Core Shift
+
+Phase 1 was: *listen → transcribe → extract task → run it.*
+Phase 2 was: *watch screen → detect pattern → build capability → "Automate Now?"*
+**Phase 3 is: *watch a complex multi-step workflow → understand every tool used → build an end-to-end automation that runs with just context + references.***
+
+### The Social Media Manager Story
+
+A social media manager is making a launch video. Watch what she does manually, and then what AutoClawd turns it into.
+
+**She does this manually (every time):**
+
+```
+1. Opens YC's YouTube → finds reference launch videos from successful AI startups
+   Tries to download → YouTube blocks direct download
+
+2. Installs yt-dlp → downloads 3 reference videos to ~/Downloads
+
+3. Tries to upload videos to Claude → error: "I can't process video files"
+   Frustrated. Googles alternative.
+
+4. Finds video2ai → runs `video2ai --web` → uploads videos
+   Gets: frames every 1s + Whisper transcript + Ollama frame analysis
+
+5. Opens Claude → pastes transcript + key frames → asks for content strategy
+   Gets: brand positioning, hook ideas, visual style guide, script structure
+
+6. Opens Canva → builds motion graphic template
+   Tries Remotion (React animations) → exports .mp4
+
+7. Goes to Freepik → generates AI voice from the script
+   Downloads voice.mp3
+
+8. Back in Canva → adds voice layer, manually matches segment lengths to voice
+   Exports final.mp4
+
+9. Uploads to Google Drive → copies shareable link
+
+10. Opens WhatsApp → pastes Drive link into team group
+    Types: "Here's the draft — feedback pls"
+```
+
+**AutoClawd watches this. It identifies 8 capabilities:**
+- `yt-dlp-downloader` (already in skill library)
+- `video2ai-ingest` (NEW — detects new tool, auto-creates SKILL.md)
+- `claude-content-strategy` (already in skill library)
+- `remotion-motion-graphic` (already in skill library)
+- `freepik-ai-voice` (NEW — auto-creates SKILL.md)
+- `ffmpeg-video-assembler` (already in skill library)
+- `gdrive-upload` (already in skill library)
+- `whatsapp-share` (already in skill library)
+
+**WorkflowBuilder sees the sequence → creates "Launch Video" workflow.**
+
+**Next time she needs a launch video:**
+```
+Opens "Launch Video" in My Agents
+  ↓
+WorkflowInputView:
+  References: [youtube.com/ycombinator/...] [upload brand guide PDF]
+  Context: "launch video for AI writing tool, 60s, B2B tone"
+  Project: "Product Launch Q2"
+  → [Run Workflow]
+  ↓
+Step 1/8: yt-dlp-downloader → downloading references...
+Step 2/8: video2ai-ingest → extracting frames + transcript...
+Step 3/8: claude-content-strategy → generating strategy with your brand context...
+Step 4/8: remotion-motion-graphic → building animation from script...
+Step 5/8: freepik-ai-voice → generating voice...
+Step 6/8: ffmpeg-video-assembler → assembling final video...
+Step 7/8: gdrive-upload → uploading → drive.google.com/...
+Step 8/8: whatsapp-share → sent to "Team" group ✓
+```
+
+10-step manual workflow → 1 click + 2 inputs.
+
+### Skill Discovery (Auto-SKILL.md)
+
+When FUCBC encounters a tool AutoClawd hasn't seen before:
+1. OCR detects terminal command or browser URL pointing to unfamiliar tool
+2. Checks `~/.autoclawd/openclaw-skills/` — no matching slug
+3. FUCBC prompt includes: "This appears to be a new tool. Research it, write its SKILL.md, and tag which workflow categories it belongs to."
+4. Claude Code creates `~/.autoclawd/openclaw-skills/{slug}/SKILL.md`
+5. Tags added: `workflowTags: ["video-production", "content-creation", "media"]`
+6. Capability appears in My Agents immediately
+7. WorkflowBuilder knows this capability is available for future workflow assembly
+
+**video2ai** is the first example. It's already built:
+- `video2ai {input.mp4}` — extract frames (every N seconds) + Whisper transcript + Ollama frame analysis
+- `video2ai --web` — local web UI for drag-drop upload + visual review
+- Output: frames dir + transcript.txt + analysis.md + contact sheets
+- **Solves the core problem**: Claude can't read videos → video2ai converts them into what Claude CAN read
+
+### GitHub as the Tool Source
+
+Every tool in AutoClawd's skill library ultimately comes from GitHub — analysed, categorised, and structured into executable SKILL.md files.
+
+When a niche skill is needed that doesn't yet exist:
+```
+FUCBC detects unfamiliar tool from OCR / URL / terminal command
+  │
+  Web search: "{tool name} github" + README analysis
+  │
+  Extract: CLI interface, install method, input/output format, use cases
+  │
+  Claude Code writes: ~/.autoclawd/openclaw-skills/{slug}/SKILL.md
+  │
+  Tags applied: workflowTags, category, requiredTools (pip/brew/npm install)
+  │
+  Skill immediately available for Capability + Workflow assembly
+```
+
+**Pre-curated categories the library covers:**
+- **Video & Audio** — yt-dlp, video2ai, ffmpeg, whisper-cli, freepik-voice
+- **Content & Publishing** — remotion, imagemagick, pandoc, markdownlint, ghost-api
+- **Communication** — whatsapp-baileys, slack-bolt, gmail-send, discord-webhook, sendgrid
+- **Storage & Files** — gdrive-upload, dropbox-api, s3-upload, notion-create, airtable-api
+- **Code & Dev** — gh-cli, linear-api, jira-api, vercel-deploy, railway-api
+- **Data & Research** — firecrawl, playwright-scraper, exa-search, tavily-api, arxiv-fetch
+- **AI & Processing** — ollama-run, claude-code, openai-api, replicate-api, huggingface-cli
+
+The vision: **GitHub is the app store. AutoClawd is the agent that discovers what's on it, installs what's needed, and wires everything together into workflows — automatically.**
+
+### Workflow Data Model
+
+```
+WorkflowRecord
+  ├── id, name, description, emoji
+  ├── steps: [WorkflowStep]
+  │     └── { capabilityID | skillSlug, name, inputMapping, outputKey }
+  ├── inputSpec: WorkflowInputSpec
+  │     ├── references: [{ label, type: url|file|text }]
+  │     ├── contextField: String   ("describe what you need")
+  │     └── projectSelection: Bool
+  └── createdFrom: .observed(sessionID) | .manual
+
+WorkflowContext  (passed between steps at runtime)
+  └── [String: Any]  // "video_paths" → [URL], "strategy" → String, "drive_url" → String
+```
+
+### The Expanding Library
+
+The goal: a rich, pre-loaded library of workflows and capabilities covering every common knowledge-worker pattern — **shipping out of the box, personalised as AutoClawd learns each user**.
+
+Most workflows are pre-created. The user doesn't have to build them from scratch — AutoClawd ships with the common ones, and FUCBC adds new ones specific to each user's actual patterns.
+
+**Content Creation:**
+- Launch Video (as above — 8 capabilities, 1 click)
+- Podcast to Blog Post (audio → transcript → article → SEO → publish)
+- Screenshot to Documentation (screen record → annotated docs → Notion)
+- Tweet Thread from Idea (voice note → thread draft → schedule → post)
+- Newsletter from Conversations (week's transcripts → digest → send)
+
+**Research:**
+- Competitive Analysis (company name → scrape → strategy brief → slide deck)
+- Academic Paper to TL;DR (PDF → structured summary → Notion with key quotes)
+- Market Research (keyword → search + synthesis → formatted report)
+- Person Research (name → LinkedIn + web → briefing before meeting)
+
+**Engineering:**
+- Bug Report to PR (issue description → repo analysis → code fix → PR + description)
+- README from Codebase (repo path → analysis → structured README → commit)
+- Deploy with Announcement (git push → deploy → Slack + Twitter announcement)
+- Code Review Brief (PR URL → diff analysis → summary for non-eng stakeholders)
+
+**Communication:**
+- Meeting to Action Items (audio → transcript → tasks → Notion + Slack + calendar)
+- Email Digest (inbox → prioritise → summarise → WhatsApp briefing)
+- Client Update (project status → tailored email → send + CRM log)
+- Async Standup (voice note → structured update → Slack post + Linear sync)
+
+**Philosophy:** Each workflow is a few user inputs + a chain of skills that already exist. The only thing that changes between users is which workflow they need most — AutoClawd figures that out by watching.
 
 ---
 
