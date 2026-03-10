@@ -5,6 +5,8 @@ import SwiftUI
 
 enum PanelTab: String, CaseIterable, Identifiable {
     case world    = "World"
+    case agents   = "Agents"
+    case canvas   = "Canvas"
     case projects = "Projects"
     case logs     = "Logs"
     case settings = "Settings"
@@ -14,6 +16,8 @@ enum PanelTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .world:    return "globe"
+        case .agents:   return "bolt.fill"
+        case .canvas:   return "brain.head.profile"
         case .projects: return "folder"
         case .logs:     return "doc.text"
         case .settings: return "gearshape"
@@ -52,6 +56,17 @@ struct MainPanelView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 500, minHeight: 400)
+        .onChange(of: appState.pillMode) { newMode in
+            // Auto-navigate to Canvas when Learn mode is activated from the pill
+            if newMode == .learn { selectedTab = .canvas }
+        }
+        .onChange(of: appState.learnModeService.isActive) { active in
+            if active { selectedTab = .canvas }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .capabilityStoreDidChange)) { _ in
+            // Auto-navigate to Agents tab when a new capability is built
+            if selectedTab == .canvas { selectedTab = .agents }
+        }
     }
 
     // MARK: - Content
@@ -74,6 +89,11 @@ struct MainPanelView: View {
                 .opacity(selectedTab == .world && appState.pillMode == .callMode ? 1 : 0)
                 .allowsHitTesting(selectedTab == .world && appState.pillMode == .callMode)
 
+            AgentsView(appState: appState)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selectedTab == .agents ? 1 : 0)
+                .allowsHitTesting(selectedTab == .agents)
+
             ProjectsListView(appState: appState)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(selectedTab == .projects ? 1 : 0)
@@ -88,6 +108,11 @@ struct MainPanelView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(selectedTab == .settings ? 1 : 0)
                 .allowsHitTesting(selectedTab == .settings)
+
+            AICanvasView(learnService: appState.learnModeService)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selectedTab == .canvas ? 1 : 0)
+                .allowsHitTesting(selectedTab == .canvas)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

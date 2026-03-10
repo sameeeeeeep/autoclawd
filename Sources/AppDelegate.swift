@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainPanel: MainPanelWindow?
     private var toastWindow: ToastWindow?
     private var setupWindow: SetupWindow?
+    private var onboardingWindow: OnboardingWindow?
     private var callStreamWidget: CallStreamWidget?
     private var toastDismissWork: DispatchWorkItem?
     private var cancellables = Set<AnyCancellable>()
@@ -66,36 +67,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onHookEvent: { [weak self] event in
                 guard let self else { return }
-                // When Claude Code fires a hook, build a NarrationBundle via Llama and post
-                // a two-sided conversation to the call-room feed:
-                //  1. Claw'd tile — real tool narration (solid border)
-                //  2. Tool participant tile — auto-joined; optional image response
-                //  3. AutoClawd tile — generated reaction comment (dashed/faint border)
-                let room    = self.appState.callRoom
-                let session = self.appState.callModeSession
+                Log.info(.system, "[Hook] Received: \(event.eventName) tool=\(event.toolName ?? "nil")")
 
-                // Ensure Claw'd is in the room (hooks can arrive before MCP initialize).
+                let room      = self.appState.callRoom
+                let session   = self.appState.callModeSession
+                let ttsPlayer = self.appState.ttsPlayer
+
                 room.claudeCodeJoined()
                 room.setState(.thinking, for: "claude-code")
 
                 Task {
                     let bundle = await HookNarrationService().narrate(event)
+                    Log.info(.system, "[Hook] Narration: \(bundle.turns.count) turns, text='\(bundle.narration.prefix(60))'")
+
                     await MainActor.run {
-                        // Auto-join MCP tool participant (e.g. "pencil", "figma")
                         if let tp = bundle.toolParticipant {
                             room.connectionJoined(id: tp.id, name: tp.name, systemImage: tp.systemImage)
                         }
 
-                        // Post Claw'd's real narration (solid left bar)
-                        session.appendParticipantMessage(
-                            id:          "claude-code",
-                            name:        "Claw'd",
-                            text:        bundle.narration,
-                            isGenerated: false
-                        )
+                        if !bundle.turns.isEmpty {
+                            for turn in bundle.turns {
+                                session.appendParticipantMessage(
+                                    id:          turn.speakerID,
+                                    name:        turn.speakerName,
+                                    text:        turn.text,
+                                    isGenerated: turn.isGenerated
+                                )
+                            }
+                        } else {
+                            session.appendParticipantMessage(
+                                id: "claude-code", name: "Claw'd",
+                                text: bundle.narration, isGenerated: false
+                            )
+                            if let reaction = bundle.autoClawdReaction {
+                                session.appendParticipantMessage(
+                                    id: "llama", name: "AutoClawd",
+                                    text: reaction, isGenerated: true
+                                )
+                            }
+                        }
+
                         room.setState(event.isStop ? .idle : .streaming, for: "claude-code")
 
-                        // Post tool response if it includes an image or text
                         if let tp = bundle.toolParticipant {
                             if bundle.imageData != nil || bundle.toolResponseText != nil {
                                 room.setState(.streaming, for: tp.id)
@@ -111,16 +124,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 room.updateLastActivity(id: tp.id)
                             }
                         }
+                    }
 
-                        // Post AutoClawd's generated reaction (dashed/faint left bar)
-                        if let reaction = bundle.autoClawdReaction {
-                            session.appendParticipantMessage(
-                                id:          "llama",
-                                name:        "AutoClawd",
-                                text:        reaction,
-                                isGenerated: true
-                            )
-                        }
+                    // Synthesize TTS outside the MainActor block so it doesn't block UI
+                    let provider = SettingsManager.shared.ttsProvider
+                    Log.info(.system, "[TTS] Provider=\(provider.rawValue), turns=\(bundle.turns.count)")
+                    if provider != .off {
+                        let turnsToSpeak = !bundle.turns.isEmpty
+                            ? bundle.turns
+                            : [NarrationTurn(speakerID: "claude-code", speakerName: "Claw'd", text: bundle.narration, isGenerated: false)]
+                        await self.synthesizeTTS(turns: turnsToSpeak, provider: provider, ttsPlayer: ttsPlayer)
                     }
                 }
             }
@@ -158,17 +171,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         // Show/hide the Call Stream Widget when pill mode changes.
+        // Also start/stop TTS sidecar when entering/leaving call mode.
         appState.$pillMode
             .receive(on: DispatchQueue.main)
             .sink { [weak self] mode in
                 guard let self else { return }
-                if mode == .callMode && SettingsManager.shared.callStreamWidgetEnabled {
-                    self.showCallStreamWidget()
+                Log.info(.system, "[CallMode] pillMode sink fired: \(mode.rawValue)")
+                if mode == .callMode {
+                    if SettingsManager.shared.callStreamWidgetEnabled {
+                        self.showCallStreamWidget()
+                    }
+                    // Start TTS sidecar if using LuxTTS
+                    if SettingsManager.shared.ttsProvider == .luxtts {
+                        Log.info(.system, "[TTS] Starting TTS sidecar (provider=luxtts)")
+                        TTSSidecar.shared.start()
+                    }
                 } else {
                     self.callStreamWidget?.animateOut()
+                    self.appState.ttsPlayer.stopAll()
+                    // Unload model to free RAM when leaving call mode
+                    Task { await TTSService.shared.unloadModel() }
                 }
             }
             .store(in: &cancellables)
+
+        // Also handle the case where the app launches already in call mode
+        // (the $pillMode publisher fires the initial value asynchronously,
+        //  but just in case, explicitly check at startup)
+        if appState.pillMode == .callMode {
+            Log.info(.system, "[CallMode] Launched in call mode — starting sidecar")
+            if SettingsManager.shared.ttsProvider == .luxtts {
+                TTSSidecar.shared.start()
+            }
+        }
     }
 
     // MARK: - Call Stream Widget
@@ -189,7 +224,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         appState.stopListening()
         ClipboardMonitor.shared.stop()
+        TTSSidecar.shared.stop()
         Log.info(.system, "AutoClawd terminating")
+    }
+
+    // MARK: - TTS Synthesis
+
+    /// Synthesize and enqueue TTS audio for each conversation turn.
+    /// LuxTTS: all turns sent in one batch request — different voices synthesize in parallel.
+    /// Apple: sequential (AVSpeechSynthesizer is synchronous).
+    private func synthesizeTTS(turns: [NarrationTurn], provider: TTSProvider, ttsPlayer: TTSPlayer) async {
+        Log.info(.system, "[TTS] synthesizeTTS called: \(turns.count) turns, provider=\(provider.rawValue)")
+
+        switch provider {
+        case .luxtts:
+            let batchTurns = turns.map { turn -> TTSService.BatchTurn in
+                let voiceID = turn.speakerID == "claude-code" ? "clawd" : "autoclawd"
+                Log.info(.system, "[TTS] Queuing voice=\(voiceID) text='\(turn.text.prefix(40))'")
+                return TTSService.BatchTurn(text: turn.text, voiceID: voiceID)
+            }
+            let audioResults = await TTSService.shared.synthesizeBatch(
+                turns: batchTurns,
+                speed: SettingsManager.shared.ttsSpeed
+            )
+            Log.info(.system, "[TTS] Batch returned \(audioResults.compactMap { $0 }.count)/\(turns.count) audio clips")
+            var anyFailed = false
+            for (i, audioData) in audioResults.enumerated() {
+                let turn = turns[i]
+                let voiceID = batchTurns[i].voiceID
+                if let audioData {
+                    Log.info(.system, "[TTS] Turn \(i) (\(voiceID)): \(audioData.count) bytes")
+                    await MainActor.run { ttsPlayer.enqueue(voiceID: voiceID, audioData: audioData) }
+                } else {
+                    anyFailed = true
+                    Log.warn(.system, "[TTS] Turn \(i) (\(voiceID)) failed — falling back to Apple")
+                    await withCheckedContinuation { cont in
+                        AppleTTSService.shared.speak(text: turn.text, voiceID: voiceID) { cont.resume() }
+                    }
+                }
+            }
+            if anyFailed {
+                Log.warn(.system, "[TTS] Some turns fell back to Apple TTS")
+            }
+
+        case .apple:
+            for (i, turn) in turns.enumerated() {
+                let voiceID = turn.speakerID == "claude-code" ? "clawd" : "autoclawd"
+                Log.info(.system, "[TTS] Apple turn \(i): voice=\(voiceID) text='\(turn.text.prefix(40))'")
+                await withCheckedContinuation { cont in
+                    AppleTTSService.shared.speak(text: turn.text, voiceID: voiceID) { cont.resume() }
+                }
+            }
+
+        case .off:
+            break
+        }
+        Log.info(.system, "[TTS] synthesizeTTS complete")
     }
 
     // MARK: - Pill Window
@@ -390,6 +480,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Setup Window
 
     private func showSetupIfNeeded() {
+        // Show onboarding on first launch before any setup
+        if !UserDefaults.standard.bool(forKey: "onboarding_completed") {
+            showOnboardingWindow()
+            return
+        }
+
         // Immediate show if no Groq key
         if SettingsManager.shared.groqAPIKey.isEmpty {
             showSetupWindowSync()
@@ -400,6 +496,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let ollamaOK = await OllamaService().isAvailable()
             if !ollamaOK { showSetupWindowSync() }
         }
+    }
+
+    private func showOnboardingWindow() {
+        guard onboardingWindow == nil else {
+            onboardingWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let win = OnboardingWindow { [weak self] in
+            self?.onboardingWindow?.orderOut(nil)
+            self?.onboardingWindow = nil
+            // After onboarding, proceed to setup if needed
+            self?.showSetupIfNeeded()
+        }
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        onboardingWindow = win
+        Log.info(.ui, "Onboarding window shown")
     }
 
     private func showSetupWindowSync() {
@@ -808,6 +922,15 @@ struct PillContentView: View {
             ))
         }
 
+        // ── FUCBC capability suggestion (Cofia-style "Automate now") ─────────────
+        if let cap = appState.detectedCapability {
+            return AnyView(CapabilitySuggestionCanvasView(
+                capability: cap,
+                onRun:     { appState.executeCapability(cap) },
+                onDismiss: { appState.dismissDetectedCapability() }
+            ))
+        }
+
         // ── Mode-specific state machines ─────────────────────────────────────────
         return modeSpecificCanvas
     }
@@ -852,6 +975,16 @@ struct PillContentView: View {
             return AnyView(v)
         case .callMode:
             let v = CallModeCanvasView(session: appState.callModeSession)
+            return AnyView(v)
+        case .learn:
+            // Learn mode pill shows a minimal waveform indicator;
+            // the full canvas is in the panel's Canvas tab.
+            let v = AmbientCanvasView(
+                cleanedText:  "",
+                pendingText:  "",
+                incomingText: "Learning…",
+                typedText:    typed
+            )
             return AnyView(v)
         }
     }

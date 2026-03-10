@@ -88,6 +88,12 @@ final class AppState: ObservableObject {
             // clearSessionTranscript() is called only on new session start or manual Clear.
             // Mode changes never clear the transcript — text stays visible.
             Log.info(.system, "Pill mode → \(pillMode.rawValue)")
+            // Learn mode: auto-start/stop session when entering/leaving .learn
+            if pillMode == .learn {
+                learnModeService.startSession()
+            } else if oldValue == .learn {
+                learnModeService.stopSession()
+            }
         }
     }
 
@@ -162,6 +168,8 @@ final class AppState: ObservableObject {
     @Published var currentSpeakerID: UUID? = nil
     /// Transient — current song title set by NowPlayingService via Combine; nil when nothing is playing.
     @Published var nowPlayingSongTitle: String? = nil
+    /// Transient — FUCBC auto-trigger: capability detected from screen context (nil = no match).
+    @Published var detectedCapability: Capability? = nil
 
     @Published var locationName: String {
         didSet { UserDefaults.standard.set(locationName, forKey: "autoclawd.locationName") }
@@ -212,6 +220,7 @@ final class AppState: ObservableObject {
     // Call mode state
     let callModeSession = CallModeSession()
     let callRoom = CallRoom()
+    let ttsPlayer = TTSPlayer()
 
     // Code widget state
     @Published var codeWidgetStep: CodeWidgetStep = .projectSelect
@@ -312,6 +321,7 @@ final class AppState: ObservableObject {
     let visualContextSampler = VisualContextSampler()
     let speakerAttributionTracker = SpeakerAttributionTracker()
     let screenVisionAnalyzer = ScreenVisionAnalyzer()
+    let learnModeService = LearnModeService()
 
     // Pipeline v2 services
     let pipelineStore: PipelineStore
@@ -575,6 +585,15 @@ final class AppState: ObservableObject {
 
     func applicationDidFinishLaunching() {
         Log.info(.system, "AutoClawd started. Mode: \(transcriptionMode.rawValue). RAM: (not measured)")
+        // Wire screen analyzer into Learn Mode so it can capture on-demand snapshots
+        learnModeService.screenAnalyzer = screenVisionAnalyzer
+        // Refresh OpenClaw skill cache after FUCBC builds a new capability
+        learnModeService.onCapabilityBuilt = { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.skillStore.refreshOpenClawSkills()
+                self?.refreshSkills()
+            }
+        }
         ClipboardMonitor.shared.start()
         ClipboardMonitor.shared.onTextCopied = { [weak self] text in
             guard let self, self.sessionLifecycle == .active else { return }
@@ -717,7 +736,19 @@ final class AppState: ObservableObject {
             // Run Vision OCR on screen frames (throttled to every 10s internally)
             self?.screenVisionAnalyzer.processFrame(image)
             Task { @MainActor [weak self] in
-                self?.screenPreviewImage = image
+                guard let self else { return }
+                self.screenPreviewImage = image
+                // Forward to Learn Mode service when active
+                if self.learnModeService.isActive {
+                    self.learnModeService.receiveFrame(image)
+                }
+                // FUCBC auto-trigger: check capabilities against current context (~every 30s)
+                let ocrText = self.screenVisionAnalyzer.recentContext() ?? ""
+                if !ocrText.isEmpty {
+                    let app = NSWorkspace.shared.frontmostApplication?.localizedName
+                    let matches = CapabilityStore.shared.suggest(screenText: ocrText, app: app)
+                    self.detectedCapability = matches.first
+                }
             }
         }
         Task {
@@ -1662,6 +1693,90 @@ final class AppState: ObservableObject {
         refreshPipeline()
     }
 
+    // MARK: - Capability Execution
+
+    /// Execute a detected FUCBC capability by running its SKILL.md on the pill canvas.
+    func executeCapability(_ capability: Capability) {
+        detectedCapability = nil
+
+        guard let project = projects.first else {
+            Log.warn(.system, "Execute capability: no project available")
+            return
+        }
+
+        let prompt: String
+        if let skillPath = capability.skillMDPath {
+            prompt = """
+            Read and execute the skill defined in \(skillPath).
+            Capability: \(capability.name) — \(capability.description)
+            """
+        } else {
+            let steps = capability.subWorkflows
+                .enumerated()
+                .map { i, wf in
+                    "\(i + 1). \(wf.name): \(wf.description)" +
+                    (wf.invocation.map { "\n   Run: \($0)" } ?? "")
+                }
+                .joined(separator: "\n")
+            prompt = """
+            Execute capability: \(capability.name)
+            \(capability.description)
+            Steps:
+            \(steps)
+            """
+        }
+
+        let taskID = "CAP-\(String(UUID().uuidString.prefix(8)).uppercased())"
+        let task = PipelineTaskRecord(
+            id: taskID,
+            analysisID: "cap-\(taskID)",
+            title: "\(capability.emoji) \(capability.name)",
+            prompt: prompt,
+            projectID: project.id,
+            projectName: project.name,
+            mode: .auto,
+            status: .ongoing,
+            skillID: nil,
+            workflowID: nil,
+            workflowSteps: capability.subWorkflows.map { $0.name },
+            missingConnection: nil,
+            pendingQuestion: nil,
+            attachmentPaths: [],
+            createdAt: Date()
+        )
+
+        pipelineTasks.insert(task, at: 0)
+
+        codeSessionMessages = []
+        codeIsStreaming = true
+        codeCurrentToolName = nil
+        codeTaskID = taskID
+        codeStepIndex = 0
+        canvasExecutingTask = task
+
+        guard let (session, stream) = claudeCodeRunner.startSession(
+            prompt: prompt, in: project,
+            dangerouslySkipPermissions: true
+        ) else {
+            codeSessionMessages.append(CodeMessage(role: .error, text: "Failed to start Claude CLI"))
+            codeIsStreaming = false
+            canvasExecutingTask = nil
+            return
+        }
+        codeSession = session
+        codeSessionMessages.append(CodeMessage(role: .status, text: "\(capability.emoji) \(capability.name)"))
+
+        codeStreamTask = Task { @MainActor in
+            await processCodeStream(stream)
+        }
+        Log.info(.pipeline, "Capability execution started: \(capability.name) in \(project.name)")
+    }
+
+    /// Clear the detected capability suggestion (user dismissed it).
+    func dismissDetectedCapability() {
+        detectedCapability = nil
+    }
+
     // MARK: - Ambient Review Actions
 
     /// Approve a task directly from the post-session review canvas and stream it on the canvas.
@@ -2083,6 +2198,8 @@ final class AppState: ObservableObject {
                     }
                     self.ambientReview = review
                 }
+                // Forward to Learn Mode so it accumulates transcript context
+                self.learnModeService.addTranscriptChunk(cleanedText)
             }
         }
 

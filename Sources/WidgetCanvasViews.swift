@@ -1609,3 +1609,130 @@ struct TaskExecutionCanvasView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
+
+// MARK: - Capability Suggestion Canvas
+//
+// The Cofia moment — shown on the pill when AutoClawd detects a capability
+// that matches the current screen context. Clean, minimal, two buttons:
+//   [Run now]  → execute the capability via Claude Code
+//   [Not now]  → dismiss for this session
+//
+// Appears as a spring-animated overlay at the bottom of the pill.
+
+struct CapabilitySuggestionCanvasView: View {
+    let capability: Capability
+    let onRun: () -> Void
+    let onDismiss: () -> Void
+
+    @State private var appeared = false
+
+    // "Post to all platforms" → "Posting to all platforms?"
+    private var questionTitle: String {
+        let name = capability.name
+        if name.hasSuffix("?") { return name }
+        return "\(name)?"
+    }
+
+    // Map trigger app names to SF Symbols
+    private func iconForApp(_ app: String) -> String {
+        let l = app.lowercased()
+        switch true {
+        case l.contains("safari"):                        return "safari.fill"
+        case l.contains("chrome"), l.contains("arc"):    return "globe"
+        case l.contains("mail"):                          return "envelope.fill"
+        case l.contains("slack"):                         return "message.fill"
+        case l.contains("notion"):                        return "note.text"
+        case l.contains("github"):                        return "chevron.left.forwardslash.chevron.right"
+        case l.contains("twitter"), l.contains("x.com"): return "bird"
+        case l.contains("threads"):                       return "at.circle.fill"
+        case l.contains("reddit"):                        return "arrow.up.circle.fill"
+        case l.contains("youtube"):                       return "play.rectangle.fill"
+        case l.contains("figma"):                         return "paintbrush.fill"
+        case l.contains("xcode"):                         return "hammer.fill"
+        case l.contains("sheet"), l.contains("excel"):   return "tablecells.fill"
+        case l.contains("word"), l.contains("docs"):      return "doc.text.fill"
+        case l.contains("linear"), l.contains("jira"):   return "checklist"
+        case l.contains("terminal"):                      return "terminal.fill"
+        default:                                          return "app.fill"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer()
+
+            VStack(alignment: .leading, spacing: 10) {
+
+                // App icons + dismiss
+                HStack(spacing: 0) {
+                    HStack(spacing: 5) {
+                        // Up to 4 trigger app icons, or fallback to capability emoji
+                        if capability.triggers.apps.isEmpty {
+                            Text(capability.emoji)
+                                .font(.system(size: 18))
+                        } else {
+                            ForEach(Array(capability.triggers.apps.prefix(4)), id: \.self) { app in
+                                Image(systemName: iconForApp(app))
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.80))
+                                    .frame(width: 24, height: 24)
+                                    .background(Color.white.opacity(0.10))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            }
+                        }
+                    }
+                    Spacer()
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(.white.opacity(0.35))
+                            .frame(width: 18, height: 18)
+                            .background(Color.white.opacity(0.07))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // Hypothesis question + one-liner
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(questionTitle)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.white.opacity(0.92))
+                        .lineLimit(2)
+                    Text("AutoClawd can automate this.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.42))
+                }
+
+                // "Automate Now" — full width, Cofia-style
+                Button(action: onRun) {
+                    Text("Automate Now")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(Color.white.opacity(0.92))
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.black.opacity(0.88))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.white.opacity(0.09), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.5), radius: 24, x: 0, y: 10)
+            )
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+            .scaleEffect(appeared ? 1 : 0.92)
+            .opacity(appeared ? 1 : 0)
+            .animation(.spring(response: 0.38, dampingFraction: 0.72), value: appeared)
+            .onAppear { appeared = true }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
