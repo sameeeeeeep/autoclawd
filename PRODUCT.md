@@ -143,7 +143,7 @@ Bot proactively messages (morning, evening, insights, open questions)
 | Settings: API keys, appearance, autonomous task rules | ✅ | SettingsManager |
 | Native Liquid Glass migration (gated on macOS 26 SDK) | ✅ | `#if NATIVE_GLASS_AVAILABLE` |
 | FUCBC — capability learning from observed screen+voice | ✅ | LearnModeService, story builder, executable SKILL.md |
-| Capability suggestion pill popup (Cofia-style) | ✅ | CapabilitySuggestionCanvasView: "Automate Now?" |
+| Capability suggestion pill popup | ✅ | CapabilitySuggestionCanvasView: "Automate Now?" |
 | OCR auto-trigger: detects matching capability from screen | ✅ | CapabilityStore.suggest() with scoring |
 | "My Agents" panel: grid of built capabilities, one-click run | ✅ | AgentsView, 3-col grid, ▶ Run → streams on canvas |
 | 144+ OpenClaw skills in `~/.autoclawd/openclaw-skills/` | ✅ | yt-dlp, remotion, ffmpeg, github, slack, gdrive, and more |

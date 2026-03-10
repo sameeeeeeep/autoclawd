@@ -174,7 +174,7 @@ AutoClawd's automation system is built in three tiers:
 
 **My Agents panel** — a grid of all capabilities AutoClawd has built. One click runs any of them. Live streaming on the canvas. New agents appear automatically as FUCBC discovers new workflows.
 
-**Pill popup — "Automate Now?"** — when OCR detects you're doing something you've already automated, the pill shows a Cofia-style prompt: the workflow name, the apps involved, and a single button. One tap starts it.
+**Pill popup — "Automate Now?"** — when OCR detects you're doing something you've already automated, the pill surfaces a prompt: the workflow name, the apps involved, and a single button. One tap starts it.
 
 **Skills come from GitHub.** When FUCBC encounters an unfamiliar tool, it web-searches for it, fetches the README, understands its CLI interface, and writes a `SKILL.md` automatically. The skill is immediately available for Capability and Workflow assembly.
 
@@ -450,8 +450,8 @@ Everything lives in `~/.autoclawd/` — SQLite databases and markdown files, ful
 
 **Shipped:**
 - [x] **FUCBC** — capability learning from observed screen+voice; builds executable SKILL.md via Claude Code
-- [x] **My Agents panel** — Cofia-style grid of built capabilities; one-click run → streams live on canvas
-- [x] **Pill popup** — OCR auto-trigger → "Automate Now?" (Cofia-style) with app icon strip
+- [x] **My Agents panel** — grid of built capabilities; one-click run → streams live on canvas
+- [x] **Pill popup** — OCR auto-trigger → "Automate Now?" with app icon strip
 - [x] **144+ OpenClaw skills** — yt-dlp, video2ai, remotion, ffmpeg, gdrive, whatsapp, slack, and more
 - [x] **video2ai** — Python CLI + web UI; converts any .mp4 into frames + Whisper transcript + LLM analysis
 - [x] **Built-in MCP server** (port 7892) — screen/cursor/selection/transcript tools for Claude Code mid-task

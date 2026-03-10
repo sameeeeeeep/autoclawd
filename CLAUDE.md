@@ -225,7 +225,7 @@ If best score ≥ 3: sets `AppState.detectedCapability` → pill shows `Capabili
 
 ### Pill Suggestion Popup (CapabilitySuggestionCanvasView)
 
-Cofia-style "Automate Now?" overlay on the pill widget:
+"Automate Now?" overlay on the pill widget:
 - App icon strip (up to 4 trigger apps, SF Symbol + color-coded)
 - Question-form title: `"Post to all platforms?"`
 - One-liner: `"AutoClawd can automate this."`
@@ -487,7 +487,7 @@ User opens "Launch Video" workflow in Agents panel
 | File | Purpose |
 |------|---------|
 | `LogsPipelineView.swift` | Pipeline stage visualizer (column view) |
-| `AgentsView.swift` | "My Agents" agents grid (Cofia-style Henry's Agents) |
+| `AgentsView.swift` | "My Agents" agents grid — 3-col capability cards, one-click run |
 | `AICanvasView.swift` | Canvas + capabilities grid (Learn Mode / FUCBC) |
 | `SettingsConsolidatedView.swift` | All settings UI |
 | `IntelligenceView.swift` | Intelligence/context dashboard |
@@ -503,7 +503,7 @@ User opens "Launch Video" workflow in Agents panel
 | File | Purpose |
 |------|---------|
 | `WidgetView.swift` | Pill widget root view |
-| `WidgetCanvasViews.swift` | Per-mode canvas content + `CapabilitySuggestionCanvasView` (Cofia-style "Automate Now?") |
+| `WidgetCanvasViews.swift` | Per-mode canvas content + `CapabilitySuggestionCanvasView` ("Automate Now?" popup) |
 | `WidgetPanelViews.swift` | Expanded pill panel views |
 
 ### Integrations & System
