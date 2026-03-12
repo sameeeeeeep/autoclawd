@@ -61,8 +61,7 @@ final class ChunkManager: ObservableObject {
     private var transcriptStore: TranscriptStore?
     private var chunkStartTime: Date?
 
-    var pillMode: PillMode = .ambientIntelligence
-    var pasteService: TranscriptionPasteService?
+    var pillMode: PillMode = .ambient
     var qaService: QAService?
     var qaStore: QAStore?
 
@@ -78,7 +77,6 @@ final class ChunkManager: ObservableObject {
         extractionService: ExtractionService,
         pipelineOrchestrator: PipelineOrchestrator,
         transcriptStore: TranscriptStore,
-        pasteService: TranscriptionPasteService,
         qaService: QAService,
         qaStore: QAStore
     ) {
@@ -86,7 +84,6 @@ final class ChunkManager: ObservableObject {
         self.extractionService     = extractionService
         self.pipelineOrchestrator  = pipelineOrchestrator
         self.transcriptStore       = transcriptStore
-        self.pasteService          = pasteService
         self.qaService             = qaService
         self.qaStore               = qaStore
     }
@@ -164,14 +161,6 @@ final class ChunkManager: ObservableObject {
             Task.detached {
                 await taggingService.tagPeople(sessionID: capturedSID, transcript: fullTranscript)
             }
-            // Also tag people detected by face tracking in this session
-            if let appState = self.appState,
-               appState.cameraEnabled && appState.faceTrackingEnabled {
-                let faces = appState.faceTracker.trackedFaces
-                Task.detached {
-                    taggingService.tagPeopleFromFaces(sessionID: capturedSID, faces: faces)
-                }
-            }
             currentSessionID = nil
         }
         transcriptBuffer.removeAll()
@@ -212,7 +201,6 @@ final class ChunkManager: ObservableObject {
         let capturedPO = pipelineOrchestrator
         let capturedStore = transcriptStore
         let capturedPillMode     = pillMode
-        let capturedPasteService = pasteService
         let capturedQAService    = qaService
         let capturedQAStore      = qaStore
 
@@ -228,7 +216,6 @@ final class ChunkManager: ObservableObject {
                 pipelineOrchestrator: capturedPO,
                 transcriptStore: capturedStore,
                 pillMode: capturedPillMode,
-                pasteService: capturedPasteService,
                 qaService: capturedQAService,
                 qaStore: capturedQAStore
             )
@@ -340,7 +327,6 @@ final class ChunkManager: ObservableObject {
         let capturedPipelineOrchestrator = pipelineOrchestrator
         let capturedTranscriptStore = transcriptStore
         let capturedPillMode = pillMode
-        let capturedPasteService = pasteService
         let capturedQAService = qaService
         let capturedQAStore = qaStore
 
@@ -356,7 +342,6 @@ final class ChunkManager: ObservableObject {
                 pipelineOrchestrator: capturedPipelineOrchestrator,
                 transcriptStore: capturedTranscriptStore,
                 pillMode: capturedPillMode,
-                pasteService: capturedPasteService,
                 qaService: capturedQAService,
                 qaStore: capturedQAStore
             )
@@ -380,7 +365,6 @@ final class ChunkManager: ObservableObject {
         pipelineOrchestrator: PipelineOrchestrator?,
         transcriptStore: TranscriptStore?,
         pillMode: PillMode,
-        pasteService: TranscriptionPasteService?,
         qaService: QAService?,
         qaStore: QAStore?
     ) async {
@@ -457,22 +441,13 @@ final class ChunkManager: ObservableObject {
         }
 
         switch pillMode {
-        case .ambientIntelligence, .transcription, .meeting:
+        case .ambient, .learn:
             // Session model: file transcription IS the raw text — append to canvas immediately.
             // Full pipeline runs at session-end via processSessionEnd().
             await MainActor.run {
                 self.appState?.appendChunkToSession(transcript)
             }
             Log.info(.pipeline, "Chunk \(index) [sess:\(label)]: raw text accumulated (pipeline deferred to session end)")
-
-        case .callMode:
-            // Bypass all Llama stages — send directly to Claude via CallModeSession.
-            let chunk = transcript
-            await MainActor.run {
-                guard let appState = self.appState else { return }
-                Task { await appState.callModeSession.send(text: chunk) }
-            }
-            Log.info(.pipeline, "Chunk \(index) [call]: forwarded to CallModeSession")
 
         case .aiSearch:
             guard let qaService, let qaStore else { break }
@@ -494,6 +469,7 @@ final class ChunkManager: ObservableObject {
             } catch {
                 Log.error(.qa, "QA failed: \(error.localizedDescription)")
             }
+
         }
 
         // Purge old audio

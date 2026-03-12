@@ -13,7 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var toastWindow: ToastWindow?
     private var setupWindow: SetupWindow?
     private var onboardingWindow: OnboardingWindow?
-    private var callStreamWidget: CallStreamWidget?
+    private var statusItem: NSStatusItem?
     private var toastDismissWork: DispatchWorkItem?
     private var cancellables = Set<AnyCancellable>()
 
@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.onShowSetup = { [weak self] in Task { @MainActor in self?.showSetupWindowSync() } }
 
         showPill()
+        setupMenuBarIcon()
 
         // Show first-run setup if dependencies are missing
         showSetupIfNeeded()
@@ -41,117 +42,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MCPServer.shared.start(
             screenGrab: screenGrab,
             transcriptProvider: { [weak self] in self?.appState.liveTranscriptText ?? "" },
-            isPausedProvider:   { [weak self] in !(self?.appState.callRoom.claudeCodeIsActive ?? true) },
-            canvasWriter: { [weak self] text in self?.appState.callModeSession.appendExternalMessage(text) },
-            onJoined: { [weak self] in self?.appState.callRoom.claudeCodeJoined() },
-            onLeft:   { [weak self] in self?.appState.callRoom.claudeCodeLeft() },
-            onInviteParticipant: { [weak self] id, name, icon in
-                self?.appState.callRoom.connectionJoined(id: id, name: name, systemImage: icon)
-            },
-            onSetParticipantState: { [weak self] id, stateStr in
-                guard let room = self?.appState.callRoom else { return }
-                let state: ParticipantState
-                switch stateStr {
-                case "thinking":  state = .thinking
-                case "streaming": state = .streaming
-                case "paused":    state = .paused
-                default:          state = .idle
-                }
-                room.setState(state, for: id)
-            },
-            onParticipantMessage: { [weak self] id, name, text in
-                self?.appState.callModeSession.appendParticipantMessage(id: id, name: name, text: text)
-            },
-            onRemoveParticipant: { [weak self] id in
-                self?.appState.callRoom.remove(id: id)
-            },
-            onHookEvent: { [weak self] event in
-                guard let self else { return }
+            onHookEvent: { event in
                 Log.info(.system, "[Hook] Received: \(event.eventName) tool=\(event.toolName ?? "nil")")
-
-                let room      = self.appState.callRoom
-                let session   = self.appState.callModeSession
-                let ttsPlayer = self.appState.ttsPlayer
-
-                room.claudeCodeJoined()
-                room.setState(.thinking, for: "claude-code")
-
-                Task {
-                    let bundle = await HookNarrationService().narrate(event)
-                    Log.info(.system, "[Hook] Narration: \(bundle.turns.count) turns, text='\(bundle.narration.prefix(60))'")
-
-                    await MainActor.run {
-                        if let tp = bundle.toolParticipant {
-                            room.connectionJoined(id: tp.id, name: tp.name, systemImage: tp.systemImage)
-                        }
-
-                        if !bundle.turns.isEmpty {
-                            for turn in bundle.turns {
-                                session.appendParticipantMessage(
-                                    id:          turn.speakerID,
-                                    name:        turn.speakerName,
-                                    text:        turn.text,
-                                    isGenerated: turn.isGenerated
-                                )
-                            }
-                        } else {
-                            session.appendParticipantMessage(
-                                id: "claude-code", name: "Claw'd",
-                                text: bundle.narration, isGenerated: false
-                            )
-                            if let reaction = bundle.autoClawdReaction {
-                                session.appendParticipantMessage(
-                                    id: "llama", name: "AutoClawd",
-                                    text: reaction, isGenerated: true
-                                )
-                            }
-                        }
-
-                        room.setState(event.isStop ? .idle : .streaming, for: "claude-code")
-
-                        if let tp = bundle.toolParticipant {
-                            if bundle.imageData != nil || bundle.toolResponseText != nil {
-                                room.setState(.streaming, for: tp.id)
-                                session.appendParticipantMessage(
-                                    id:          tp.id,
-                                    name:        tp.name,
-                                    text:        bundle.toolResponseText ?? "",
-                                    imageData:   bundle.imageData,
-                                    isGenerated: false
-                                )
-                                room.setState(.idle, for: tp.id)
-                            } else {
-                                room.updateLastActivity(id: tp.id)
-                            }
-                        }
-                    }
-
-                    // Synthesize TTS outside the MainActor block so it doesn't block UI
-                    let provider = SettingsManager.shared.ttsProvider
-                    Log.info(.system, "[TTS] Provider=\(provider.rawValue), turns=\(bundle.turns.count)")
-                    if provider != .off {
-                        let turnsToSpeak = !bundle.turns.isEmpty
-                            ? bundle.turns
-                            : [NarrationTurn(speakerID: "claude-code", speakerName: "Claw'd", text: bundle.narration, isGenerated: false)]
-                        await self.synthesizeTTS(turns: turnsToSpeak, provider: provider, ttsPlayer: ttsPlayer)
-                    }
-                }
             }
         )
 
         // Auto-register Claude Code hooks so PostToolUse events arrive at /hook.
         MCPConfigManager.writeHooksConfig()
 
-        // Configure call mode session with the same transcript provider.
-        appState.callModeSession.configure(
-            transcriptProvider: { [weak self] in self?.appState.liveTranscriptText ?? "" }
-        )
-
         // Toast window disabled — logs are now shown inline inside the widget.
-        // AutoClawdLogger.toastPublisher
-        //     .receive(on: DispatchQueue.main)
-        //     .sink { [weak self] entry in self?.showToast(entry) }
-        //     .store(in: &cancellables)
+        // Capability suggestion toast — show in top-right when detected
+        appState.$detectedCapability
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] cap in
+                guard let self else { return }
+                if let cap {
+                    self.showCapabilityToast(cap)
+                } else {
+                    self.dismissCapabilityToast()
+                }
+            }
+            .store(in: &cancellables)
 
         // Show/hide pill + toast when setting changes
         appState.$showAmbientWidget
@@ -170,116 +81,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        // Show/hide the Call Stream Widget when pill mode changes.
-        // Also start/stop TTS sidecar when entering/leaving call mode.
-        appState.$pillMode
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] mode in
-                guard let self else { return }
-                Log.info(.system, "[CallMode] pillMode sink fired: \(mode.rawValue)")
-                if mode == .callMode {
-                    if SettingsManager.shared.callStreamWidgetEnabled {
-                        self.showCallStreamWidget()
-                    }
-                    // Start TTS sidecar if using LuxTTS
-                    if SettingsManager.shared.ttsProvider == .luxtts {
-                        Log.info(.system, "[TTS] Starting TTS sidecar (provider=luxtts)")
-                        TTSSidecar.shared.start()
-                    }
-                } else {
-                    self.callStreamWidget?.animateOut()
-                    self.appState.ttsPlayer.stopAll()
-                    // Unload model to free RAM when leaving call mode
-                    Task { await TTSService.shared.unloadModel() }
-                }
-            }
-            .store(in: &cancellables)
-
-        // Also handle the case where the app launches already in call mode
-        // (the $pillMode publisher fires the initial value asynchronously,
-        //  but just in case, explicitly check at startup)
-        if appState.pillMode == .callMode {
-            Log.info(.system, "[CallMode] Launched in call mode — starting sidecar")
-            if SettingsManager.shared.ttsProvider == .luxtts {
-                TTSSidecar.shared.start()
-            }
-        }
-    }
-
-    // MARK: - Call Stream Widget
-
-    private func showCallStreamWidget() {
-        if callStreamWidget == nil {
-            let widget = CallStreamWidget()
-            let view = CallStreamWidgetView(appState: appState) { [weak self] in
-                self?.appState.pillMode = .ambientIntelligence
-                self?.callStreamWidget?.animateOut()
-            }
-            widget.setContent(view)
-            callStreamWidget = widget
-        }
-        callStreamWidget?.animateIn()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         appState.stopListening()
         ClipboardMonitor.shared.stop()
-        TTSSidecar.shared.stop()
         Log.info(.system, "AutoClawd terminating")
-    }
-
-    // MARK: - TTS Synthesis
-
-    /// Synthesize and enqueue TTS audio for each conversation turn.
-    /// LuxTTS: all turns sent in one batch request — different voices synthesize in parallel.
-    /// Apple: sequential (AVSpeechSynthesizer is synchronous).
-    private func synthesizeTTS(turns: [NarrationTurn], provider: TTSProvider, ttsPlayer: TTSPlayer) async {
-        Log.info(.system, "[TTS] synthesizeTTS called: \(turns.count) turns, provider=\(provider.rawValue)")
-
-        switch provider {
-        case .luxtts:
-            let batchTurns = turns.map { turn -> TTSService.BatchTurn in
-                let voiceID = turn.speakerID == "claude-code" ? "clawd" : "autoclawd"
-                Log.info(.system, "[TTS] Queuing voice=\(voiceID) text='\(turn.text.prefix(40))'")
-                return TTSService.BatchTurn(text: turn.text, voiceID: voiceID)
-            }
-            let audioResults = await TTSService.shared.synthesizeBatch(
-                turns: batchTurns,
-                speed: SettingsManager.shared.ttsSpeed
-            )
-            Log.info(.system, "[TTS] Batch returned \(audioResults.compactMap { $0 }.count)/\(turns.count) audio clips")
-            var anyFailed = false
-            for (i, audioData) in audioResults.enumerated() {
-                let turn = turns[i]
-                let voiceID = batchTurns[i].voiceID
-                if let audioData {
-                    Log.info(.system, "[TTS] Turn \(i) (\(voiceID)): \(audioData.count) bytes")
-                    await MainActor.run { ttsPlayer.enqueue(voiceID: voiceID, audioData: audioData) }
-                } else {
-                    anyFailed = true
-                    Log.warn(.system, "[TTS] Turn \(i) (\(voiceID)) failed — falling back to Apple")
-                    await withCheckedContinuation { cont in
-                        AppleTTSService.shared.speak(text: turn.text, voiceID: voiceID) { cont.resume() }
-                    }
-                }
-            }
-            if anyFailed {
-                Log.warn(.system, "[TTS] Some turns fell back to Apple TTS")
-            }
-
-        case .apple:
-            for (i, turn) in turns.enumerated() {
-                let voiceID = turn.speakerID == "claude-code" ? "clawd" : "autoclawd"
-                Log.info(.system, "[TTS] Apple turn \(i): voice=\(voiceID) text='\(turn.text.prefix(40))'")
-                await withCheckedContinuation { cont in
-                    AppleTTSService.shared.speak(text: turn.text, voiceID: voiceID) { cont.resume() }
-                }
-            }
-
-        case .off:
-            break
-        }
-        Log.info(.system, "[TTS] synthesizeTTS complete")
     }
 
     // MARK: - Pill Window
@@ -302,8 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onToggleCode:        { [weak self] in self?.toggleCodeMode() },
             onToggleSpeakerMode: { [weak self] in self?.toggleSpeakerMode() },
             onToggleScreenShare: { [weak self] in self?.toggleScreenShare() },
-            onCollapseChange:    { [weak self] level in self?.pillWindow?.setCollapseLevel(level) },
-            onCameraVisibilityChange: { [weak self] visible in self?.pillWindow?.showsCameraFeed = visible }
+            onCollapseChange:    { [weak self] level in self?.pillWindow?.setCollapseLevel(level) }
         )
         pill.setContent(content)
         pill.menuProvider = { [weak self] in self?.makePillMenu() ?? NSMenu() }
@@ -359,8 +165,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Ambient Mode  ⌃A",    action: #selector(menuAmbient),    keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "AI Search Mode  ⌃S",  action: #selector(menuSearch),     keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Transcribe Mode  ⌃X", action: #selector(menuTranscribe), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Meeting Mode  ⌃D",   action: #selector(menuMeeting),    keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "View Logs",           action: #selector(menuViewLogs),   keyEquivalent: ""))
         menu.addItem(.separator())
@@ -376,46 +180,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func menuOpenPanel()    { showMainPanel() }
     @objc private func menuTogglePause()  { appState.toggleListening() }
     @objc private func menuViewLogs()     { showMainPanel() }
-    @objc private func menuAmbient()      { appState.pillMode = .ambientIntelligence; if !appState.isListening { appState.startListening() } }
-    @objc private func menuSearch()       { appState.pillMode = .aiSearch;            if !appState.isListening { appState.startListening() } }
-    @objc private func menuTranscribe()   { appState.pillMode = .transcription;       if !appState.isListening { appState.startListening() } }
-    @objc private func menuMeeting()      { appState.pillMode = .meeting; if !appState.isListening { appState.startListening() } }
+    @objc private func menuAmbient()      { appState.pillMode = .ambient; if !appState.isListening { appState.startListening() } }
+    @objc private func menuSearch()       { appState.pillMode = .aiSearch; if !appState.isListening { appState.startListening() } }
 
-    // MARK: - Toast
+    // MARK: - Menu Bar Icon
 
-    private func showToast(_ entry: LogEntry) {
+    private func setupMenuBarIcon() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = statusItem?.button {
+            button.image = NSImage(systemSymbolName: "brain.head.profile", accessibilityDescription: "AutoClawd")
+            button.image?.size = NSSize(width: 18, height: 18)
+        }
+
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Open Panel", action: #selector(statusBarOpenPanel), keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Pause Listening", action: #selector(statusBarToggleListening), keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Settings\u{2026}", action: #selector(statusBarOpenSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "Quit AutoClawd", action: #selector(statusBarQuit), keyEquivalent: "q"))
+
+        for item in menu.items {
+            item.target = self
+        }
+        statusItem?.menu = menu
+    }
+
+    @objc private func statusBarOpenPanel() {
+        showMainPanel()
+    }
+
+    @objc private func statusBarToggleListening() {
+        appState.micEnabled.toggle()
+        // Update menu item title to reflect new state
+        if let menu = statusItem?.menu,
+           let item = menu.items.first(where: { $0.action == #selector(statusBarToggleListening) }) {
+            item.title = appState.micEnabled ? "Pause Listening" : "Resume Listening"
+        }
+    }
+
+    @objc private func statusBarOpenSettings() {
+        showMainPanel(tab: .settings)
+    }
+
+    @objc private func statusBarQuit() {
+        NSApp.terminate(nil)
+    }
+
+    // MARK: - Capability Suggestion Toast
+
+    private func showCapabilityToast(_ capability: Capability) {
         guard appState.showToasts else { return }
-        // Cancel any pending dismiss
         toastDismissWork?.cancel()
 
-        // Create window on first use
         if toastWindow == nil {
             toastWindow = ToastWindow()
         }
-        guard let toast = toastWindow, let pill = pillWindow else { return }
+        guard let toast = toastWindow else { return }
 
-        // Update content
-        toast.updateEntry(entry)
+        toast.showCapability(capability,
+            onTap: { [weak self] in
+                guard let self else { return }
+                self.appState.executeCapability(capability)
+                self.dismissCapabilityToast()
+                self.showMainPanel(tab: .agents)
+            },
+            onDismiss: { [weak self] in
+                self?.appState.dismissDetectedCapability()
+            }
+        )
 
-        // Position 8pt below pill
-        let pillFrame = pill.frame
-        toast.setFrameOrigin(NSPoint(
-            x: pillFrame.minX,
-            y: pillFrame.minY - 8 - 36  // 36 = toast height
-        ))
-        toast.orderFront(nil)
-
-        // Schedule auto-dismiss after 3 seconds
+        // Auto-dismiss after 5 seconds
         let work = DispatchWorkItem { [weak self] in
-            self?.toastWindow?.orderOut(nil)
+            self?.appState.dismissDetectedCapability()
         }
         toastDismissWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+    }
+
+    private func dismissCapabilityToast() {
+        toastDismissWork?.cancel()
+        toastWindow?.dismiss()
     }
 
     // MARK: - Main Panel
 
-    func showMainPanel(tab: PanelTab = .world) {
+    func showMainPanel(tab: PanelTab = .agents) {
         if let panel = mainPanel, panel.isVisible {
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -447,16 +297,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else if micStatus == .denied || micStatus == .restricted {
             showMicAlert()
-        }
-
-        // Camera (for gesture control and face tracking — optional)
-        let camStatus = AVCaptureDevice.authorizationStatus(for: .video)
-        if camStatus == .notDetermined {
-            AVCaptureDevice.requestAccess(for: .video) { granted in
-                DispatchQueue.main.async {
-                    Log.info(.system, "Camera permission: \(granted ? "granted" : "denied")")
-                }
-            }
         }
 
         // Speech Recognition (for local transcription mode)
@@ -555,7 +395,6 @@ struct PillContentView: View {
     let onToggleSpeakerMode:  () -> Void
     let onToggleScreenShare:  () -> Void
     let onCollapseChange:     (WidgetCollapseLevel) -> Void
-    let onCameraVisibilityChange: (Bool) -> Void
 
     @State private var isWhatsAppEnabled: Bool = SettingsManager.shared.whatsAppEnabled
 
@@ -566,9 +405,6 @@ struct PillContentView: View {
     @State private var prevTranscript:         String = ""
     @State private var prevQACount:            Int = 0
     @State private var prevTaskCount:          Int = 0
-    /// True while the multi-speaker "who are you with?" prompt is active in the canvas.
-    @State private var showMultiSpeakerPrompt: Bool = false
-
     private static let logTimeFmt: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
@@ -598,7 +434,7 @@ struct PillContentView: View {
             onToggleCode:           onToggleCode,
             onToggleSpeakerMode:    onToggleSpeakerMode,
             onToggleScreenShare:    onToggleScreenShare,
-            onToggleCamera:         { appState.cameraEnabled.toggle() },
+            onToggleCamera:         { },
             onToggleWhatsApp: {
                 SettingsManager.shared.whatsAppEnabled.toggle()
                 isWhatsAppEnabled = SettingsManager.shared.whatsAppEnabled
@@ -626,7 +462,7 @@ struct PillContentView: View {
             isCodeEnabled:          isCodeEnabled,
             isMultiSpeaker:         appState.speakerMode == .multiple,
             isScreenShareEnabled:   appState.systemAudioEnabled,
-            isCameraEnabled:        appState.cameraEnabled,
+            isCameraEnabled:        false,
             isWhatsAppEnabled:      isWhatsAppEnabled,
             sessionLifecycle:       appState.sessionLifecycle,
             logLines:               logLines,
@@ -636,24 +472,9 @@ struct PillContentView: View {
             analysisIdleSubtitle:   analysisIdleSubtitle,
             executionIdleSubtitle:  executionIdleSubtitle,
             canvasSnapshots:        canvasSnapshots,
-            appearance:             widgetAppearance,
-            cameraFeedContent:      cameraFeedView
+            appearance:             widgetAppearance
         )
         .onChange(of: collapseLevel) { level in onCollapseChange(level) }
-        .onChange(of: appState.cameraEnabled) { enabled in
-            let feedVisible = (enabled && appState.cameraService.isRunning) || appState.systemAudioEnabled
-            onCameraVisibilityChange(feedVisible)
-            onCollapseChange(collapseLevel)
-        }
-        .onChange(of: appState.cameraService.isRunning) { running in
-            onCameraVisibilityChange((appState.cameraEnabled && running) || appState.systemAudioEnabled)
-            onCollapseChange(collapseLevel)
-        }
-        .onChange(of: appState.systemAudioEnabled) { enabled in
-            let feedVisible = enabled || (appState.cameraEnabled && appState.cameraService.isRunning)
-            onCameraVisibilityChange(feedVisible)
-            onCollapseChange(collapseLevel)
-        }
         .onChange(of: appState.isAmbientReviewActive) { isActive in
             // Expand pill when the post-session review canvas opens; shrink back when done.
             withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
@@ -714,10 +535,6 @@ struct PillContentView: View {
             canvasSnapshots = Array(([snapshot] + canvasSnapshots).prefix(8))
             prevTaskCount = count
         }
-        // Smart prompt: show multi-speaker "who are you with?" when switching to multi
-        .onChange(of: appState.speakerMode) { mode in
-            showMultiSpeakerPrompt = (mode == .multiple)
-        }
     }
 
     // MARK: - Snapshot helpers (extracted from body to reduce type-checker complexity)
@@ -751,17 +568,8 @@ struct PillContentView: View {
         )
     }
 
-    // MARK: - Camera feed
-
     private var widgetAppearance: WidgetAppearance {
         WidgetAppearance(base: appState.widgetBase, style: appState.widgetStyle)
-    }
-
-    private var cameraFeedView: AnyView? {
-        let cameraOn = appState.cameraEnabled && appState.cameraService.isRunning
-        let screenOn = appState.systemAudioEnabled
-        guard cameraOn || screenOn else { return nil }
-        return AnyView(CameraFeedWidget(appState: appState, appearance: widgetAppearance))
     }
 
     // MARK: - Log dot colour
@@ -848,8 +656,8 @@ struct PillContentView: View {
     // MARK: - Dynamic canvas content  (mode state machine)
     //
     // The canvas is the primary interaction layer. Each mode has multiple states and
-    // the AI can push arbitrary content here. Smart prompts (e.g. multi-speaker)
-    // take priority and temporarily overlay the mode's normal content.
+    // the AI can push arbitrary content here. Priority overlays (session config,
+    // task execution, review) are checked first, then mode-specific content.
 
     private var canvasForCurrentMode: AnyView? {
 
@@ -862,11 +670,6 @@ struct PillContentView: View {
                     style: appState.widgetStyle
                 )
             ))
-        }
-
-        // ── Face linking canvas (auto-triggered or manual) ────────────────────────
-        if appState.showFaceLinkingOverlay {
-            return AnyView(FaceLinkingCanvasView(appState: appState))
         }
 
         // ── Canvas task execution (streams Claude Code output inline) ────────────
@@ -909,20 +712,7 @@ struct PillContentView: View {
             ))
         }
 
-        // ── Smart prompt: multi-speaker "who are you with?" ──────────────────────
-        if showMultiSpeakerPrompt {
-            return AnyView(MultiSpeakerPromptCanvasView(
-                people:      appState.people,
-                onSelect: { person in
-                    appState.currentSpeakerID = person.id
-                    showMultiSpeakerPrompt = false
-                },
-                onAddPerson: onOpenPanel,
-                onSkip:      { showMultiSpeakerPrompt = false }
-            ))
-        }
-
-        // ── FUCBC capability suggestion (Cofia-style "Automate now") ─────────────
+        // ── FUCBC capability suggestion ("Automate now") ──────────────────────────
         if let cap = appState.detectedCapability {
             return AnyView(CapabilitySuggestionCanvasView(
                 capability: cap,
@@ -939,21 +729,11 @@ struct PillContentView: View {
     private var modeSpecificCanvas: AnyView? {
         let typed = typedTextBinding
         switch appState.pillMode {
-        case .ambientIntelligence:
+        case .ambient:
             let v = AmbientCanvasView(
                 cleanedText:  appState.liveTranscriptText,
                 pendingText:  appState.pendingRawSegment,
                 incomingText: appState.latestTranscriptChunk,
-                typedText:    typed
-            )
-            return AnyView(v)
-        case .transcription:
-            let v = TranscriptCanvasView(
-                cleanedText:  appState.liveTranscriptText,
-                pendingText:  appState.pendingRawSegment,
-                incomingText: appState.latestTranscriptChunk,
-                onApply:      { self.appState.applyLatestTranscript() },
-                onClear:      { self.appState.clearSessionTranscript() },
                 typedText:    typed
             )
             return AnyView(v)
@@ -964,17 +744,6 @@ struct PillContentView: View {
                 answer:    item?.answer   ?? "",
                 typedText: typed
             )
-            return AnyView(v)
-        case .meeting:
-            let v = MeetingCanvasView(
-                cleanedText:  appState.liveTranscriptText,
-                pendingText:  appState.pendingRawSegment,
-                incomingText: appState.latestTranscriptChunk,
-                typedText:    typed
-            )
-            return AnyView(v)
-        case .callMode:
-            let v = CallModeCanvasView(session: appState.callModeSession)
             return AnyView(v)
         case .learn:
             // Learn mode pill shows a minimal waveform indicator;

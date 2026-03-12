@@ -3,6 +3,20 @@ import Network
 
 // MARK: - MCPServer
 
+/// Minimal hook event received from Claude Code PostToolUse / Stop hooks.
+struct HookEvent {
+    let eventName: String
+    let toolName: String?
+    let raw: [String: Any]
+
+    static func parse(_ json: [String: Any]) -> HookEvent {
+        let eventName = json["event"] as? String ?? "unknown"
+        let toolName = (json["tool_input"] as? [String: Any])?["tool_name"] as? String
+                     ?? json["tool_name"] as? String
+        return HookEvent(eventName: eventName, toolName: toolName, raw: json)
+    }
+}
+
 /// Embeds a lightweight HTTP MCP server into AutoClawd so any Claude Code session
 /// can call screen-grab tools directly — without a separate process.
 ///
@@ -35,55 +49,18 @@ final class MCPServer: @unchecked Sendable {
     private var screenGrab: ScreenGrabService?
     /// Called on @MainActor — returns the current session transcript text.
     private var transcriptProvider: (@MainActor () -> String)?
-    /// Called on @MainActor — true if Claude Code participant is paused; gates transcript.
-    private var isPausedProvider: (@MainActor () -> Bool)?
-    /// Called on @MainActor — pushes text to the call mode canvas.
-    private var canvasWriter: (@MainActor (String) -> Void)?
-    /// Fired on @MainActor when a Claude Code session calls `initialize`.
-    private var onJoined: (@MainActor () -> Void)?
-    /// Fired on @MainActor when no MCP activity for `leaveTimeoutSeconds`.
-    private var onLeft: (@MainActor () -> Void)?
-    /// Invite a plugin/tool as a call participant: (id, name, systemImage).
-    private var onInviteParticipant: (@MainActor (String, String, String) -> Void)?
-    /// Set a participant's state: (id, stateString).
-    private var onSetParticipantState: (@MainActor (String, String) -> Void)?
-    /// Append a feed message attributed to a participant: (id, name, text).
-    private var onParticipantMessage: (@MainActor (String, String, String) -> Void)?
-    /// Remove a participant from the call: (id).
-    private var onRemoveParticipant: (@MainActor (String) -> Void)?
     /// Fired on @MainActor when a Claude Code hook event arrives on POST /hook.
     private var onHookEvent: (@MainActor (HookEvent) -> Void)?
-
-    /// Last time any MCP request was received from a Claude Code session.
-    private var lastActivityDate: Date?
-    private var leaveTimer: Timer?
-    private let leaveTimeoutSeconds: TimeInterval = 60
 
     // MARK: - Lifecycle
 
     /// Start the server. Idempotent — safe to call multiple times.
     func start(screenGrab: ScreenGrabService,
                transcriptProvider: @escaping @MainActor () -> String,
-               isPausedProvider: (@MainActor () -> Bool)? = nil,
-               canvasWriter: (@MainActor (String) -> Void)? = nil,
-               onJoined: (@MainActor () -> Void)? = nil,
-               onLeft: (@MainActor () -> Void)? = nil,
-               onInviteParticipant: (@MainActor (String, String, String) -> Void)? = nil,
-               onSetParticipantState: (@MainActor (String, String) -> Void)? = nil,
-               onParticipantMessage: (@MainActor (String, String, String) -> Void)? = nil,
-               onRemoveParticipant: (@MainActor (String) -> Void)? = nil,
                onHookEvent: (@MainActor (HookEvent) -> Void)? = nil) {
         guard listener == nil else { return }
         self.screenGrab              = screenGrab
         self.transcriptProvider      = transcriptProvider
-        self.isPausedProvider        = isPausedProvider
-        self.canvasWriter            = canvasWriter
-        self.onJoined                = onJoined
-        self.onLeft                  = onLeft
-        self.onInviteParticipant     = onInviteParticipant
-        self.onSetParticipantState   = onSetParticipantState
-        self.onParticipantMessage    = onParticipantMessage
-        self.onRemoveParticipant     = onRemoveParticipant
         self.onHookEvent             = onHookEvent
 
         do {
@@ -111,29 +88,6 @@ final class MCPServer: @unchecked Sendable {
     func stop() {
         listener?.cancel()
         listener = nil
-        leaveTimer?.invalidate()
-        leaveTimer = nil
-    }
-
-    // MARK: - Activity Tracking
-
-    /// Called on every inbound MCP request so we can detect session disconnection via timeout.
-    private func recordActivity() {
-        lastActivityDate = Date()
-        // Reset the leave timer each time activity is seen.
-        leaveTimer?.invalidate()
-        leaveTimer = Timer.scheduledTimer(withTimeInterval: leaveTimeoutSeconds,
-                                         repeats: false) { [weak self] _ in
-            self?.fireLeft()
-        }
-        RunLoop.main.add(leaveTimer!, forMode: .common)
-    }
-
-    private func fireLeft() {
-        lastActivityDate = nil
-        leaveTimer = nil
-        guard let cb = onLeft else { return }
-        Task { @MainActor in cb() }
     }
 
     // MARK: - Connection Handling
@@ -231,7 +185,7 @@ final class MCPServer: @unchecked Sendable {
         // Claude Code hook events — fired by PostToolUse / Stop hooks
         if path == "/hook" {
             if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
-                let event = HookNarrationService.parse(json)
+                let event = HookEvent.parse(json)
                 if let cb = onHookEvent {
                     Task { @MainActor in cb(event) }
                 }
@@ -257,7 +211,6 @@ final class MCPServer: @unchecked Sendable {
 
         Task { [weak self] in
             guard let self else { return }
-            self.recordActivity()
             let result   = await self.dispatch(method: meth, params: params)
             let response = self.rpcSuccess(id: id, result: result)
             self.sendHTTP(response, connection: connection)
@@ -270,10 +223,6 @@ final class MCPServer: @unchecked Sendable {
         switch method {
 
         case "initialize":
-            // Fire join callback — a Claude Code session just connected.
-            if let cb = onJoined {
-                Task { @MainActor in cb() }
-            }
             return [
                 "protocolVersion": "2024-11-05",
                 "capabilities": ["tools": [:] as [String: Any]],
@@ -359,31 +308,8 @@ final class MCPServer: @unchecked Sendable {
                     ]
                 ] as [String: Any]
             ],
-            [
-                "name": "autoclawd_set_canvas",
-                "description": """
-                    Push a text message to the AutoClawd widget canvas so the user can see it \
-                    on the floating pill. Use this to announce your presence ("Claude Code joined \
-                    the call"), stream responses, or display status updates directly on the widget.
-                    """,
-                "inputSchema": [
-                    "type": "object",
-                    "properties": [
-                        "text": [
-                            "type": "string",
-                            "description": "The message to display on the call mode canvas."
-                        ]
-                    ],
-                    "required": ["text"]
-                ] as [String: Any]
-            ],
         ]
     }
-
-    // NOTE: Participant tile tools (invite/set_state/send_message/remove) are intentionally
-    // NOT exposed via tools/list. Tile management is UI-driven (user taps Invite) or will
-    // be inferred from Claude Code's existing tool-call stream — never by making Claude Code
-    // call extra MCP tools that burn tokens on pure UI bookkeeping.
 
     // MARK: - Tool Execution
 
@@ -430,71 +356,12 @@ final class MCPServer: @unchecked Sendable {
         case "autoclawd_get_audio_transcript":
             let maxChars = args["max_chars"] as? Int ?? 2_000
             let provider  = transcriptProvider
-            let paused    = isPausedProvider
-            let (transcript, isPaused) = await MainActor.run {
-                (provider?() ?? "", paused?() ?? false)
-            }
-            if isPaused {
-                content = [["type": "text",
-                            "text": "Transcript paused — user and AutoClawd are planning. Stand by."]]
-            } else {
-                let trimmed = transcript.count > maxChars
-                    ? String(transcript.suffix(maxChars))
-                    : transcript
-                content = [["type": "text",
-                            "text": trimmed.isEmpty ? "No transcript available." : trimmed]]
-            }
-
-        case "autoclawd_set_canvas":
-            let text = args["text"] as? String ?? ""
-            if !text.isEmpty, let writer = canvasWriter {
-                let w = writer
-                Task { @MainActor in w(text) }
-                content = [["type": "text", "text": "Canvas updated."]]
-            } else {
-                content = [["type": "text", "text": "No text provided or canvas unavailable."]]
-            }
-
-        case "autoclawd_invite_participant":
-            let id    = args["id"]           as? String ?? ""
-            let name  = args["name"]         as? String ?? ""
-            let icon  = args["system_image"] as? String ?? "cable.connector"
-            if !id.isEmpty, let cb = onInviteParticipant {
-                Task { @MainActor in cb(id, name, icon) }
-                content = [["type": "text", "text": "\(name) joined the call."]]
-            } else {
-                content = [["type": "text", "text": "Could not invite participant."]]
-            }
-
-        case "autoclawd_set_participant_state":
-            let id        = args["id"]    as? String ?? ""
-            let stateStr  = args["state"] as? String ?? "idle"
-            if !id.isEmpty, let cb = onSetParticipantState {
-                Task { @MainActor in cb(id, stateStr) }
-                content = [["type": "text", "text": "State updated."]]
-            } else {
-                content = [["type": "text", "text": "Could not update participant state."]]
-            }
-
-        case "autoclawd_send_participant_message":
-            let id   = args["id"]   as? String ?? ""
-            let name = args["name"] as? String ?? ""
-            let text = args["text"] as? String ?? ""
-            if !id.isEmpty, !text.isEmpty, let cb = onParticipantMessage {
-                Task { @MainActor in cb(id, name, text) }
-                content = [["type": "text", "text": "Message posted."]]
-            } else {
-                content = [["type": "text", "text": "Could not post participant message."]]
-            }
-
-        case "autoclawd_remove_participant":
-            let id = args["id"] as? String ?? ""
-            if !id.isEmpty, let cb = onRemoveParticipant {
-                Task { @MainActor in cb(id) }
-                content = [["type": "text", "text": "Participant removed."]]
-            } else {
-                content = [["type": "text", "text": "Could not remove participant."]]
-            }
+            let transcript = await MainActor.run { provider?() ?? "" }
+            let trimmed = transcript.count > maxChars
+                ? String(transcript.suffix(maxChars))
+                : transcript
+            content = [["type": "text",
+                        "text": trimmed.isEmpty ? "No transcript available." : trimmed]]
 
         default:
             content = [["type": "text", "text": "Unknown tool: \(name)"]]

@@ -21,6 +21,7 @@ final class FileStorageManager: @unchecked Sendable {
     let whatsappDirectory: URL
     let whatsappAuthDirectory: URL
     let whatsappMediaDirectory: URL
+    let voicesDirectory: URL
     var pipelineDatabaseURL: URL {
         rootDirectory.appendingPathComponent("pipeline.db")
     }
@@ -37,6 +38,7 @@ final class FileStorageManager: @unchecked Sendable {
         whatsappDirectory = rootDirectory.appendingPathComponent("whatsapp")
         whatsappAuthDirectory = whatsappDirectory.appendingPathComponent("auth")
         whatsappMediaDirectory = whatsappDirectory.appendingPathComponent("media")
+        voicesDirectory = rootDirectory.appendingPathComponent("voices")
         transcriptsDatabaseURL = rootDirectory.appendingPathComponent("transcripts.db")
         worldModelURL = rootDirectory.appendingPathComponent("world-model.md")
         todosURL = rootDirectory.appendingPathComponent("todos.md")
@@ -74,7 +76,8 @@ final class FileStorageManager: @unchecked Sendable {
 
     private func createDirectories() {
         for dir in [rootDirectory, audioDirectory, logsDirectory, skillsDirectory,
-                    whatsappDirectory, whatsappAuthDirectory, whatsappMediaDirectory] {
+                    whatsappDirectory, whatsappAuthDirectory, whatsappMediaDirectory,
+                    voicesDirectory] {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
     }

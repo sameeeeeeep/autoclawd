@@ -77,7 +77,34 @@ struct Skill: Identifiable, Codable {
         checkBinRequirements()
     }
 
+    // Cache to avoid spawning a Process on every SwiftUI view body evaluation
+    private static var commandCache: [String: Bool] = [:]
+    private static let cacheLock = NSLock()
+
     static func commandExists(_ name: String) -> Bool {
+        cacheLock.lock()
+        if let cached = commandCache[name] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        let result = _commandExistsUncached(name)
+
+        cacheLock.lock()
+        commandCache[name] = result
+        cacheLock.unlock()
+        return result
+    }
+
+    /// Call to invalidate the cache (e.g. after installing a new tool).
+    static func invalidateCommandCache() {
+        cacheLock.lock()
+        commandCache.removeAll()
+        cacheLock.unlock()
+    }
+
+    private static func _commandExistsUncached(_ name: String) -> Bool {
         let candidates = [
             "/usr/local/bin/\(name)",
             "/opt/homebrew/bin/\(name)",

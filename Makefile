@@ -72,11 +72,6 @@ $(MACOS_DIR)/$(APP_NAME): $(SOURCES) Info.plist $(ICON_ICNS) $(MCP_BINARY)
 	@plutil -replace CFBundleExecutable -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
 	@plutil -replace CFBundleIdentifier -string "$(BUNDLE_ID)" "$(CONTENTS)/Info.plist"
 	@cp $(ICON_ICNS) "$(RESOURCES)/"
-	@if [ -d "Resources/PixelWorld" ]; then \
-		mkdir -p "$(RESOURCES)/PixelWorld"; \
-		cp -r Resources/PixelWorld/. "$(RESOURCES)/PixelWorld/"; \
-		echo "Bundled PixelWorld web app"; \
-	fi
 	@xattr -cr "$(APP_BUNDLE)" 2>/dev/null || true
 	@codesign --force --sign "$(CODESIGN_IDENTITY)" \
 		--entitlements AutoClawd.entitlements "$(APP_BUNDLE)"

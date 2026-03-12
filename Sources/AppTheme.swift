@@ -58,6 +58,13 @@ enum AppTheme {
     static let cornerRadius:        CGFloat = 8
     static let sidebarWidth:        CGFloat = 200
     static let selectedAccentWidth: CGFloat = 3
+
+    // MARK: Liquid Glass (references Glass tokens from LiquidGlass.swift)
+
+    /// Full-screen dark ambient gradient for glass surfaces.
+    static let glassAmbientBackground = Glass.ambientGradient
+    /// Standard glass card corner radius.
+    static let glassRadius = Glass.radiusMedium
 }
 
 // MARK: - Button Styles

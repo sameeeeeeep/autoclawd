@@ -42,11 +42,16 @@ struct LearnEvent: Codable {
     }
 }
 
-// MARK: - Capability
+// MARK: - Capability (Unified Model)
 
-/// A modular capability built by Claude via the FUCBC skill.
-/// Richer than a simple workflow: has an emoji, category, sub-workflows,
-/// and trigger conditions for auto-detection.
+/// The universal entity for anything AutoClawd can do.
+/// A capability = skill content (SKILL.md or prompt) + triggers (when to suggest) + dependencies (what to install).
+///
+/// Sources:
+///   .openclaw  — parsed from SKILL.md via OpenClawSkillLoader + SkillTagRegistry triggers
+///   .fucbc     — built by FUCBC/LearnModeService
+///   .catalog   — activated from CapabilityCatalog
+///   .builtin   — seeded default execution skills
 struct Capability: Codable, Identifiable {
     let id: String
     let name: String
@@ -55,7 +60,7 @@ struct Capability: Codable, Identifiable {
     let category: CapabilityCategory
     let createdAt: Date
 
-    /// Trigger conditions — used to auto-execute when pattern is detected.
+    /// Trigger conditions — used to auto-suggest when pattern is detected from screen context.
     let triggers: CapabilityTriggers
 
     /// Sub-workflows that make up this capability.
@@ -66,6 +71,164 @@ struct Capability: Codable, Identifiable {
 
     /// Slug used as the OpenClaw skill directory name.
     let slug: String
+
+    // ── Unified fields (absorbed from Skill + SkillTagRegistry + CatalogEntry) ──
+
+    /// Where this capability came from. Defaults to .fucbc for backward compat with existing JSON.
+    var source: CapabilitySource
+
+    /// Dependencies required to run this capability (binaries, env vars, install hints).
+    var dependencies: CapabilityDependencies?
+
+    /// Inline prompt template for Claude Code execution (from Skill.promptTemplate).
+    var promptTemplate: String?
+
+    /// Full markdown instructions from SKILL.md body.
+    var instructions: String?
+
+    /// Tags for WorkflowBuilder matching (e.g. ["video-production", "content-creation"]).
+    var workflowTags: [String]
+
+    /// Whether all dependencies are met and this capability can run.
+    var isAvailable: Bool { dependencies?.isReady ?? true }
+
+    /// Which binaries are missing (empty if all deps met).
+    var missingDeps: [String] { dependencies?.missingBins ?? [] }
+
+    // MARK: - Codable (backward-compatible decoder)
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, emoji, category, createdAt
+        case triggers, subWorkflows, skillMDPath, slug
+        case source, dependencies, promptTemplate, instructions, workflowTags
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        description = try c.decode(String.self, forKey: .description)
+        emoji = try c.decode(String.self, forKey: .emoji)
+        category = try c.decode(CapabilityCategory.self, forKey: .category)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        triggers = try c.decode(CapabilityTriggers.self, forKey: .triggers)
+        subWorkflows = try c.decode([SubWorkflow].self, forKey: .subWorkflows)
+        skillMDPath = try c.decodeIfPresent(String.self, forKey: .skillMDPath)
+        slug = try c.decode(String.self, forKey: .slug)
+        // New fields — graceful defaults for existing JSON without these keys
+        source = try c.decodeIfPresent(CapabilitySource.self, forKey: .source) ?? .fucbc
+        dependencies = try c.decodeIfPresent(CapabilityDependencies.self, forKey: .dependencies)
+        promptTemplate = try c.decodeIfPresent(String.self, forKey: .promptTemplate)
+        instructions = try c.decodeIfPresent(String.self, forKey: .instructions)
+        workflowTags = try c.decodeIfPresent([String].self, forKey: .workflowTags) ?? []
+    }
+
+    /// Full memberwise init for programmatic construction.
+    init(
+        id: String,
+        name: String,
+        description: String,
+        emoji: String,
+        category: CapabilityCategory,
+        createdAt: Date = Date(),
+        triggers: CapabilityTriggers,
+        subWorkflows: [SubWorkflow] = [],
+        skillMDPath: String? = nil,
+        slug: String,
+        source: CapabilitySource = .fucbc,
+        dependencies: CapabilityDependencies? = nil,
+        promptTemplate: String? = nil,
+        instructions: String? = nil,
+        workflowTags: [String] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.emoji = emoji
+        self.category = category
+        self.createdAt = createdAt
+        self.triggers = triggers
+        self.subWorkflows = subWorkflows
+        self.skillMDPath = skillMDPath
+        self.slug = slug
+        self.source = source
+        self.dependencies = dependencies
+        self.promptTemplate = promptTemplate
+        self.instructions = instructions
+        self.workflowTags = workflowTags
+    }
+}
+
+// MARK: - Capability Source
+
+enum CapabilitySource: String, Codable {
+    case openclaw       // parsed from SKILL.md via OpenClawSkillLoader
+    case fucbc          // built by FUCBC/LearnModeService
+    case catalog        // activated from CapabilityCatalog
+    case builtin        // seeded default execution skill
+}
+
+// MARK: - Capability Dependencies
+
+/// Tracks what needs to be installed for a capability to run.
+struct CapabilityDependencies: Codable {
+    let requiredBins: [String]          // binaries needed on PATH (e.g. ["ffmpeg", "yt-dlp"])
+    let envVars: [String: String]       // environment variables to inject
+    let installHint: InstallHint?       // how to install (for one-click activation)
+
+    /// All required binaries are available on this machine.
+    var isReady: Bool {
+        guard !requiredBins.isEmpty else { return true }
+        return requiredBins.allSatisfy { Skill.commandExists($0) }
+    }
+
+    /// Binaries that are not currently installed.
+    var missingBins: [String] {
+        requiredBins.filter { !Skill.commandExists($0) }
+    }
+
+    init(requiredBins: [String] = [], envVars: [String: String] = [:], installHint: InstallHint? = nil) {
+        self.requiredBins = requiredBins
+        self.envVars = envVars
+        self.installHint = installHint
+    }
+}
+
+// MARK: - Install Hint
+
+/// Codable-friendly install method record. Maps to CatalogEntry.InstallMethod but is persistable.
+struct InstallHint: Codable {
+    let type: String        // "brew", "brewTap", "pip", "npm", "go", "cargo", "manual", "builtIn"
+    let argument: String?   // formula/package name
+    let tap: String?        // for brewTap only
+
+    /// Shell command to install (nil for manual/builtIn).
+    var command: String? {
+        switch type {
+        case "brew":    return argument.map { "brew install \($0)" }
+        case "brewTap": return [tap, argument].compactMap { $0 }.isEmpty ? nil :
+                               "brew tap \(tap ?? "") && brew install \(argument ?? "")"
+        case "pip":     return argument.map { "pip3 install \($0)" }
+        case "npm":     return argument.map { "npm install -g \($0)" }
+        case "go":      return argument.map { "go install \($0)" }
+        case "cargo":   return argument.map { "cargo install \($0)" }
+        default:        return nil
+        }
+    }
+
+    /// Human-friendly label for the install method.
+    var label: String {
+        switch type {
+        case "brew", "brewTap": return "Homebrew"
+        case "pip":     return "pip"
+        case "npm":     return "npm"
+        case "go":      return "Go"
+        case "cargo":   return "Cargo"
+        case "manual":  return "Manual"
+        case "builtIn": return "Built-in"
+        default:        return type
+        }
+    }
 }
 
 // MARK: - Capability Category
@@ -77,6 +240,11 @@ enum CapabilityCategory: String, Codable, CaseIterable {
     case development   = "development"
     case discovery     = "discovery"
     case organization  = "organization"
+    case creative      = "creative"
+    case search        = "search"
+    case analysis      = "analysis"
+    case marketing     = "marketing"
+    case system        = "system"
 
     var label: String {
         switch self {
@@ -86,6 +254,11 @@ enum CapabilityCategory: String, Codable, CaseIterable {
         case .development:   return "Development"
         case .discovery:     return "Discovery"
         case .organization:  return "Organization"
+        case .creative:      return "Creative"
+        case .search:        return "Search"
+        case .analysis:      return "Analysis"
+        case .marketing:     return "Marketing"
+        case .system:        return "System"
         }
     }
 
@@ -97,6 +270,11 @@ enum CapabilityCategory: String, Codable, CaseIterable {
         case .development:   return "terminal.fill"
         case .discovery:     return "sparkles"
         case .organization:  return "folder.fill"
+        case .creative:      return "paintbrush.fill"
+        case .search:        return "globe"
+        case .analysis:      return "chart.bar.fill"
+        case .marketing:     return "megaphone.fill"
+        case .system:        return "wrench.and.screwdriver.fill"
         }
     }
 }

@@ -3,14 +3,6 @@ import Combine
 import Foundation
 import SwiftUI
 
-// MARK: - FeedViewMode
-
-/// Which source is shown in the camera/screen feed area.
-enum FeedViewMode: String {
-    case camera
-    case screen
-}
-
 // MARK: - ExecutionMode
 
 enum ExecutionMode: String, CaseIterable {
@@ -217,11 +209,6 @@ final class AppState: ObservableObject {
     @Published var sessionLifecycle: SessionLifecycleState = .undefined
     @Published var sessionConfig: SessionConfig?
 
-    // Call mode state
-    let callModeSession = CallModeSession()
-    let callRoom = CallRoom()
-    let ttsPlayer = TTSPlayer()
-
     // Code widget state
     @Published var codeWidgetStep: CodeWidgetStep = .projectSelect
     @Published var codeSelectedProject: Project? = nil
@@ -242,29 +229,9 @@ final class AppState: ObservableObject {
         }
     }
     @Published var systemAudioLevel: Float = 0
-    @Published var screenPreviewImage: CGImage? = nil
     /// Most recent on-demand screen snapshot (set by captureScreenNow / captureWithSelectionNow).
     @Published var lastScreenSnapshot: ScreenSnapshot? = nil
-    @Published var feedViewMode: FeedViewMode = .camera
 
-    // Camera & gesture state
-    @Published var cameraEnabled: Bool {
-        didSet {
-            SettingsManager.shared.cameraEnabled = cameraEnabled
-            if cameraEnabled { startCamera() } else { stopCamera() }
-        }
-    }
-    @Published var gestureControlEnabled: Bool {
-        didSet { SettingsManager.shared.gestureControlEnabled = gestureControlEnabled }
-    }
-    @Published var faceTrackingEnabled: Bool {
-        didSet { SettingsManager.shared.faceTrackingEnabled = faceTrackingEnabled }
-    }
-    @Published var detectedFaceCount: Int = 0
-    @Published var lastConfirmedGesture: HandGestureRecognizer.Gesture? = nil
-    @Published var showOptionSelector: Bool = false
-    @Published var availableOptions: [String] = []
-    @Published var showFaceLinkingOverlay: Bool = false
     @Published var showSessionProjectPicker: Bool = false
     @Published var showCleaningPicker: Bool = false
     @Published var cleaningResults: [CleaningLevel: String] = [:]
@@ -280,12 +247,17 @@ final class AppState: ObservableObject {
     /// Non-nil while a pipeline task is streaming on the pill canvas.
     /// Execution output is delivered via the existing codeSessionMessages / codeIsStreaming machinery.
     @Published var canvasExecutingTask: PipelineTaskRecord? = nil
-    private var onOptionSelected: ((Int) -> Void)?
-    private var faceLinkingQueue: [FaceTracker.TrackedFace] = []
-    @Published private(set) var faceLinkingIndex: Int = 0
-    private var dismissedFaceTrackIDs: Set<UUID> = []
-    private var lastAutoFaceLinkingTime: Date = .distantPast
-    private let autoFaceLinkingCooldown: TimeInterval = 5.0
+
+    // MARK: - Workflow Execution State
+    /// Non-nil while a workflow is executing.
+    @Published var executingWorkflow: WorkflowRecord? = nil
+    @Published var workflowStepLogs: [WorkflowStepLog] = []
+    @Published var workflowCurrentStep: Int = 0
+    @Published var workflowTotalSteps: Int = 0
+    @Published var workflowStepText: String = ""
+    let workflowExecutor = WorkflowExecutor()
+    let workflowBuilder = WorkflowBuilder()
+    private var workflowTask: Task<Void, Never>? = nil
 
     // WhatsApp state
     @Published var whatsAppStatus: WhatsAppStatus = .disconnected
@@ -309,17 +281,10 @@ final class AppState: ObservableObject {
     let extractionStore: ExtractionStore
     private let extractionService: ExtractionService
     private let cleanupService: CleanupService
-    private let pasteService: TranscriptionPasteService
     private(set) var qaService: QAService
     let qaStore: QAStore
     let claudeCodeRunner = ClaudeCodeRunner()
 
-    // Camera services
-    let cameraService = CameraService()
-    let handGestureRecognizer = HandGestureRecognizer()
-    let faceTracker = FaceTracker()
-    let visualContextSampler = VisualContextSampler()
-    let speakerAttributionTracker = SpeakerAttributionTracker()
     let screenVisionAnalyzer = ScreenVisionAnalyzer()
     let learnModeService = LearnModeService()
 
@@ -393,14 +358,11 @@ final class AppState: ObservableObject {
         speakerMode            = SpeakerMode(rawValue: settings.speakerMode) ?? .single
         musicModeEnabled       = settings.musicModeEnabled
         systemAudioEnabled     = settings.systemAudioEnabled
-        cameraEnabled          = settings.cameraEnabled
-        gestureControlEnabled  = settings.gestureControlEnabled
-        faceTrackingEnabled    = settings.faceTrackingEnabled
         self.people       = AppState.init_loadPeople()
         self.locationName = UserDefaults.standard.string(forKey: "autoclawd.locationName") ?? "My Room"
 
         let savedMode = UserDefaults.standard.string(forKey: "pillMode")
-            .flatMap { PillMode(rawValue: $0) } ?? .ambientIntelligence
+            .flatMap { PillMode(rawValue: $0) } ?? .ambient
         pillMode = savedMode
 
         transcriptStore = TranscriptStore(url: FileStorageManager.shared.transcriptsDatabaseURL)
@@ -426,7 +388,6 @@ final class AppState: ObservableObject {
             store: exStore,
             cleanup: cleanupSvc
         )
-        pasteService = TranscriptionPasteService()
         qaService    = QAService(ollama: OllamaService())
         qaStore      = QAStore()
         chunkManager = ChunkManager()
@@ -529,56 +490,6 @@ final class AppState: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Wire camera frame handlers → gesture recognizer + face tracker + visual context sampler
-        cameraService.onFrame = { [weak self] sampleBuffer in
-            guard let self else { return }
-            if self.gestureControlEnabled {
-                self.handGestureRecognizer.processFrame(sampleBuffer)
-            }
-            if self.faceTrackingEnabled {
-                self.faceTracker.isAudioActive = self.audioLevel > 0.01
-                self.faceTracker.processFrame(sampleBuffer)
-            }
-            // VisualContextSampler is internally throttled — safe to call every frame
-            if self.sessionLifecycle == .active {
-                self.visualContextSampler.processFrame(
-                    sampleBuffer, personCount: self.faceTracker.faceCount
-                )
-            }
-        }
-
-        // Wire gesture callbacks → session control + option selection
-        handGestureRecognizer.holdThreshold = settings.gestureHoldDuration
-        handGestureRecognizer.onGestureConfirmed = { [weak self] gesture in
-            Task { @MainActor [weak self] in
-                self?.handleGesture(gesture)
-            }
-        }
-
-        // Wire face tracker → speaker tagging + face count + attribution log
-        faceTracker.onSpeakerChanged = { [weak self] personID in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                if let personID {
-                    self.currentSpeakerID = personID
-                }
-                // Log speaker change for session-end attribution
-                let name = personID.flatMap { id in self.people.first(where: { $0.id == id })?.name }
-                self.speakerAttributionTracker.logSpeakerChange(personID: personID, name: name)
-            }
-        }
-        faceTracker.onFaceCountChanged = { [weak self] count in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.detectedFaceCount = count
-                self.syncAvatarSeedsFromFaces()
-                // Delay the mapping prompt by 2s — combined with the 5s FaceTracker stability
-                // threshold this gives a 7s total window before asking the user to identify a face.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                    self?.checkForUnlinkedFaces()
-                }
-            }
-        }
     }
 
     // MARK: - Lifecycle
@@ -594,6 +505,8 @@ final class AppState: ObservableObject {
                 self?.refreshSkills()
             }
         }
+        // Seed pre-built workflows on first run
+        WorkflowStore.shared.seedPrebuiltWorkflowsIfNeeded()
         ClipboardMonitor.shared.start()
         ClipboardMonitor.shared.onTextCopied = { [weak self] text in
             guard let self, self.sessionLifecycle == .active else { return }
@@ -617,7 +530,7 @@ final class AppState: ObservableObject {
         hotkeys.onAmbientMode = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                self.pillMode = .ambientIntelligence
+                self.pillMode = .ambient
                 if !self.isListening { self.startListening() }
             }
         }
@@ -625,20 +538,6 @@ final class AppState: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.pillMode = .aiSearch
-                if !self.isListening { self.startListening() }
-            }
-        }
-        hotkeys.onTranscribeMode = { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                self.pillMode = .transcription
-                if !self.isListening { self.startListening() }
-            }
-        }
-        hotkeys.onCodeMode = { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                self.pillMode = .meeting
                 if !self.isListening { self.startListening() }
             }
         }
@@ -654,15 +553,6 @@ final class AppState: ObservableObject {
         // Start WhatsApp if previously connected
         if SettingsManager.shared.whatsAppEnabled {
             startWhatsApp()
-        }
-
-        // Wire face embedding store → cross-session face recognition
-        faceTracker.embeddingStore = FaceEmbeddingStore.shared
-        faceTracker.loadStoredEmbeddings()
-
-        // Start camera if enabled
-        if cameraEnabled {
-            startCamera()
         }
 
         // Start system audio if enabled
@@ -737,12 +627,11 @@ final class AppState: ObservableObject {
             self?.screenVisionAnalyzer.processFrame(image)
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.screenPreviewImage = image
                 // Forward to Learn Mode service when active
                 if self.learnModeService.isActive {
                     self.learnModeService.receiveFrame(image)
                 }
-                // FUCBC auto-trigger: check capabilities against current context (~every 30s)
+                // FUCBC auto-trigger: unified capability detection from all sources (~every 30s)
                 let ocrText = self.screenVisionAnalyzer.recentContext() ?? ""
                 if !ocrText.isEmpty {
                     let app = NSWorkspace.shared.frontmostApplication?.localizedName
@@ -761,10 +650,6 @@ final class AppState: ObservableObject {
                         self?.systemAudioLevel = level
                     }
                     .store(in: &cancellables)
-                // Auto-switch feed to screen if camera is off
-                if !cameraEnabled {
-                    feedViewMode = .screen
-                }
                 Log.info(.audio, "System audio started")
             } catch {
                 Log.error(.audio, "System audio failed to start: \(error.localizedDescription)")
@@ -775,223 +660,11 @@ final class AppState: ObservableObject {
 
     func stopSystemAudio() {
         chunkManager.disableSystemAudio()
-        screenPreviewImage = nil
         systemAudioLevel = 0
-        // Switch feed back to camera if camera is on
-        if cameraEnabled {
-            feedViewMode = .camera
-        }
         Log.info(.audio, "System audio stopped")
     }
 
-    // MARK: - Camera Control
-
-    func startCamera() {
-        guard cameraEnabled else { return }
-        let fps = SettingsManager.shared.cameraAnalysisFPS
-        cameraService.minFrameInterval = fps > 0 ? 1.0 / Double(fps) : 0.125
-        do {
-            try cameraService.start()
-            Log.info(.camera, "Camera started")
-        } catch {
-            Log.error(.camera, "Camera failed to start: \(error.localizedDescription)")
-        }
-    }
-
-    func stopCamera() {
-        cameraService.stop()
-        detectedFaceCount = 0
-        Log.info(.camera, "Camera stopped")
-    }
-
-    private func handleGesture(_ gesture: HandGestureRecognizer.Gesture) {
-        lastConfirmedGesture = gesture
-
-        switch gesture {
-        case .rightSpreadOpen:
-            // Toggle session start/pause — fingers apart = start if not running, pause if active, resume if paused
-            // Project is NOT selected at session start — it's assigned at session end during review.
-            switch sessionLifecycle {
-            case .undefined:
-                startUserSession(config: SessionConfig())
-            case .paused:
-                resumeUserSession()
-            case .active:
-                pauseUserSession()
-            default:
-                break
-            }
-            Log.info(.camera, "Gesture: toggle start/pause (right spread) → lifecycle: \(sessionLifecycle)")
-
-        case .rightThumbIndexOpen:
-            // Thumb + index open (L-shape) → session done / dismiss overlays
-            if showCleaningPicker {
-                showCleaningPicker = false
-                Log.info(.camera, "Gesture: dismissed cleaning picker (thumb+index)")
-            } else if showSessionProjectPicker {
-                showSessionProjectPicker = false
-                Log.info(.camera, "Gesture: dismissed project picker (thumb+index)")
-            } else if showFaceLinkingOverlay {
-                for i in faceLinkingIndex..<faceLinkingQueue.count {
-                    dismissedFaceTrackIDs.insert(faceLinkingQueue[i].id)
-                }
-                showFaceLinkingOverlay = false
-                Log.info(.camera, "Gesture: dismissed face linking (thumb+index)")
-            } else if let review = ambientReview, review.phase == .tasksReady {
-                approveAllReviewTasks()
-                Log.info(.camera, "Gesture: approve all review tasks (thumb+index)")
-            } else if ambientReview?.phase == .done {
-                dismissAmbientReview()
-                Log.info(.camera, "Gesture: dismiss done review (thumb+index)")
-            } else {
-                switch sessionLifecycle {
-                case .active, .paused:
-                    stopUserSession()
-                default:
-                    break
-                }
-                Log.info(.camera, "Gesture: session done (thumb+index) → lifecycle: \(sessionLifecycle)")
-            }
-
-        case .rightPinchClosed:
-            // Dismiss project picker without starting (reserved)
-            if showSessionProjectPicker {
-                showSessionProjectPicker = false
-                Log.info(.camera, "Gesture: dismissed project picker (pinch)")
-            }
-
-        case .rightThumbsUp:
-            // Reserved — no action assigned
-            Log.info(.camera, "Gesture: thumbs up (reserved)")
-
-        case .leftFingerCount(let count):
-            if showCleaningPicker {
-                if let level = CleaningLevel.fromIndex(count) {
-                    selectCleaningLevel(level)
-                }
-                Log.info(.camera, "Gesture: cleaning level \(count) selected")
-            } else if showSessionProjectPicker {
-                selectSessionProject(index: count)
-                Log.info(.camera, "Gesture: session project \(count) selected")
-            } else if showFaceLinkingOverlay {
-                advanceFaceLinking(selectedOption: count)
-                Log.info(.camera, "Gesture: face linking option \(count) selected")
-            } else if ambientReview != nil {
-                // Select project during review: 0 = None, 1..N = project by position
-                selectReviewProjectByIndex(count)
-                Log.info(.camera, "Gesture: review project index \(count) selected")
-            } else if pillMode == .callMode {
-                // In call mode, finger count addresses a participant
-                callRoom.selectByGesture(fingerCount: count)
-                Log.info(.camera, "Gesture: call mode participant \(count) selected")
-            } else if showOptionSelector {
-                selectOption(index: count)
-                Log.info(.camera, "Gesture: option \(count) selected (left fingers)")
-            } else if sessionLifecycle == .undefined || sessionLifecycle == .ready {
-                // No session, no question — switch pill mode with fingers 1-5
-                switchModeByGesture(index: count)
-                Log.info(.camera, "Gesture: mode switch to index \(count)")
-            } else {
-                selectOption(index: count)
-                Log.info(.camera, "Gesture: option \(count) selected (left fingers)")
-            }
-        }
-
-        // Clear gesture indicator after 1.5s
-        Task {
-            try? await Task.sleep(for: .seconds(1.5))
-            await MainActor.run {
-                if self.lastConfirmedGesture == gesture {
-                    self.lastConfirmedGesture = nil
-                }
-            }
-        }
-    }
-
-    /// Select an option from the currently presented choices via finger count.
-    func selectOption(index: Int) {
-        guard showOptionSelector, index >= 1, index <= availableOptions.count else { return }
-        onOptionSelected?(index)
-        showOptionSelector = false
-        availableOptions = []
-        onOptionSelected = nil
-    }
-
-    /// Present multi-choice options for gesture-based selection.
-    /// The user raises their left hand with N fingers to pick option N.
-    func presentOptions(_ options: [String], onSelect: @escaping (Int) -> Void) {
-        availableOptions = Array(options.prefix(5))  // max 5 (one hand)
-        showOptionSelector = true
-        onOptionSelected = onSelect
-    }
-
-    // MARK: - Face Linking
-
-    /// Start the face-to-person linking flow. Walks through each tracked face
-    /// and presents the people list as options for gesture-based assignment.
-    func presentFaceLinkingOptions() {
-        let faces = faceTracker.trackedFaces
-        guard !faces.isEmpty else { return }
-        faceLinkingQueue = faces
-        faceLinkingIndex = 0
-        showFaceLinkingOverlay = true
-    }
-
-    /// Assign a person to the current face and advance to the next.
-    /// `selectedOption` is 1-based (matches left-hand finger count).
-    func advanceFaceLinking(selectedOption: Int) {
-        guard faceLinkingIndex < faceLinkingQueue.count else {
-            showFaceLinkingOverlay = false
-            syncAvatarSeedsFromFaces()
-            return
-        }
-
-        let face = faceLinkingQueue[faceLinkingIndex]
-        let nonSpecialPeople = people.filter { !$0.isMusic }
-        guard selectedOption >= 1, selectedOption <= nonSpecialPeople.count else { return }
-
-        let person = nonSpecialPeople[selectedOption - 1]
-        faceTracker.assignPerson(trackID: face.id, personID: person.id, personName: person.name)
-        Log.info(.camera, "Linked \(face.label) → \(person.name)")
-        faceLinkingIndex += 1
-
-        if faceLinkingIndex >= faceLinkingQueue.count {
-            showFaceLinkingOverlay = false
-            syncAvatarSeedsFromFaces()
-        }
-    }
-
-    /// Auto-detect new unlinked faces and trigger face linking on the canvas.
-    /// Called from `onFaceCountChanged` handler — triggers during active sessions
-    /// or when idle (no session) so users can link faces anytime camera is on.
-    private func checkForUnlinkedFaces() {
-        // Allow during active session OR when idle (no session, no overlays)
-        guard !showFaceLinkingOverlay else { return }
-        guard !showSessionProjectPicker else { return }
-        guard !showCleaningPicker else { return }
-
-        let now = Date()
-        guard now.timeIntervalSince(lastAutoFaceLinkingTime) >= autoFaceLinkingCooldown else { return }
-
-        let unlinkedFaces = faceTracker.trackedFaces.filter { face in
-            face.assignedPersonID == nil && !dismissedFaceTrackIDs.contains(face.id)
-        }
-        guard !unlinkedFaces.isEmpty else { return }
-
-        let linkablePeople = people.filter { !$0.isMusic }
-        guard !linkablePeople.isEmpty else {
-            Log.info(.camera, "Unlinked face(s) detected but no linkable people exist — skipping")
-            return
-        }
-
-        lastAutoFaceLinkingTime = now
-        faceLinkingQueue = unlinkedFaces
-        faceLinkingIndex = 0
-        showFaceLinkingOverlay = true
-        Log.info(.camera, "Auto-triggered face linking for \(unlinkedFaces.count) unlinked face(s)")
-    }
-
-    /// Select a project from the session project picker (gesture-based, 1-indexed).
+    /// Select a project from the session project picker (1-indexed).
     func selectSessionProject(index: Int) {
         let available = Array(projects.prefix(5))
         guard index >= 1, index <= available.count else { return }
@@ -1002,26 +675,8 @@ final class AppState: ObservableObject {
         startUserSession(config: config)
     }
 
-    /// Switch pill mode via left-hand gesture (1-5) when idle.
-    private func switchModeByGesture(index: Int) {
-        let modes: [PillMode] = [.ambientIntelligence, .transcription, .aiSearch, .meeting]
-        guard index >= 1, index <= modes.count else { return }
-        pillMode = modes[index - 1]
-    }
-
     func cyclePillMode() {
         pillMode = pillMode.next()
-    }
-
-    /// Paste the full accumulated transcript (cleaned + any pending raw) into the active text field.
-    func applyLatestTranscript() {
-        var parts: [String] = []
-        if !liveTranscriptText.isEmpty { parts.append(liveTranscriptText) }
-        if !pendingRawSegment.isEmpty  { parts.append(pendingRawSegment)  }
-        if parts.isEmpty && !latestTranscriptChunk.isEmpty { parts.append(latestTranscriptChunk) }
-        let text = parts.joined(separator: " ")
-        guard !text.isEmpty else { return }
-        pasteService.paste(text: text)
     }
 
     /// Replace live transcript with the cleaned version from the pipeline.
@@ -1061,14 +716,13 @@ final class AppState: ObservableObject {
 
     /// Open the session config panel.
     func configureSession() {
-        // Ambient + transcription: skip the start-of-session project picker.
+        // Ambient mode: skip the start-of-session project picker.
         // Ambient sessions show a review canvas at the END with project assignment.
-        // Transcription sessions rely on the LLM auto-guessing the project silently.
-        if pillMode == .ambientIntelligence || pillMode == .transcription {
+        if pillMode == .ambient {
             startUserSession(config: SessionConfig())
             return
         }
-        // Tasks / Code / other modes: keep the existing config panel.
+        // Other modes: keep the existing config panel.
         sessionLifecycle = .configuring
         sessionConfig = SessionConfig()
     }
@@ -1090,14 +744,12 @@ final class AppState: ObservableObject {
         ambientReview = nil
         showSessionProjectPicker = false
 
-        // Derive pill mode from context — default to ambient intelligence
-        if pillMode != .ambientIntelligence && pillMode != .transcription && pillMode != .meeting {
-            pillMode = .ambientIntelligence
+        // Derive pill mode from context — default to ambient
+        if pillMode != .ambient {
+            pillMode = .ambient
         }
 
         // Reset session-scoped trackers
-        speakerAttributionTracker.beginSession()
-        visualContextSampler.resetForNewSession()
         screenVisionAnalyzer.resetForNewSession()
 
         chunkManager.startListening(sessionConfig: config)
@@ -1136,23 +788,8 @@ final class AppState: ObservableObject {
         // Stop recording
         chunkManager.stopListening()
 
-        // Determine pipeline source based on current mode
-        let source: PipelineSource
-        switch capturedPillMode {
-        case .transcription:  source = .transcription
-        case .meeting:        source = .ambient  // meeting mode uses full pipeline at session end
-        default:              source = .ambient
-        }
-
-        // Capture speaker attribution and visual context before async dispatch
-        let speakerSummary = speakerAttributionTracker.sessionSpeakerSummary()
-        speakerAttributionTracker.endSession()
-
-        let visualCtx = visualContextSampler.finalizeContext()
-        if let sid = capturedSessionID, let json = visualCtx.asJSON() {
-            SessionStore.shared.updateSessionVisualContext(id: sid, json: json)
-            Log.info(.pipeline, "Session visual context saved: \(visualCtx.summary())")
-        }
+        // All modes use ambient pipeline source
+        let source: PipelineSource = .ambient
 
         // Background OCR rolling buffer — lightweight metadata for Llama.
         // If the user triggered an on-demand capture, its execution context flows
@@ -1179,13 +816,12 @@ final class AppState: ObservableObject {
         // Dispatch session-end pipeline processing
         if !fullRawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let orchestrator = pipelineOrchestrator
-            let capturedSpeakerSummary = speakerSummary
             Task.detached {
                 await orchestrator.processSessionEnd(
                     fullText: fullRawText,
                     sessionID: capturedSessionID,
                     sessionContext: capturedConfig,
-                    speakerContext: capturedSpeakerSummary,
+                    speakerContext: nil,
                     screenAnalysisContext: screenAnalysisCtx,
                     screenExecutionContext: screenExecutionCtx,
                     source: source
@@ -1196,20 +832,13 @@ final class AppState: ObservableObject {
             // Ambient mode: show post-session review canvas immediately.
             // Tasks and analyses will populate it reactively as the pipeline runs.
             // Do NOT call clearSessionTranscript() here — dismissAmbientReview() does it.
-            if capturedPillMode == .ambientIntelligence {
+            if capturedPillMode == .ambient {
                 var review = AmbientReviewState()
                 review.cleanedTranscript = fullRawText
                 review.sessionID = capturedSessionID
                 review.phase = .cleaning
                 review.startedAt = Date()
                 ambientReview = review
-            }
-
-            // Transcription mode only: show cleaning level chooser on canvas.
-            // Paste raw immediately — will be upgraded after the user picks a level.
-            if capturedPillMode == .transcription {
-                pasteService.paste(text: fullRawText)
-                showCleaningLevelChooser(rawText: fullRawText)
             }
         } else {
             Log.info(.system, "User session stopped — no transcript to process")
@@ -1218,7 +847,6 @@ final class AppState: ObservableObject {
         // Reset state — keep transcript visible until next session starts or manual clear
         sessionLifecycle = .undefined
         sessionConfig = nil
-        dismissedFaceTrackIDs.removeAll()
     }
 
     // MARK: - Screen Capture (On-Demand)
@@ -1293,7 +921,6 @@ final class AppState: ObservableObject {
                 self.isSessionProcessing = false
                 self.cleaningResults[.minimal] = result
                 self.liveTranscriptText = result
-                self.pasteService.paste(text: result)
                 Log.info(.cleaning, "Auto-cleaned minimal: \(result.count) chars")
             }
         }
@@ -1310,7 +937,6 @@ final class AppState: ObservableObject {
         // If already cached, just show it
         if let cached = cleaningResults[level] {
             liveTranscriptText = cached
-            pasteService.paste(text: cached)
             Log.info(.cleaning, "Cleaning level \(level.displayName) (cached): \(cached.count) chars")
             return
         }
@@ -1318,7 +944,6 @@ final class AppState: ObservableObject {
         // Raw is always available
         if level == .raw {
             liveTranscriptText = rawText
-            pasteService.paste(text: rawText)
             Log.info(.cleaning, "Cleaning level: raw")
             return
         }
@@ -1333,7 +958,6 @@ final class AppState: ObservableObject {
                 self.isSessionProcessing = false
                 self.cleaningResults[level] = result
                 self.liveTranscriptText = result
-                self.pasteService.paste(text: result)
                 Log.info(.cleaning, "Cleaning level \(level.displayName): \(result.count) chars")
             }
         }
@@ -1775,6 +1399,111 @@ final class AppState: ObservableObject {
     /// Clear the detected capability suggestion (user dismissed it).
     func dismissDetectedCapability() {
         detectedCapability = nil
+    }
+
+    // MARK: - Workflow Execution
+
+    /// Execute a workflow with the given inputs. Chains steps serially with context passing.
+    func executeWorkflow(_ workflow: WorkflowRecord, inputs: WorkflowInputs) {
+        guard let project = projects.first(where: { $0.id == (inputs.projectID ?? "") })
+            ?? projects.first else {
+            Log.warn(.system, "Execute workflow: no project available")
+            return
+        }
+
+        // Reset workflow state
+        executingWorkflow = workflow
+        workflowStepLogs = []
+        workflowCurrentStep = 0
+        workflowTotalSteps = workflow.steps.count
+        workflowStepText = ""
+
+        // Create a pipeline task for visibility in LogsPipelineView
+        let taskID = "WF-\(String(UUID().uuidString.prefix(8)).uppercased())"
+        let task = PipelineTaskRecord(
+            id: taskID,
+            analysisID: "wf-\(taskID)",
+            title: "\(workflow.emoji) \(workflow.name)",
+            prompt: "Workflow: \(workflow.description)",
+            projectID: project.id,
+            projectName: project.name,
+            mode: .auto,
+            status: .ongoing,
+            skillID: nil,
+            workflowID: workflow.id,
+            workflowSteps: workflow.steps.map { $0.name },
+            missingConnection: nil,
+            pendingQuestion: nil,
+            attachmentPaths: [],
+            createdAt: Date()
+        )
+        pipelineTasks.insert(task, at: 0)
+
+        // Set up canvas streaming
+        codeSessionMessages = []
+        codeIsStreaming = true
+        codeCurrentToolName = nil
+        codeTaskID = taskID
+        codeStepIndex = 0
+        canvasExecutingTask = task
+
+        codeSessionMessages.append(CodeMessage(role: .status, text: "\(workflow.emoji) \(workflow.name) \u{2014} \(workflow.steps.count) steps"))
+
+        // Wire executor callbacks
+        workflowExecutor.onStepStarted = { [weak self] index, name, total in
+            Task { @MainActor in
+                guard let self else { return }
+                self.workflowCurrentStep = index
+                self.workflowTotalSteps = total
+                self.workflowStepText = ""
+                self.codeSessionMessages.append(CodeMessage(role: .status, text: "Step \(index + 1)/\(total): \(name)"))
+            }
+        }
+
+        workflowExecutor.onStepCompleted = { [weak self] index, name, output in
+            Task { @MainActor in
+                guard let self else { return }
+                let summary = output.map { String($0.prefix(200)) } ?? "done"
+                self.codeSessionMessages.append(CodeMessage(role: .assistant, text: "\u{2705} \(name): \(summary)"))
+            }
+        }
+
+        workflowExecutor.onStepFailed = { [weak self] index, name, error in
+            Task { @MainActor in
+                guard let self else { return }
+                self.codeSessionMessages.append(CodeMessage(role: .error, text: "\u{274C} \(name): \(error)"))
+            }
+        }
+
+        workflowExecutor.onStepText = { [weak self] index, text in
+            Task { @MainActor in
+                self?.workflowStepText = text
+            }
+        }
+
+        workflowExecutor.onWorkflowCompleted = { [weak self] log in
+            Task { @MainActor in
+                guard let self else { return }
+                self.executingWorkflow = nil
+                self.codeIsStreaming = false
+                self.canvasExecutingTask = nil
+                let status = log.status == .completed ? "\u{2705} Completed" : "\u{274C} Failed"
+                self.codeSessionMessages.append(CodeMessage(role: .status, text: "\(workflow.emoji) \(workflow.name) \u{2014} \(status) (\(log.completedSteps)/\(log.totalSteps) steps)"))
+            }
+        }
+
+        // Run workflow
+        workflowTask = Task { @MainActor in
+            let log = await workflowExecutor.execute(
+                workflow: workflow,
+                inputs: inputs,
+                project: project,
+                claudeCodeRunner: claudeCodeRunner
+            )
+            workflowStepLogs = log.stepLogs
+        }
+
+        Log.info(.pipeline, "Workflow execution started: \(workflow.name) in \(project.name)")
     }
 
     // MARK: - Ambient Review Actions
@@ -2265,7 +1994,6 @@ final class AppState: ObservableObject {
             extractionService: extractionService,
             pipelineOrchestrator: pipelineOrchestrator,
             transcriptStore: transcriptStore,
-            pasteService: pasteService,
             qaService: qaService,
             qaStore: qaStore
         )
@@ -2394,17 +2122,6 @@ final class AppState: ObservableObject {
     /// Toggle speaker: tap same person = clear, tap different = set.
     func toggleSpeaker(_ id: UUID) {
         currentSpeakerID = (currentSpeakerID == id) ? nil : id
-    }
-
-    /// Sync avatar seeds from tracked faces to linked Person records.
-    func syncAvatarSeedsFromFaces() {
-        for face in faceTracker.trackedFaces {
-            guard let personID = face.assignedPersonID, face.avatarSeed != 0 else { continue }
-            if let idx = people.firstIndex(where: { $0.id == personID }),
-               people[idx].avatarSeed == nil {
-                people[idx].avatarSeed = face.avatarSeed
-            }
-        }
     }
 
     /// Add a new person with the next unused color and auto-placed position.

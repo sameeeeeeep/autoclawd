@@ -134,6 +134,137 @@ final class OpenClawSkillLoader {
         )
     }
 
+    // MARK: - Capability Conversion
+
+    /// Scan a directory for SKILL.md files and convert them to Capability objects.
+    /// Injects trigger tags from SkillTagRegistry for auto-detection.
+    static func loadCapabilities(from directory: URL) -> [Capability] {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: directory.path) else { return [] }
+
+        var capabilities: [Capability] = []
+
+        guard let enumerator = fm.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        for case let fileURL as URL in enumerator {
+            let fileName = fileURL.lastPathComponent
+            guard fileName == "SKILL.md" || fileName.hasSuffix(".skill.md") else { continue }
+
+            if let cap = loadCapability(at: fileURL) {
+                capabilities.append(cap)
+            }
+        }
+
+        Log.info(.pipeline, "OpenClawSkillLoader: converted \(capabilities.count) skills → capabilities")
+        return capabilities
+    }
+
+    /// Parse a single SKILL.md into a Capability with SkillTagRegistry trigger injection.
+    static func loadCapability(at url: URL) -> Capability? {
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+
+        let (frontmatter, body) = splitFrontmatter(content)
+        let metadata = parseFrontmatter(frontmatter)
+
+        let skillDir = url.deletingLastPathComponent()
+        let dirName = skillDir.lastPathComponent
+
+        let name = metadata["name"] as? String ?? dirName
+        let description = metadata["description"] as? String ?? "OpenClaw skill: \(name)"
+        let requiredBins = extractRequiredBins(from: metadata)
+        let emoji = extractEmoji(from: metadata) ?? "🔧"
+        let instructions = body.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Category: from metadata, then infer
+        let categoryStr = metadata["category"] as? String ?? ""
+        let skillCategory = categoryStr.isEmpty
+            ? inferCategory(name: name, description: description)
+            : mapCategory(categoryStr)
+        let capCategory = mapSkillCategoryToCapabilityCategory(skillCategory)
+
+        // Inject trigger tags from SkillTagRegistry
+        let tags = SkillTagRegistry.tags(for: dirName)
+
+        // Parse env vars
+        var envVars: [String: String] = [:]
+        if let requires = metadata["requires"] as? [String: Any],
+           let envList = requires["env"] as? [String] {
+            for envKey in envList { envVars[envKey] = "" }
+        }
+        if let env = metadata["env"] as? [String: Any] {
+            for (key, value) in env { envVars[key] = "\(value)" }
+        }
+
+        let deps = CapabilityDependencies(
+            requiredBins: requiredBins,
+            envVars: envVars,
+            installHint: nil  // OpenClaw skills don't have install info in SKILL.md
+        )
+
+        let id = "openclaw-" + name.lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "/", with: "-")
+
+        let promptTemplate = """
+        {{instructions}}
+
+        ---
+
+        TASK: {{prompt}}
+        """
+
+        return Capability(
+            id: id,
+            name: name,
+            description: description,
+            emoji: emoji,
+            category: capCategory,
+            createdAt: Date(),
+            triggers: CapabilityTriggers(
+                apps: tags?.apps ?? [],
+                urlPatterns: tags?.urls ?? [],
+                keywords: tags?.keywords ?? [],
+                ocrPatterns: []
+            ),
+            subWorkflows: [
+                SubWorkflow(
+                    id: "main",
+                    name: "Run \(name)",
+                    description: description,
+                    invocation: requiredBins.first
+                )
+            ],
+            skillMDPath: url.path,
+            slug: dirName,
+            source: .openclaw,
+            dependencies: deps,
+            promptTemplate: promptTemplate,
+            instructions: instructions.isEmpty ? nil : instructions,
+            workflowTags: tags?.workflowTags ?? []
+        )
+    }
+
+    /// Map SkillCategory → CapabilityCategory for unified model.
+    static func mapSkillCategoryToCapabilityCategory(_ sc: SkillCategory) -> CapabilityCategory {
+        switch sc {
+        case .pipeline:      return .automation
+        case .development:   return .development
+        case .analysis:      return .analysis
+        case .management:    return .organization
+        case .creative:      return .creative
+        case .marketing:     return .marketing
+        case .search:        return .search
+        case .communication: return .communication
+        case .automation:    return .automation
+        case .system:        return .system
+        case .other:         return .automation
+        }
+    }
+
     // MARK: - Metadata Extraction
 
     /// Extract required binaries from metadata, handling all OpenClaw formats.

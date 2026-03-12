@@ -808,6 +808,11 @@ struct AICanvasView: View {
         case .development:   return .orange
         case .discovery:     return .cyan
         case .organization:  return .indigo
+        case .creative:      return .pink
+        case .search:        return .teal
+        case .analysis:      return .mint
+        case .marketing:     return .red
+        case .system:        return .gray
         }
     }
 

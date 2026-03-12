@@ -1,54 +1,93 @@
 import AppKit
 import SwiftUI
 
-/// Observable model that drives the toast view without recreating the hosting view.
-final class ToastModel: ObservableObject {
-    @Published var entry: LogEntry
-    init(_ entry: LogEntry) { self.entry = entry }
+/// Observable model for the capability suggestion toast.
+final class CapabilityToastModel: ObservableObject {
+    @Published var capability: Capability?
+    var onTap: () -> Void = {}
+    var onDismiss: () -> Void = {}
 }
 
-/// Thin SwiftUI wrapper that re-renders ToastView whenever the model changes.
-private struct ToastModelView: View {
-    @ObservedObject var model: ToastModel
-    var body: some View { ToastView(entry: model.entry) }
+/// SwiftUI wrapper that renders the capability toast.
+private struct CapabilityToastModelView: View {
+    @ObservedObject var model: CapabilityToastModel
+
+    var body: some View {
+        if let cap = model.capability {
+            CapabilityToastView(
+                capability: cap,
+                onTap: model.onTap,
+                onDismiss: model.onDismiss
+            )
+            .transition(.move(edge: .trailing).combined(with: .opacity))
+        }
+    }
 }
 
-/// Floating glass toast panel, positioned below the pill.
+/// Floating glass toast panel for capability suggestions.
+/// Positioned in the top-right corner of the screen, notification-style.
 final class ToastWindow: NSPanel {
 
-    private var model: ToastModel?
+    private let capModel = CapabilityToastModel()
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 220, height: 40),
+            contentRect: NSRect(x: 0, y: 0, width: 260, height: 52),
             styleMask: [.borderless, .nonactivatingPanel, .utilityWindow],
             backing: .buffered,
             defer: false
         )
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         isMovableByWindowBackground = false
+
+        let hosting = NSHostingView(rootView: CapabilityToastModelView(model: capModel))
+        hosting.frame = contentView?.bounds ?? .zero
+        hosting.autoresizingMask = [.width, .height]
+        contentView = hosting
     }
 
-    /// Update the displayed log entry. Creates the hosting view on first call;
-    /// subsequent calls push the new entry through the @Published binding so
-    /// SwiftUI re-renders without replacing the NSHostingView.
-    func updateEntry(_ entry: LogEntry) {
-        if let model = model {
-            model.entry = entry
-        } else {
-            let m = ToastModel(entry)
-            self.model = m
-            let hosting = NSHostingView(rootView: ToastModelView(model: m))
-            hosting.frame = contentView?.bounds ?? .zero
-            hosting.autoresizingMask = [.width, .height]
-            contentView = hosting
-        }
+    /// Show a capability suggestion toast in the top-right corner.
+    func showCapability(_ capability: Capability, onTap: @escaping () -> Void, onDismiss: @escaping () -> Void) {
+        capModel.capability = capability
+        capModel.onTap = onTap
+        capModel.onDismiss = onDismiss
+        positionTopRight()
+        orderFront(nil)
+    }
+
+    /// Hide the toast.
+    func dismiss() {
+        capModel.capability = nil
+        orderOut(nil)
+    }
+
+    private func positionTopRight() {
+        guard let screen = NSScreen.main else { return }
+        let visibleFrame = screen.visibleFrame
+        let x = visibleFrame.maxX - 260 - 16
+        let y = visibleFrame.maxY - 52 - 16
+        setFrameOrigin(NSPoint(x: x, y: y))
     }
 
     override var canBecomeKey: Bool  { false }
     override var canBecomeMain: Bool { false }
+}
+
+// MARK: - Legacy Support
+
+/// Observable model that drives the legacy log toast view.
+final class ToastModel: ObservableObject {
+    @Published var entry: LogEntry
+    init(_ entry: LogEntry) { self.entry = entry }
+}
+
+/// Legacy method extension for updating with log entries (used by pill log lines).
+extension ToastWindow {
+    func updateEntry(_ entry: LogEntry) {
+        // Legacy toast display — no-op since toast is now used for capability suggestions
+    }
 }

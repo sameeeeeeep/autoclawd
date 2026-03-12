@@ -140,9 +140,9 @@ final class LearnModeService: ObservableObject {
         ).filter { $0.id != capID }
 
         session?.builtCapability = capability
-        session?.suggestedCapabilities = Array(similar.prefix(3))
+        session?.suggestedCapabilities = Array(similar.prefix(5))
         session?.phase = .done(capID)
-        Log.info(.ui, "FUCBC: built '\(capability.name)' slug=\(capability.slug)")
+        Log.info(.ui, "FUCBC: built '\(capability.name)' slug=\(capability.slug) suggested=\(similar.prefix(5).map { $0.slug })")
     }
 
     // MARK: - Suggest Capabilities

@@ -28,8 +28,8 @@ struct Person: Identifiable, Codable, Equatable {
     var mapPosition: CGPoint     // normalized 0..1
     var isMe: Bool
     var isMusic: Bool
-    var faceTrackID: UUID?       // links to FaceTracker.TrackedFace within a session
-    var avatarSeed: UInt64?      // deterministic seed from face embedding for pixel art avatar
+    var faceTrackID: UUID?
+    var avatarSeed: UInt64?
 
     var personColor: PersonColor {
         PersonColor(rawValue: colorIndex) ?? .cyan
