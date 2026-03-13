@@ -137,17 +137,17 @@ final class LearnModeService: ObservableObject {
             transcript: currentSession.events.compactMap { $0.speechSnippet.isEmpty ? nil : $0.speechSnippet }.joined(separator: " "),
             app: snapshot?.appName,
             urls: snapshot?.detectedURLs ?? []
-        ).filter { $0.id != capID }
+        ).filter { $0.capability.id != capID }
 
         session?.builtCapability = capability
-        session?.suggestedCapabilities = Array(similar.prefix(5))
+        session?.suggestedCapabilities = Array(similar.prefix(5).map { $0.capability })
         session?.phase = .done(capID)
-        Log.info(.ui, "FUCBC: built '\(capability.name)' slug=\(capability.slug) suggested=\(similar.prefix(5).map { $0.slug })")
+        Log.info(.ui, "FUCBC: built '\(capability.name)' slug=\(capability.slug) suggested=\(similar.prefix(5).map { $0.capability.slug })")
     }
 
     // MARK: - Suggest Capabilities
 
-    func suggestCapabilities(screenText: String = "", app: String? = nil, urls: [String] = []) -> [Capability] {
+    func suggestCapabilities(screenText: String = "", app: String? = nil, urls: [String] = []) -> [SuggestionMatch] {
         CapabilityStore.shared.suggest(screenText: screenText, app: app, urls: urls)
     }
 
