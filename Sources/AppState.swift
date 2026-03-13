@@ -86,6 +86,8 @@ final class AppState: ObservableObject {
             } else if oldValue == .learn {
                 learnModeService.stopSession()
             }
+            // Sync OCR interval with mode
+            screenVisionAnalyzer.isLearnMode = (pillMode == .learn)
         }
     }
 
@@ -161,7 +163,7 @@ final class AppState: ObservableObject {
     /// Transient — current song title set by NowPlayingService via Combine; nil when nothing is playing.
     @Published var nowPlayingSongTitle: String? = nil
     /// Transient — FUCBC auto-trigger: capability detected from screen context (nil = no match).
-    @Published var detectedCapability: Capability? = nil
+    @Published var detectedSuggestion: SuggestionMatch? = nil
 
     @Published var locationName: String {
         didSet { UserDefaults.standard.set(locationName, forKey: "autoclawd.locationName") }
@@ -218,7 +220,7 @@ final class AppState: ObservableObject {
     @Published var codeSkipPermissions: Bool = true
     private(set) var codeSession: ClaudeSession? = nil
     private var codeStreamTask: Task<Void, Never>? = nil
-    private var codeTaskID: String?
+    var codeTaskID: String?
     private var codeStepIndex: Int = 0
 
     // System audio state
@@ -559,6 +561,16 @@ final class AppState: ObservableObject {
         if systemAudioEnabled {
             startSystemAudio()
         }
+
+        // Wire and start task scheduler
+        TaskScheduler.shared.appState = self
+        TaskScheduler.shared.start()
+
+        // Register app-switch observer for ambient OCR
+        setupAppSwitchObserver()
+
+        // Sync initial OCR mode
+        screenVisionAnalyzer.isLearnMode = (pillMode == .learn)
     }
 
     // MARK: - Listening Control
@@ -636,7 +648,7 @@ final class AppState: ObservableObject {
                 if !ocrText.isEmpty {
                     let app = NSWorkspace.shared.frontmostApplication?.localizedName
                     let matches = CapabilityStore.shared.suggest(screenText: ocrText, app: app)
-                    self.detectedCapability = matches.first
+                    self.detectedSuggestion = matches.first
                 }
             }
         }
@@ -1321,7 +1333,7 @@ final class AppState: ObservableObject {
 
     /// Execute a detected FUCBC capability by running its SKILL.md on the pill canvas.
     func executeCapability(_ capability: Capability) {
-        detectedCapability = nil
+        detectedSuggestion = nil
 
         guard let project = projects.first else {
             Log.warn(.system, "Execute capability: no project available")
@@ -1398,7 +1410,70 @@ final class AppState: ObservableObject {
 
     /// Clear the detected capability suggestion (user dismissed it).
     func dismissDetectedCapability() {
-        detectedCapability = nil
+        detectedSuggestion = nil
+    }
+
+    // MARK: - Pipeline Task Re-execution
+
+    /// Re-run an existing pipeline task by ID (used by TaskScheduler and TaskDetailView).
+    func runPipelineTask(id: String) {
+        guard let task = pipelineTasks.first(where: { $0.id == id }) else {
+            Log.warn(.system, "runPipelineTask: task not found for id \(id)")
+            return
+        }
+        guard let project = projects.first(where: { $0.id == task.projectID }) ?? projects.first else {
+            Log.warn(.system, "runPipelineTask: no project for task \(id)")
+            return
+        }
+
+        pipelineStore.updateTaskStatus(id: id, status: .ongoing, startedAt: Date())
+        refreshPipeline()
+
+        codeSessionMessages = []
+        codeIsStreaming = true
+        codeCurrentToolName = nil
+        codeTaskID = id
+        codeStepIndex = 0
+        canvasExecutingTask = pipelineTasks.first(where: { $0.id == id })
+
+        guard let (session, stream) = claudeCodeRunner.startSession(
+            prompt: task.prompt, in: project,
+            dangerouslySkipPermissions: true
+        ) else {
+            codeSessionMessages.append(CodeMessage(role: .error, text: "Failed to start Claude CLI"))
+            codeIsStreaming = false
+            canvasExecutingTask = nil
+            pipelineStore.updateTaskStatus(id: id, status: .filtered, completedAt: Date())
+            refreshPipeline()
+            return
+        }
+        codeSession = session
+        codeSessionMessages.append(CodeMessage(role: .status, text: task.title))
+
+        codeStreamTask = Task { @MainActor in
+            await processCodeStream(stream)
+            pipelineStore.updateTaskStatus(id: id, status: .completed, completedAt: Date())
+            refreshPipeline()
+        }
+        Log.info(.pipeline, "runPipelineTask: re-running '\(task.title)' in \(project.name)")
+    }
+
+    // MARK: - App Switch Observer
+
+    /// Register for NSWorkspace.didActivateApplicationNotification.
+    /// In ambient mode, triggers a lightweight OCR capture on every app switch.
+    func setupAppSwitchObserver() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.pillMode == .ambient else { return }
+            Task {
+                await self.screenVisionAnalyzer.captureOnAppSwitch()
+            }
+        }
+        Log.info(.system, "AppState: app-switch OCR observer registered")
     }
 
     // MARK: - Workflow Execution
