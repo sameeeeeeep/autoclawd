@@ -244,21 +244,10 @@ final class LearnModeService: ObservableObject {
         CapabilityStore.shared.suggest(screenText: screenText, app: app, urls: urls)
     }
 
-    // =========================================================================
-    // MARK: - Story Builder
+    // MARK: - Journey Assembly
     //
-    // Transforms raw LearnEvents into a coherent human-readable user journey.
-    // This is what Claude READS to understand what the user was doing.
-    //
-    // Output looks like:
-    //   T+0s  → User opened Threads
-    //   T+5s  → User scrolled feed · Screen: "New Llama 3.3 from Meta — free weights"
-    //   T+10s → User navigated to youtube.com · Screen: video about Llama 3.3
-    //           User said: "oh I should try this one"
-    //   T+15s → User switched to Safari, navigated to huggingface.co
-    //           Screen: model cards, GGUF download buttons visible
-    //   T+20s → User downloaded "llama-3.3-70b-instruct.Q4_K_M.gguf" (4.8 GB)
-    // =========================================================================
+    // Assembles a timestamped narrative from CanvasNode.workSummary values.
+    // Each node's workSummary is produced by the Llama summariseNodes() pass.
 
     private func buildUserJourney() -> String {
         guard let sess = session else { return "" }
@@ -271,84 +260,7 @@ final class LearnModeService: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
-    // ── Navigation verb based on context ──
-    private func navigationVerb(for domain: String, ocr: String) -> String {
-        let lowerOCR = ocr.lowercased()
-        if lowerOCR.contains("search") || domain.contains("google") || domain.contains("bing") { return "searched on" }
-        if lowerOCR.contains("download") || lowerOCR.contains(".gguf") || lowerOCR.contains(".zip") { return "downloaded from" }
-        if lowerOCR.contains("reddit") || domain.contains("reddit") { return "explored Reddit at" }
-        return "navigated to"
-    }
-
-    // ── Infer actions from OCR text changes ──
-    private func inferActionsFromOCR(_ ocr: String, prevEvent: LearnEvent?) -> [String] {
-        var actions: [String] = []
-        let lower = ocr.lowercased()
-
-        // Download detection
-        if lower.contains(".gguf") || lower.contains(".safetensors") || lower.contains(".zip") || lower.contains("downloading") {
-            if let filename = extractFilename(from: ocr) {
-                actions.append("User downloaded \"\(filename)\"")
-            } else {
-                actions.append("User initiated a download")
-            }
-        }
-        // Search detection
-        if lower.contains("search results") || lower.contains("results for") {
-            if let query = extractSearchQuery(from: ocr) {
-                actions.append("User searched for \"\(query)\"")
-            }
-        }
-        // Video detection
-        if lower.contains("watch") || lower.contains("video") || lower.contains("youtube.com/watch") {
-            actions.append("User watched a video")
-        }
-        // Post/compose detection
-        if lower.contains("what's on your mind") || lower.contains("compose") || lower.contains("new post") || lower.contains("tweet") {
-            actions.append("User opened post composer")
-        }
-        // Form/input detection (typing)
-        if let prev = prevEvent, abs(ocr.count - prev.ocrSnippet.count) > 20 && lower.contains("typing") {
-            actions.append("User typed content")
-        }
-
-        return actions
-    }
-
-    private func extractFilename(from ocr: String) -> String? {
-        let pattern = #"[\w\-\.]+\.(gguf|safetensors|zip|tar|gz|pdf|mp4|mov)"#
-        if let range = ocr.range(of: pattern, options: .regularExpression) {
-            return String(ocr[range])
-        }
-        return nil
-    }
-
-    private func extractSearchQuery(from ocr: String) -> String? {
-        // Look for quoted strings or text after "results for"
-        if let range = ocr.range(of: "results for \"", options: .caseInsensitive) {
-            let after = ocr[range.upperBound...]
-            if let end = after.firstIndex(of: "\"") {
-                return String(after[..<end])
-            }
-        }
-        return nil
-    }
-
-    private func condenseOCR(_ ocr: String) -> String {
-        // Extract the most meaningful line from OCR (first non-trivial line)
-        let lines = ocr.components(separatedBy: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { $0.count > 12 && $0.count < 80 }
-        return lines.first.map { String($0.prefix(70)) } ?? ""
-    }
-
-    private func urlDomain(_ url: String) -> String {
-        URL(string: url)?.host ?? url
-    }
-
-    // =========================================================================
     // MARK: - FUCBC Prompt Builder (with story + executable instructions)
-    // =========================================================================
 
     private func buildFUCBCPrompt(story: String, snapshot: ScreenSnapshot?, openClawDir: String) -> String {
         let nodeCount = session?.nodes.count ?? 0
