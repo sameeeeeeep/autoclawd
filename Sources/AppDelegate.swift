@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pillWindow: PillWindow?
     private var mainPanel: MainPanelWindow?
     private var toastWindow: ToastWindow?
+    private var monitorWindow: LearnModeMonitorWindow?
     private var setupWindow: SetupWindow?
     private var onboardingWindow: OnboardingWindow?
     private var statusItem: NSStatusItem?
@@ -28,6 +29,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showPill()
         setupMenuBarIcon()
 
+        // Initialise auxiliary windows
+        toastWindow = ToastWindow()
+        monitorWindow = LearnModeMonitorWindow(service: appState.learnModeService)
+
         // Show first-run setup if dependencies are missing
         showSetupIfNeeded()
 
@@ -36,19 +41,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // recording attempt — preventing the first chunk from silently failing.
         requestPermissionsUpfront()
 
-        // Toast window disabled — logs are now shown inline inside the widget.
-        // Capability suggestion toast — show in top-right when detected
+        // Show/hide the Learn Mode monitor window when pill mode changes
+        appState.$pillMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mode in
+                guard let self else { return }
+                if mode == .learn {
+                    self.monitorWindow?.orderFront(nil)
+                } else {
+                    self.monitorWindow?.orderOut(nil)
+                }
+            }
+            .store(in: &cancellables)
+
+        // Capability / task suggestion toast — show in top-right when detected
         appState.$detectedSuggestion
             .receive(on: DispatchQueue.main)
             .sink { [weak self] item in
                 guard let self else { return }
                 if let item = item {
-                    // Task toast wiring handled in Task 9 — for now surface capabilities only
-                    if case .capability(let match) = item {
-                        self.showCapabilityToast(match)
-                    }
+                    self.showSuggestionToast(item)
                 } else {
-                    self.dismissCapabilityToast()
+                    self.toastWindow?.dismiss()
                 }
             }
             .store(in: &cancellables)
@@ -216,33 +230,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    // MARK: - Capability Suggestion Toast
+    // MARK: - Suggestion Toast
 
-    private func showCapabilityToast(_ match: SuggestionMatch) {
+    private func showSuggestionToast(_ item: SuggestionItem) {
         guard appState.showToasts else { return }
         toastDismissWork?.cancel()
 
-        if toastWindow == nil {
-            toastWindow = ToastWindow()
-        }
-        guard let toast = toastWindow else { return }
-
-        toast.show(.capability(match),
+        toastWindow?.show(item,
             onTap: { [weak self] in
                 guard let self else { return }
-                self.appState.executeCapability(match.capability)
-                self.dismissCapabilityToast()
-                self.showMainPanel(tab: .agents)
+                switch item {
+                case .capability(let match):
+                    self.appState.executeCapability(match.capability)
+                    self.showMainPanel(tab: .agents)
+                case .task(let task):
+                    if task.detectedContext.isComplete {
+                        self.appState.executeSuggestedTask(task)
+                    } else {
+                        // Open tasks panel for context gap-filling
+                        self.showMainPanel(tab: .tasks)
+                    }
+                }
             },
             onSnooze: { [weak self] in
-                guard let self else { return }
-                CapabilityStore.shared.snooze(capabilityID: match.capability.id)
-                self.appState.dismissDetectedSuggestion()
+                if case .capability(let match) = item {
+                    CapabilityStore.shared.snooze(capabilityID: match.capability.id)
+                }
+                self?.appState.dismissDetectedSuggestion()
             },
             onMarkIrrelevant: { [weak self] in
-                guard let self else { return }
-                CapabilityStore.shared.markIrrelevant(capabilityID: match.capability.id)
-                self.appState.dismissDetectedSuggestion()
+                if case .capability(let match) = item {
+                    CapabilityStore.shared.markIrrelevant(capabilityID: match.capability.id)
+                }
+                self?.appState.dismissDetectedSuggestion()
             }
         )
 
@@ -252,11 +272,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         toastDismissWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
-    }
-
-    private func dismissCapabilityToast() {
-        toastDismissWork?.cancel()
-        toastWindow?.dismiss()
     }
 
     // MARK: - Main Panel
