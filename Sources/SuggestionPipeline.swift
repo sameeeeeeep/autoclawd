@@ -7,13 +7,12 @@ import AppKit
 /// Three parallel paths:
 ///   1. Capability scoring (sync, keyword/URL/app matching) — always runs
 ///   2. Context-aware task/compose extraction — fires when screen OR transcript changes
-///      Uses llama3.1:8b (local, smarter) for nuanced screen understanding.
+///      Uses llama3.2 (same model as pipeline; keep_alive keeps it hot between calls).
 ///   3. Passive automation detection — fires every 90s from rolling activity buffer
 ///      Detects repetitive multi-app workflows; surfaces FUCBC-style automations.
 ///
-/// Model split (all local via Ollama):
-///   - llama3.2 (3B) → pipeline cleaning/analysis (high-frequency, ~every 30s)
-///   - llama3.1:8b   → suggestion extraction (low-frequency, debounced; needs more nuance)
+/// Single model: llama3.2 (3B) for ALL local inference.
+/// llama3.1:8b was removed — 4.9GB + 2.0GB concurrent = memory pressure + 100s+ cold starts.
 ///
 /// Guards (prevent Ollama overload):
 ///   - In-flight lock (`isExtracting`) — only one model call at a time
@@ -24,12 +23,10 @@ import AppKit
 @MainActor
 final class SuggestionPipeline {
 
-    // llama3.2 (3B) handles the high-frequency cleaning/analysis pipeline.
-    // This pipeline uses llama3.1:8b — still fully local, but substantially smarter
-    // for nuanced screen context understanding (compose detection, task extraction).
-    // Falls back to llama3.2 if 8b isn't pulled yet (Ollama returns an error which we catch).
-    private let ollama = OllamaService(model: "llama3.1:8b")
-    private let ollamaFallback = OllamaService()  // llama3.2 (3B) fallback
+    // Single model: llama3.2 (3B). Same model used by cleaning/analysis pipeline.
+    // llama3.1:8b was tried but 4.9GB + 2.0GB = 6.9GB concurrent RAM killed everything.
+    // With keep_alive=300 in OllamaService, the model stays hot between calls — no cold-start.
+    private let ollama = OllamaService()
 
     // MARK: - Extraction Guards
 
@@ -163,7 +160,7 @@ final class SuggestionPipeline {
     ///   - COMPOSING: user is actively writing something → offer compose assistance
     ///   - TASK IN CONTENT: visible text contains a request/action item → extract and run it
     ///
-    /// Uses llama3.1:8b locally (smarter than 3B); falls back to llama3.2 if not pulled.
+    /// Uses llama3.2 (already hot from the cleaning/analysis pipeline).
     private func extractTask(
         transcript: String,
         screenText: String,
@@ -204,14 +201,7 @@ final class SuggestionPipeline {
         """
 
         do {
-            // Try llama3.1:8b first (smarter, still fully local).
-            // Falls back to llama3.2 (3B) if 8b isn't available.
-            let response: String
-            do {
-                response = try await ollama.generate(prompt: prompt, numPredict: 320)
-            } catch {
-                response = try await ollamaFallback.generate(prompt: prompt, numPredict: 320)
-            }
+            let response = try await ollama.generate(prompt: prompt, numPredict: 320)
             return parseTask(from: response, app: appName, screenText: screenText, fallbackURLs: urls)
         } catch {
             // Silently discard — capability suggestions still surface even if extraction fails.
@@ -268,12 +258,7 @@ final class SuggestionPipeline {
         """
 
         do {
-            let response: String
-            do {
-                response = try await ollama.generate(prompt: prompt, numPredict: 200)
-            } catch {
-                response = try await ollamaFallback.generate(prompt: prompt, numPredict: 200)
-            }
+            let response: String = try await ollama.generate(prompt: prompt, numPredict: 200)
 
             // Parse JSON — automation intent maps to a task suggestion with executionPrompt for FUCBC
             var raw = response.trimmingCharacters(in: .whitespacesAndNewlines)
