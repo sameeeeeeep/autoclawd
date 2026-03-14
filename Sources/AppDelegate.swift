@@ -227,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard let toast = toastWindow else { return }
 
-        toast.showCapability(match,
+        toast.show(.capability(match),
             onTap: { [weak self] in
                 guard let self else { return }
                 self.appState.executeCapability(match.capability)

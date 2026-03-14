@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Observable model for the capability suggestion toast.
 final class CapabilityToastModel: ObservableObject {
-    @Published var match: SuggestionMatch?
+    @Published var item: SuggestionItem?
     var onTap: () -> Void = {}
     var onSnooze: () -> Void = {}
     var onMarkIrrelevant: () -> Void = {}
@@ -14,9 +14,9 @@ private struct CapabilityToastModelView: View {
     @ObservedObject var model: CapabilityToastModel
 
     var body: some View {
-        if let m = model.match {
+        if let i = model.item {
             CapabilityToastView(
-                match: m,
+                item: i,
                 onTap: model.onTap,
                 onSnooze: model.onSnooze,
                 onMarkIrrelevant: model.onMarkIrrelevant
@@ -52,9 +52,9 @@ final class ToastWindow: NSPanel {
         contentView = hosting
     }
 
-    /// Show a capability suggestion toast in the top-right corner.
-    func showCapability(_ match: SuggestionMatch, onTap: @escaping () -> Void, onSnooze: @escaping () -> Void, onMarkIrrelevant: @escaping () -> Void) {
-        capModel.match = match
+    /// Show a suggestion toast in the top-right corner.
+    func show(_ item: SuggestionItem, onTap: @escaping () -> Void, onSnooze: @escaping () -> Void, onMarkIrrelevant: @escaping () -> Void) {
+        capModel.item = item
         capModel.onTap = onTap
         capModel.onSnooze = onSnooze
         capModel.onMarkIrrelevant = onMarkIrrelevant
@@ -64,7 +64,7 @@ final class ToastWindow: NSPanel {
 
     /// Hide the toast.
     func dismiss() {
-        capModel.match = nil
+        capModel.item = nil
         orderOut(nil)
     }
 
