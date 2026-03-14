@@ -26,6 +26,7 @@ final class LearnModeService: ObservableObject {
     var onCapabilityBuilt: ((Capability) -> Void)?
 
     private let runner = ClaudeCodeRunner()
+    private let ollama = OllamaService()
     private var eventTimer: Timer?
     private var latestSpeechFragment: String = ""
 
@@ -113,6 +114,68 @@ final class LearnModeService: ObservableObject {
         session = sess
     }
 
+    // MARK: - Node Summarisation (Llama pass)
+
+    /// Runs a Llama pass on each node to generate a one-sentence work summary.
+    /// Mutations to session.nodes happen on @MainActor after the async group completes.
+    private func summariseNodes() async {
+        guard var sess = session else { return }
+        let nodes = sess.nodes
+
+        // Separate nodes: those needing Llama vs those getting a default (too little OCR).
+        // Fallback defaults are collected first; Llama results are appended after the group.
+        var summaries: [(id: String, summary: String)] = []
+
+        let nodesToSummarise = nodes.filter { $0.workSummary == nil }
+        for node in nodesToSummarise {
+            let combinedOCR = node.ocrSnapshots.joined(separator: " | ")
+            if combinedOCR.count < 20 {
+                summaries.append((node.id, "Opened \(node.app)"))  // default, no Llama needed
+            }
+        }
+        let llamaNodes = nodesToSummarise.filter { $0.ocrSnapshots.joined(separator: " | ").count >= 20 }
+
+        // Run Llama calls in parallel; each task returns (id, summary) — no direct struct mutation.
+        // All mutations to sess.nodes happen after the group on @MainActor (avoids stale-copy trap).
+        await withTaskGroup(of: (String, String).self) { group in
+            for node in llamaNodes {
+                let combinedOCR = node.ocrSnapshots.joined(separator: " | ")
+                let appName = node.app
+                let urlStr = node.url.map { " (\($0))" } ?? ""
+                let speech = node.speechSnippets.joined(separator: " · ")
+                let fallback = "Worked in \(appName)"
+                // Capture ollama reference — do NOT use self inside the task body
+                let ollamaRef = ollama
+                group.addTask {
+                    let prompt = """
+                    In one sentence, what was the user doing in \(appName)\(urlStr)?
+                    OCR: \(String(combinedOCR.prefix(400)))
+                    Speech: \(speech)
+                    One sentence only.
+                    """
+                    do {
+                        let result = try await ollamaRef.generate(prompt: prompt, numPredict: 64)
+                        let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                        return (node.id, trimmed.isEmpty ? fallback : trimmed)
+                    } catch {
+                        return (node.id, fallback)
+                    }
+                }
+            }
+            for await pair in group {
+                summaries.append(pair)
+            }
+        }
+
+        // Apply all summaries back on @MainActor (never mutate inside task body — stale copy trap)
+        for (id, summary) in summaries {
+            if let idx = sess.nodes.firstIndex(where: { $0.id == id }) {
+                sess.nodes[idx].workSummary = summary
+            }
+        }
+        session = sess
+    }
+
     // MARK: - Build Capability (FUCBC)
 
     func buildCapability() async {
@@ -138,9 +201,12 @@ final class LearnModeService: ObservableObject {
             linkedProjectIDs: []
         )
 
+        // Summarise each node before assembling the journey narrative
+        await summariseNodes()
+
         // Build story FIRST, then send to Claude
-        let story = buildUserJourney(from: currentSession.events, snapshot: snapshot)
-        let prompt = buildFUCBCPrompt(story: story, events: currentSession.events, snapshot: snapshot, openClawDir: openClawDir)
+        let story = buildUserJourney()
+        let prompt = buildFUCBCPrompt(story: story, snapshot: snapshot, openClawDir: openClawDir)
 
         var fullOutput = ""
         let stream = runner.run(prompt, in: project, dangerouslySkipPermissions: true)
@@ -161,7 +227,7 @@ final class LearnModeService: ObservableObject {
 
         let similar = CapabilityStore.shared.suggest(
             screenText: snapshot?.extractedText ?? "",
-            transcript: currentSession.events.compactMap { $0.speechSnippet.isEmpty ? nil : $0.speechSnippet }.joined(separator: " "),
+            transcript: currentSession.nodes.flatMap { $0.speechSnippets }.joined(separator: " "),
             app: snapshot?.appName,
             urls: snapshot?.detectedURLs ?? []
         ).filter { $0.capability.id != capID }
@@ -194,76 +260,14 @@ final class LearnModeService: ObservableObject {
     //   T+20s → User downloaded "llama-3.3-70b-instruct.Q4_K_M.gguf" (4.8 GB)
     // =========================================================================
 
-    func buildUserJourney(from events: [LearnEvent], snapshot: ScreenSnapshot?) -> String {
-        guard !events.isEmpty else { return "No events recorded." }
-
+    private func buildUserJourney() -> String {
+        guard let sess = session else { return "" }
         var lines: [String] = []
-        lines.append("## User Journey (observed \(events.count * 5)s)")
-        lines.append("")
-
-        var prevApp: String? = nil
-        let sessionStart = events.first!.timestamp
-
-        for (i, event) in events.enumerated() {
-            let elapsed = Int(event.timestamp.timeIntervalSince(sessionStart))
-            let prefix = "T+\(elapsed)s"
-
-            var actions: [String] = []
-
-            // ── App transition ──
-            if let app = event.appName {
-                if prevApp == nil || prevApp != app {
-                    if prevApp == nil {
-                        actions.append("User opened \(app)")
-                    } else {
-                        actions.append("User switched to \(app)")
-                    }
-                    prevApp = app
-                }
-            }
-
-            // ── URL navigation ──
-            for url in event.detectedURLs.prefix(2) {
-                let domain = urlDomain(url)
-                let action = navigationVerb(for: domain, ocr: event.ocrSnippet)
-                actions.append("User \(action) \(domain)")
-            }
-
-            // ── OCR-based action inference ──
-            let ocrActions = inferActionsFromOCR(event.ocrSnippet, prevEvent: i > 0 ? events[i-1] : nil)
-            actions.append(contentsOf: ocrActions)
-
-            // ── Speech ──
-            if !event.speechSnippet.isEmpty {
-                actions.append("User said: \"\(event.speechSnippet)\"")
-            }
-
-            // ── Screen content (condensed) ──
-            let screenLabel = condenseOCR(event.ocrSnippet)
-            let screenNote = screenLabel.isEmpty ? "" : "· Screen: \"\(screenLabel)\""
-
-            if !actions.isEmpty {
-                let actionText = actions.joined(separator: " · ")
-                lines.append("\(prefix)  → \(actionText) \(screenNote)".trimmingCharacters(in: .whitespaces))
-            } else if !screenNote.isEmpty {
-                lines.append("\(prefix)  · \(screenNote)")
-            }
+        for (_, node) in sess.nodes.enumerated() {
+            let elapsed = Int(node.capturedAt.timeIntervalSince(sess.startedAt))
+            let summary = node.workSummary ?? "Opened \(node.app)"
+            lines.append("T+\(elapsed)s → \(summary) [\(node.displayTitle)]")
         }
-
-        // ── Final state ──
-        if let snap = snapshot {
-            lines.append("")
-            lines.append("## Final State (at build time)")
-            if let app = snap.appName { lines.append("App: \(app)") }
-            if !snap.detectedURLs.isEmpty { lines.append("URLs open: \(snap.detectedURLs.prefix(3).joined(separator: ", "))") }
-            if !snap.extractedText.isEmpty {
-                let condensed = snap.extractedText.count > 800
-                    ? String(snap.extractedText.prefix(800)) + "\n[…]"
-                    : snap.extractedText
-                lines.append("Screen content:\n\(condensed)")
-            }
-        }
-
         return lines.joined(separator: "\n")
     }
 
@@ -346,13 +350,14 @@ final class LearnModeService: ObservableObject {
     // MARK: - FUCBC Prompt Builder (with story + executable instructions)
     // =========================================================================
 
-    private func buildFUCBCPrompt(story: String, events: [LearnEvent], snapshot: ScreenSnapshot?, openClawDir: String) -> String {
+    private func buildFUCBCPrompt(story: String, snapshot: ScreenSnapshot?, openClawDir: String) -> String {
+        let nodeCount = session?.nodes.count ?? 0
 
         return """
         # FUCBC: Find Use-Case, Build Capability
 
-        You are AutoClawd's intelligence engine. I observed a user's screen + voice for \(events.count * 5) seconds.
-        Below is a coherent story of what they did, followed by raw event data for reference.
+        You are AutoClawd's intelligence engine. I observed a user's screen + voice across \(nodeCount) activity node(s).
+        Below is a coherent story of what they did.
 
         ## Your Job
         1. Read the user journey story. Identify the ONE repeating use-case worth automating.
@@ -388,11 +393,6 @@ final class LearnModeService: ObservableObject {
         ---
 
         \(story)
-
-        ---
-
-        ## Raw Events (reference only — the story above is the truth)
-        \(events.map { $0.eventLine() }.joined(separator: "\n"))
 
         ---
 
@@ -432,6 +432,8 @@ final class LearnModeService: ObservableObject {
 
         ## JSON Manifest (output last, no trailing content after this block)
 
+        IMPORTANT: Always output at least 2 subWorkflows. Every subWorkflow must have a non-empty "name" AND a non-empty "invocation" (a shell command or skill slug). Never output a subWorkflow with blank fields.
+
         ```json
         {
           "name": "<Friendly name, max 50 chars>",
@@ -444,10 +446,10 @@ final class LearnModeService: ObservableObject {
           "triggerKeywords": ["<speech/screen keywords>"],
           "triggerOCRPatterns": ["<exact screen text phrases>"],
           "subWorkflows": [
-            {"name": "detect_trigger", "description": "<how/when to trigger>", "invocation": null},
-            {"name": "extract_content", "description": "<what to extract>", "invocation": "<shell cmd or null>"},
-            {"name": "execute", "description": "<main action>", "invocation": "<shell cmd or null>"},
-            {"name": "notify", "description": "<how to tell user>", "invocation": null}
+            {"name": "detect_trigger", "description": "<how/when to trigger>", "invocation": "osascript -e 'tell application \"System Events\" to get frontmost application'"},
+            {"name": "extract_content", "description": "<what to extract>", "invocation": "<shell cmd or skill slug>"},
+            {"name": "execute", "description": "<main action>", "invocation": "<shell cmd or skill slug>"},
+            {"name": "notify", "description": "<how to tell user>", "invocation": "osascript -e 'display notification \"Done\" with title \"AutoClawd\"'"}
           ]
         }
         ```
