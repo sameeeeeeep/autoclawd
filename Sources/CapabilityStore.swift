@@ -54,6 +54,15 @@ final class CapabilityStore: @unchecked Sendable {
     private var openClawCacheDate: Date?
     private let openClawCacheTTL: TimeInterval = 30.0
 
+    // MARK: - Dismissal Memory (in-memory, resets on launch)
+
+    /// capID → suppress until this date (X button — "not now").
+    /// Accessed only under `lock` (same NSLock used for `snapshot`).
+    private var snoozedUntil: [String: Date] = [:]
+    /// Permanently suppressed for this session (👎 button — "not relevant").
+    /// Accessed only under `lock`.
+    private var irrelevantIDs: Set<String> = []
+
     // MARK: - Persistence
 
     private var indexURL: URL {
@@ -180,6 +189,20 @@ final class CapabilityStore: @unchecked Sendable {
         }
     }
 
+    /// Suppress this capability for 2 hours ("not now" — X button).
+    func snooze(capabilityID: String) {
+        lock.lock()
+        snoozedUntil[capabilityID] = Date().addingTimeInterval(7200)
+        lock.unlock()
+    }
+
+    /// Permanently suppress for this session ("not relevant" — 👎 button).
+    func markIrrelevant(capabilityID: String) {
+        lock.lock()
+        irrelevantIDs.insert(capabilityID)
+        lock.unlock()
+    }
+
     private func persistFile(_ persisted: [Capability]) {
         let dir = indexURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -191,59 +214,156 @@ final class CapabilityStore: @unchecked Sendable {
 
     // MARK: - Auto-Trigger Detection (fast, offline, scoring)
 
-    /// Returns capabilities that match the current screen context, sorted by score.
-    /// Non-blocking — reads from the current snapshot.
-    ///
-    /// Scoring (additive):
-    ///   +4  per matching app (exact, case-insensitive)
-    ///   +3  per matching URL pattern (substring of any detected URL)
-    ///   +2  per matching OCR pattern (substring of screen text)
-    ///   +1  per matching keyword (in transcript or screen text)
+    /// Returns suggestion matches for the current screen context, sorted by score.
+    /// Score threshold: >= 3. Skips snoozed and irrelevant capabilities.
     func suggest(
         screenText: String = "",
         transcript: String = "",
         app: String? = nil,
         urls: [String] = []
-    ) -> [Capability] {
+    ) -> [SuggestionMatch] {
         let caps = snapshot  // single atomic read
+        lock.lock()
+        let snoozedSnapshot    = snoozedUntil
+        let irrelevantSnapshot = irrelevantIDs
+        lock.unlock()
         let lowerScreen     = screenText.lowercased()
         let lowerTranscript = transcript.lowercased()
         let lowerApp        = app?.lowercased()
         let lowerURLs       = urls.map { $0.lowercased() }
         let combined        = lowerScreen + " " + lowerTranscript
 
-        let scored: [(cap: Capability, score: Int)] = caps.map { cap in
+        var results: [SuggestionMatch] = []
+
+        for cap in caps {
+            guard !irrelevantSnapshot.contains(cap.id) else { continue }
+            if let until = snoozedSnapshot[cap.id], Date() < until { continue }
+
             var score = 0
+            var signals: [MatchSignal] = []
             let t = cap.triggers
 
-            // App match
+            // App match (+4)
             if let a = lowerApp {
-                for trigger in t.apps where trigger.lowercased() == a { score += 4 }
+                for trigger in t.apps where trigger.lowercased() == a {
+                    score += 4
+                    signals.append(.app(trigger))
+                }
             }
 
-            // URL pattern match
+            // URL pattern match (+3)
             for pattern in t.urlPatterns {
                 let lp = pattern.lowercased()
-                if lowerURLs.contains(where: { $0.contains(lp) }) { score += 3 }
+                if lowerURLs.contains(where: { $0.contains(lp) }) {
+                    score += 3
+                    signals.append(.url(pattern))
+                }
             }
 
-            // OCR pattern match
+            // OCR pattern match (+2)
             for pattern in t.ocrPatterns {
-                if lowerScreen.contains(pattern.lowercased()) { score += 2 }
+                if lowerScreen.contains(pattern.lowercased()) {
+                    score += 2
+                    signals.append(.ocr(pattern))
+                }
             }
 
-            // Keyword match
+            // Keyword match (+1)
             for kw in t.keywords {
-                if combined.contains(kw.lowercased()) { score += 1 }
+                if combined.contains(kw.lowercased()) {
+                    score += 1
+                    signals.append(.keyword(kw))
+                }
             }
 
-            return (cap, score)
+            guard score >= 3 else { continue }
+
+            let headline = resolveHeadline(
+                template: cap.contextualQuestionTemplate,
+                signals: signals,
+                capabilityName: cap.name
+            )
+            results.append(SuggestionMatch(
+                capability: cap,
+                score: score,
+                matchedSignals: signals,
+                contextualHeadline: headline
+            ))
         }
 
-        return scored
-            .filter { $0.score > 0 }
-            .sorted { $0.score > $1.score }
-            .map { $0.cap }
+        return results.sorted { $0.score > $1.score }
+    }
+
+    private func isAppSignal(_ s: MatchSignal) -> Bool {
+        if case .app = s { return true }
+        return false
+    }
+
+    private func isUrlSignal(_ s: MatchSignal) -> Bool {
+        if case .url = s { return true }
+        return false
+    }
+
+    private func isOcrSignal(_ s: MatchSignal) -> Bool {
+        if case .ocr = s { return true }
+        return false
+    }
+
+    private func resolveHeadline(template: String, signals: [MatchSignal], capabilityName: String) -> String {
+        guard !template.isEmpty else {
+            for signal in signals {
+                switch signal {
+                case .app(let name):
+                    return "Working in \(name)?"
+                case .url(let pattern):
+                    let clean = pattern.hasPrefix("www.") ? String(pattern.dropFirst(4)) : pattern
+                    return "Something to do with \(clean)?"
+                case .ocr(let snippet):
+                    let short = snippet.count > 30 ? String(snippet.prefix(30)) + "…" : snippet
+                    return "Working on: \(short)?"
+                case .keyword:
+                    continue
+                }
+            }
+            return "Automate \(capabilityName)?"
+        }
+
+        var resolved = template
+
+        if resolved.contains("{app}") {
+            if let appSignal = signals.first(where: isAppSignal),
+               case .app(let name) = appSignal {
+                resolved = resolved.replacingOccurrences(of: "{app}", with: name)
+            } else if let urlSignal = signals.first(where: isUrlSignal),
+                      case .url(let p) = urlSignal {
+                let clean = p.hasPrefix("www.") ? String(p.dropFirst(4)) : p
+                resolved = resolved.replacingOccurrences(of: "{app}", with: clean)
+            } else {
+                resolved = resolved.replacingOccurrences(of: " {app}", with: "").replacingOccurrences(of: "{app}", with: "")
+            }
+        }
+
+        if resolved.contains("{url}") {
+            if let urlSignal = signals.first(where: isUrlSignal),
+               case .url(let p) = urlSignal {
+                let clean = p.hasPrefix("www.") ? String(p.dropFirst(4)) : p
+                resolved = resolved.replacingOccurrences(of: "{url}", with: clean)
+            } else {
+                resolved = resolved.replacingOccurrences(of: " {url}", with: "").replacingOccurrences(of: "{url}", with: "")
+            }
+        }
+
+        if resolved.contains("{ocr}") {
+            if let ocrSignal = signals.first(where: isOcrSignal),
+               case .ocr(let snippet) = ocrSignal {
+                let short = snippet.count > 30 ? String(snippet.prefix(30)) + "…" : snippet
+                resolved = resolved.replacingOccurrences(of: "{ocr}", with: short)
+            } else {
+                resolved = resolved.replacingOccurrences(of: " {ocr}", with: "").replacingOccurrences(of: "{ocr}", with: "")
+            }
+        }
+
+        return resolved.trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - Built-in Capabilities
@@ -260,7 +380,8 @@ final class CapabilityStore: @unchecked Sendable {
             triggers: CapabilityTriggers(apps: ["Xcode", "VS Code", "Cursor"], urlPatterns: ["figma.com", "dribbble.com"], keywords: ["design", "frontend", "UI", "CSS", "styling"], ocrPatterns: []),
             slug: "frontend-design",
             source: .builtin,
-            workflowTags: ["development", "design"]
+            workflowTags: ["development", "design"],
+            contextualQuestionTemplate: "Building a UI in {app}?"
         ),
         Capability(
             id: "builtin-data-analysis",
@@ -271,7 +392,8 @@ final class CapabilityStore: @unchecked Sendable {
             triggers: CapabilityTriggers(apps: ["Numbers", "Excel"], urlPatterns: [], keywords: ["data", "analysis", "chart", "statistics", "aggregate", "cluster"], ocrPatterns: []),
             slug: "data-analysis",
             source: .builtin,
-            workflowTags: ["analysis", "data"]
+            workflowTags: ["analysis", "data"],
+            contextualQuestionTemplate: "Analysing data in {app}?"
         ),
         Capability(
             id: "builtin-project-management",
@@ -282,7 +404,8 @@ final class CapabilityStore: @unchecked Sendable {
             triggers: CapabilityTriggers(apps: ["Linear", "Jira", "Notion"], urlPatterns: ["linear.app", "jira.atlassian"], keywords: ["sprint", "ticket", "backlog", "milestone", "planning"], ocrPatterns: []),
             slug: "project-management",
             source: .builtin,
-            workflowTags: ["management", "planning"]
+            workflowTags: ["management", "planning"],
+            contextualQuestionTemplate: "Planning in {app}?"
         ),
         Capability(
             id: "builtin-video-generation",
@@ -293,7 +416,8 @@ final class CapabilityStore: @unchecked Sendable {
             triggers: CapabilityTriggers(apps: [], urlPatterns: ["freepik.com"], keywords: ["generate video", "video generation", "AI video"], ocrPatterns: []),
             slug: "video-generation",
             source: .builtin,
-            workflowTags: ["video-production", "creative"]
+            workflowTags: ["video-production", "creative"],
+            contextualQuestionTemplate: "Generating a video?"
         ),
         Capability(
             id: "builtin-campaign-activation",
@@ -304,7 +428,8 @@ final class CapabilityStore: @unchecked Sendable {
             triggers: CapabilityTriggers(apps: ["Threads", "Twitter"], urlPatterns: ["threads.net", "x.com", "facebook.com", "instagram.com"], keywords: ["campaign", "launch", "promote", "marketing"], ocrPatterns: []),
             slug: "campaign-activation",
             source: .builtin,
-            workflowTags: ["marketing", "social-media"]
+            workflowTags: ["marketing", "social-media"],
+            contextualQuestionTemplate: "Launching a {app} campaign?"
         ),
         Capability(
             id: "builtin-call-mode",
@@ -315,7 +440,8 @@ final class CapabilityStore: @unchecked Sendable {
             triggers: CapabilityTriggers(apps: [], urlPatterns: [], keywords: ["call mode", "screen share", "pair program"], ocrPatterns: []),
             slug: "call-mode",
             source: .builtin,
-            workflowTags: ["development", "collaboration"]
+            workflowTags: ["development", "collaboration"],
+            contextualQuestionTemplate: "Want real-time screen context?"
         ),
         Capability(
             id: "builtin-graphic-design",
@@ -331,7 +457,8 @@ final class CapabilityStore: @unchecked Sendable {
             ),
             slug: "design-to-image",
             source: .builtin,
-            workflowTags: ["graphic-design", "creative", "content-creation", "visual-design"]
+            workflowTags: ["graphic-design", "creative", "content-creation", "visual-design"],
+            contextualQuestionTemplate: "Creating a design in {app}?"
         ),
     ]
 }

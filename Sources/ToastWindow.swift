@@ -3,9 +3,10 @@ import SwiftUI
 
 /// Observable model for the capability suggestion toast.
 final class CapabilityToastModel: ObservableObject {
-    @Published var capability: Capability?
+    @Published var match: SuggestionMatch?
     var onTap: () -> Void = {}
-    var onDismiss: () -> Void = {}
+    var onSnooze: () -> Void = {}
+    var onMarkIrrelevant: () -> Void = {}
 }
 
 /// SwiftUI wrapper that renders the capability toast.
@@ -13,11 +14,12 @@ private struct CapabilityToastModelView: View {
     @ObservedObject var model: CapabilityToastModel
 
     var body: some View {
-        if let cap = model.capability {
+        if let m = model.match {
             CapabilityToastView(
-                capability: cap,
+                match: m,
                 onTap: model.onTap,
-                onDismiss: model.onDismiss
+                onSnooze: model.onSnooze,
+                onMarkIrrelevant: model.onMarkIrrelevant
             )
             .transition(.move(edge: .trailing).combined(with: .opacity))
         }
@@ -32,7 +34,7 @@ final class ToastWindow: NSPanel {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 260, height: 52),
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 110),
             styleMask: [.borderless, .nonactivatingPanel, .utilityWindow],
             backing: .buffered,
             defer: false
@@ -51,25 +53,26 @@ final class ToastWindow: NSPanel {
     }
 
     /// Show a capability suggestion toast in the top-right corner.
-    func showCapability(_ capability: Capability, onTap: @escaping () -> Void, onDismiss: @escaping () -> Void) {
-        capModel.capability = capability
+    func showCapability(_ match: SuggestionMatch, onTap: @escaping () -> Void, onSnooze: @escaping () -> Void, onMarkIrrelevant: @escaping () -> Void) {
+        capModel.match = match
         capModel.onTap = onTap
-        capModel.onDismiss = onDismiss
+        capModel.onSnooze = onSnooze
+        capModel.onMarkIrrelevant = onMarkIrrelevant
         positionTopRight()
         orderFront(nil)
     }
 
     /// Hide the toast.
     func dismiss() {
-        capModel.capability = nil
+        capModel.match = nil
         orderOut(nil)
     }
 
     private func positionTopRight() {
         guard let screen = NSScreen.main else { return }
         let visibleFrame = screen.visibleFrame
-        let x = visibleFrame.maxX - 260 - 16
-        let y = visibleFrame.maxY - 52 - 16
+        let x = visibleFrame.maxX - 300 - 16
+        let y = visibleFrame.maxY - 110 - 16
         setFrameOrigin(NSPoint(x: x, y: y))
     }
 

@@ -1,5 +1,25 @@
 import Foundation
 
+// MARK: - Suggestion Match Types
+
+/// A single signal that fired during capability scoring.
+/// Passed through to the toast so it can surface "why" in the headline.
+enum MatchSignal: Equatable, Sendable {
+    case app(String)      // matched app name, e.g. "Threads"
+    case url(String)      // matched URL pattern, e.g. "threads.net"
+    case ocr(String)      // matched OCR pattern, e.g. "New Post"
+    case keyword(String)  // matched keyword, e.g. "campaign"
+}
+
+/// Returned by CapabilityStore.suggest() instead of bare Capability.
+/// Carries everything the toast needs. Transient — never persisted.
+struct SuggestionMatch: Sendable {
+    let capability: Capability
+    let score: Int
+    let matchedSignals: [MatchSignal]  // all signals that contributed to the score
+    let contextualHeadline: String     // resolved question, e.g. "Launching a Threads campaign?"
+}
+
 // MARK: - Learn Mode Data Models (FUCBC Architecture)
 //
 // No Llama. Events are collected every 5 seconds directly from the screen/audio
@@ -89,6 +109,11 @@ struct Capability: Codable, Identifiable {
     /// Tags for WorkflowBuilder matching (e.g. ["video-production", "content-creation"]).
     var workflowTags: [String]
 
+    /// Context-specific question shown in the toast headline.
+    /// Tokens: {app}, {url}, {ocr} are filled at match time.
+    /// Empty string → fallback headline derivation at suggestion time.
+    var contextualQuestionTemplate: String
+
     /// Whether all dependencies are met and this capability can run.
     var isAvailable: Bool { dependencies?.isReady ?? true }
 
@@ -101,6 +126,7 @@ struct Capability: Codable, Identifiable {
         case id, name, description, emoji, category, createdAt
         case triggers, subWorkflows, skillMDPath, slug
         case source, dependencies, promptTemplate, instructions, workflowTags
+        case contextualQuestionTemplate
     }
 
     init(from decoder: Decoder) throws {
@@ -121,6 +147,7 @@ struct Capability: Codable, Identifiable {
         promptTemplate = try c.decodeIfPresent(String.self, forKey: .promptTemplate)
         instructions = try c.decodeIfPresent(String.self, forKey: .instructions)
         workflowTags = try c.decodeIfPresent([String].self, forKey: .workflowTags) ?? []
+        contextualQuestionTemplate = try c.decodeIfPresent(String.self, forKey: .contextualQuestionTemplate) ?? ""
     }
 
     /// Full memberwise init for programmatic construction.
@@ -139,7 +166,8 @@ struct Capability: Codable, Identifiable {
         dependencies: CapabilityDependencies? = nil,
         promptTemplate: String? = nil,
         instructions: String? = nil,
-        workflowTags: [String] = []
+        workflowTags: [String] = [],
+        contextualQuestionTemplate: String = ""
     ) {
         self.id = id
         self.name = name
@@ -156,6 +184,7 @@ struct Capability: Codable, Identifiable {
         self.promptTemplate = promptTemplate
         self.instructions = instructions
         self.workflowTags = workflowTags
+        self.contextualQuestionTemplate = contextualQuestionTemplate
     }
 }
 

@@ -289,7 +289,7 @@ struct SettingsConsolidatedView: View {
             }
 
             Section("Autonomous Task Rules") {
-                Text("List task categories that autoclawd can execute without asking for approval. One rule per line. Example: \"Send a WhatsApp reply\", \"Create a GitHub issue\", \"Search the web\".")
+                Text("List task categories that autoclawd can execute without asking for approval. One rule per line. Example: \"Create a GitHub issue\", \"Search the web\".")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
@@ -521,10 +521,6 @@ struct SettingsConsolidatedView: View {
     @ViewBuilder
     private func connectionsSection() -> some View {
         Form {
-            Section("WhatsApp") {
-                WhatsAppConnectionCard(appState: appState)
-            }
-
             Section("Integrations") {
                 ForEach($connections) { $conn in
                     let isCC = conn.name == "Claude Code CLI"
@@ -703,186 +699,6 @@ struct SettingsConsolidatedView: View {
 }
 
 
-// MARK: - WhatsApp Connection Card
-
-struct WhatsAppConnectionCard: View {
-    @ObservedObject var appState: AppState
-
-    @State private var qrImage: String? = nil
-    @State private var isConnecting = false
-    @State private var pollTimer: Timer? = nil
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("WhatsApp")
-                        .font(.headline)
-                    Text(statusText)
-                        .font(.caption)
-                        .foregroundColor(statusColor)
-                }
-
-                Spacer()
-
-                if case .connected = appState.whatsAppStatus {
-                    Button("Disconnect", role: .destructive) {
-                        Task { await disconnect() }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                } else if case .waitingForQR = appState.whatsAppStatus {
-                    // QR is showing
-                } else {
-                    Button(isConnecting ? "Connecting..." : "Connect") {
-                        Task { await startConnection() }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(isConnecting)
-                }
-            }
-
-            if case .waitingForQR = appState.whatsAppStatus, let qr = qrImage {
-                VStack(spacing: 8) {
-                    if let imageData = dataFromBase64URL(qr),
-                       let nsImage = NSImage(data: imageData) {
-                        Image(nsImage: nsImage)
-                            .resizable()
-                            .interpolation(.none)
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 180, height: 180)
-                            .background(Color.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-
-                    Text("Scan with WhatsApp")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                    Text("Open WhatsApp \u{2192} Settings \u{2192} Linked Devices \u{2192} Link a Device")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-            }
-
-            if case .connected = appState.whatsAppStatus {
-                Divider()
-
-                Toggle("Task update notifications", isOn: Binding(
-                    get: { SettingsManager.shared.whatsAppNotifyTasks },
-                    set: { SettingsManager.shared.whatsAppNotifyTasks = $0 }
-                ))
-                .toggleStyle(.switch)
-                .controlSize(.small)
-
-                Toggle("Daily summary notifications", isOn: Binding(
-                    get: { SettingsManager.shared.whatsAppNotifySummaries },
-                    set: { SettingsManager.shared.whatsAppNotifySummaries = $0 }
-                ))
-                .toggleStyle(.switch)
-                .controlSize(.small)
-            }
-        }
-        .onDisappear {
-            pollTimer?.invalidate()
-            pollTimer = nil
-        }
-    }
-
-    private var statusText: String {
-        switch appState.whatsAppStatus {
-        case .disconnected: return "Not connected"
-        case .connecting:   return "Connecting..."
-        case .waitingForQR: return "Scan QR code to link"
-        case .connected:    return "Connected"
-        }
-    }
-
-    private var statusColor: Color {
-        switch appState.whatsAppStatus {
-        case .connected:    return .green
-        case .waitingForQR: return .orange
-        case .connecting:   return .yellow
-        case .disconnected: return .secondary
-        }
-    }
-
-    private func startConnection() async {
-        isConnecting = true
-
-        if !WhatsAppSidecar.shared.running {
-            WhatsAppSidecar.shared.start()
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-        }
-
-        do {
-            try await WhatsAppService.shared.connect()
-        } catch {
-            Log.warn(.system, "[WhatsApp] Connection failed: \(error)")
-        }
-
-        isConnecting = false
-        startStatusPolling()
-    }
-
-    private func disconnect() async {
-        pollTimer?.invalidate()
-        pollTimer = nil
-        do {
-            try await WhatsAppService.shared.disconnect(clearAuth: true)
-            appState.whatsAppStatus = .disconnected
-            SettingsManager.shared.whatsAppEnabled = false
-            SettingsManager.shared.whatsAppMyJID = ""
-            qrImage = nil
-            appState.stopWhatsApp()
-        } catch {
-            Log.warn(.system, "[WhatsApp] Disconnect failed: \(error)")
-        }
-    }
-
-    private func startStatusPolling() {
-        pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            Task { @MainActor in
-                await pollStatus()
-            }
-        }
-    }
-
-    private func pollStatus() async {
-        let (status, phoneNumber) = await WhatsAppService.shared.checkHealth()
-        appState.whatsAppStatus = status
-
-        switch status {
-        case .waitingForQR:
-            if let qr = await WhatsAppService.shared.getQRCode() {
-                qrImage = qr
-            }
-        case .connected:
-            pollTimer?.invalidate()
-            pollTimer = nil
-            qrImage = nil
-            SettingsManager.shared.whatsAppEnabled = true
-            if let phone = phoneNumber, !phone.isEmpty {
-                SettingsManager.shared.whatsAppMyJID = phone
-            }
-            appState.startWhatsApp()
-        case .disconnected:
-            qrImage = nil
-        case .connecting:
-            break
-        }
-    }
-
-    private func dataFromBase64URL(_ dataURL: String) -> Data? {
-        guard let commaIndex = dataURL.firstIndex(of: ",") else { return nil }
-        let base64 = String(dataURL[dataURL.index(after: commaIndex)...])
-        return Data(base64Encoded: base64)
-    }
-}
-
 // MARK: - Connection Item
 
 struct ConnectionItem: Identifiable {
@@ -1001,7 +817,7 @@ private struct AutonomousRulesEditor: View {
             }
 
             HStack(spacing: 6) {
-                TextField("Add a rule, e.g. \"Send WhatsApp replies\"", text: $newRule)
+                TextField("Add a rule, e.g. \"Create a GitHub issue\"", text: $newRule)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
                     .onSubmit { addRule() }

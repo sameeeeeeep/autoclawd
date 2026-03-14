@@ -65,17 +65,6 @@ final class WorkflowRegistry {
                 ],
                 requiredConnections: ["claude-cli", "linear-api"]
             ),
-            Workflow(
-                id: "autoclawd-claude-code-meta",
-                name: "AutoClawd \u{2192} Claude Code \u{2192} Meta MCP",
-                steps: [
-                    "AutoClawd captures campaign requirement",
-                    "Prompt dispatched to Claude Code CLI",
-                    "Claude Code interfaces with Meta MCP server",
-                    "Campaign activated on Meta platforms",
-                ],
-                requiredConnections: ["claude-cli", "meta-mcp"]
-            ),
         ]
 
         var map: [String: Workflow] = [:]

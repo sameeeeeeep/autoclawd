@@ -120,10 +120,6 @@ final class SettingsManager: @unchecked Sendable {
     private let kHotWordConfigs = "hotWordConfigs"
     private let kColorScheme    = "color_scheme_setting"
     private let kShowToasts     = "show_toasts"
-    private let kWhatsAppEnabled = "whatsapp_enabled"
-    private let kWhatsAppNotifyTasks = "whatsapp_notify_tasks"
-    private let kWhatsAppNotifySummaries = "whatsapp_notify_summaries"
-    private let kWhatsAppMyJID = "whatsapp_my_jid"
     private let kFontSizePreference  = "font_size_preference"
     private let kAutonomousTaskRules = "autonomous_task_rules"
     private let kIsOllamaEnabled      = "is_ollama_enabled"
@@ -253,28 +249,6 @@ final class SettingsManager: @unchecked Sendable {
             return FontSizePreference(rawValue: raw) ?? .medium
         }
         set { defaults.set(newValue.rawValue, forKey: kFontSizePreference) }
-    }
-
-    // MARK: - WhatsApp
-
-    var whatsAppEnabled: Bool {
-        get { defaults.object(forKey: kWhatsAppEnabled) as? Bool ?? false }
-        set { defaults.set(newValue, forKey: kWhatsAppEnabled) }
-    }
-
-    var whatsAppNotifyTasks: Bool {
-        get { defaults.object(forKey: kWhatsAppNotifyTasks) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: kWhatsAppNotifyTasks) }
-    }
-
-    var whatsAppNotifySummaries: Bool {
-        get { defaults.object(forKey: kWhatsAppNotifySummaries) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: kWhatsAppNotifySummaries) }
-    }
-
-    var whatsAppMyJID: String {
-        get { defaults.string(forKey: kWhatsAppMyJID) ?? "" }
-        set { defaults.set(newValue, forKey: kWhatsAppMyJID) }
     }
 
     // MARK: - Autonomous Task Rules

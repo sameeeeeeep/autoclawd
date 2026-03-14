@@ -78,10 +78,29 @@ final class ScreenVisionAnalyzer: @unchecked Sendable {
 
     // MARK: - Configuration
 
-    /// How often passive background OCR runs (seconds).
-    var ocrInterval: TimeInterval = 10.0
-    /// How many background OCR samples to keep (covers ~60s at 10s cadence).
+    /// How often passive background OCR runs when in **ambient** mode (seconds).
+    /// Reduced from 10s to 30s — app-switch events cover active usage.
+    var ocrInterval: TimeInterval = 30.0
+    /// How many background OCR samples to keep.
     var maxSamples: Int = 6
+
+    // MARK: - Learn Mode
+
+    /// When true (Learn Mode active), OCR runs at `learnModeOCRInterval` instead of `ocrInterval`.
+    var isLearnMode: Bool = false {
+        didSet {
+            Log.info(.camera, "ScreenVisionAnalyzer: isLearnMode → \(isLearnMode) (interval: \(isLearnMode ? learnModeOCRInterval : ocrInterval)s)")
+        }
+    }
+    /// OCR capture interval during Learn Mode — higher resolution for workflow capture.
+    var learnModeOCRInterval: TimeInterval = 2.0
+
+    // MARK: - Ambient OCR Budget
+
+    /// Max OCR calls per hour in ambient mode. Resets every 60 minutes.
+    var maxOCRCallsPerHour: Int = 60
+    private var ocrCallsThisHour: Int = 0
+    private var ocrHourWindowStart: Date = Date()
 
     // MARK: - Background OCR State
 
@@ -89,6 +108,23 @@ final class ScreenVisionAnalyzer: @unchecked Sendable {
     private var lastOCRTime: Date = .distantPast
     private var textSamples: [String] = []
     private var isRunning = false
+
+    // MARK: - Budget Check
+
+    private func canRunOCR() -> Bool {
+        lock.withLock {
+            let now = Date()
+            if now.timeIntervalSince(ocrHourWindowStart) >= 3600 {
+                ocrCallsThisHour = 0
+                ocrHourWindowStart = now
+            }
+            return ocrCallsThisHour < maxOCRCallsPerHour
+        }
+    }
+
+    private func recordOCRCall() {
+        lock.withLock { ocrCallsThisHour += 1 }
+    }
 
     // MARK: - Session Lifecycle
 
@@ -136,6 +172,50 @@ final class ScreenVisionAnalyzer: @unchecked Sendable {
         let unique = samples.filter { seen.insert($0).inserted }
         let joined = unique.joined(separator: "\n---\n")
         return joined.isEmpty ? nil : joined
+    }
+
+    // MARK: - App-Switch Capture
+
+    /// Called when the frontmost app changes (ambient mode only).
+    /// Lightweight OCR only — no barcode or rectangle detection.
+    /// Respects the hourly OCR budget. Appends to rolling `textSamples` buffer.
+    func captureOnAppSwitch() async {
+        guard canRunOCR() else {
+            Log.info(.camera, "ScreenVisionAnalyzer: app-switch OCR skipped (hourly budget reached)")
+            return
+        }
+
+        let shouldRun: Bool = lock.withLock {
+            guard !isRunning else { return false }
+            isRunning = true
+            lastOCRTime = Date()
+            return true
+        }
+        guard shouldRun else { return }
+
+        let (_, windowID, _) = await MainActor.run {
+            let app = NSWorkspace.shared.frontmostApplication
+            let info = Self.frontmostWindowInfo(appPID: app?.processIdentifier)
+            return (app?.localizedName, info?.windowID ?? kCGNullWindowID, info?.title)
+        }
+
+        guard let cgImage = Self.captureWindow(windowID: windowID) else {
+            lock.withLock { isRunning = false }
+            return
+        }
+
+        let text = runOCR(on: cgImage)
+        recordOCRCall()
+
+        lock.withLock {
+            isRunning = false
+            if !text.isEmpty {
+                textSamples.append(text)
+                if textSamples.count > maxSamples { textSamples.removeFirst() }
+            }
+        }
+
+        Log.info(.camera, "ScreenVisionAnalyzer: app-switch OCR \(text.count) chars")
     }
 
     // MARK: - On-Demand Capture

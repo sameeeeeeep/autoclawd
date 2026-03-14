@@ -5,7 +5,7 @@ import SwiftUI
 
 enum PanelTab: String, CaseIterable, Identifiable {
     case agents   = "Agents"
-    case canvas   = "Canvas"
+    case tasks    = "Tasks"
     case projects = "Projects"
     case logs     = "Logs"
     case settings = "Settings"
@@ -15,7 +15,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .agents:   return "bolt.fill"
-        case .canvas:   return "brain.head.profile"
+        case .tasks:    return "checklist"
         case .projects: return "folder"
         case .logs:     return "doc.text"
         case .settings: return "gearshape"
@@ -55,13 +55,10 @@ struct MainPanelView: View {
         }
         .frame(minWidth: 500, minHeight: 400)
         .onChange(of: appState.pillMode) { newMode in
-            if newMode == .learn { selectedTab = .canvas }
+            if newMode == .learn { selectedTab = .tasks }
         }
         .onChange(of: appState.learnModeService.isActive) { active in
-            if active { selectedTab = .canvas }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .capabilityStoreDidChange)) { _ in
-            if selectedTab == .canvas { selectedTab = .agents }
+            if active { selectedTab = .tasks }
         }
     }
 
@@ -90,10 +87,10 @@ struct MainPanelView: View {
                 .opacity(selectedTab == .settings ? 1 : 0)
                 .allowsHitTesting(selectedTab == .settings)
 
-            AICanvasView(learnService: appState.learnModeService)
+            TasksView(appState: appState)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .opacity(selectedTab == .canvas ? 1 : 0)
-                .allowsHitTesting(selectedTab == .canvas)
+                .opacity(selectedTab == .tasks ? 1 : 0)
+                .allowsHitTesting(selectedTab == .tasks)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

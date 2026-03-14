@@ -824,7 +824,7 @@ struct AICanvasView: View {
 
 // MARK: - Canvas Pulsing Dot
 
-private struct CanvasPulsingDot: View {
+struct CanvasPulsingDot: View {
     let color: Color
     @State private var pulsing = false
 

@@ -36,28 +36,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // recording attempt — preventing the first chunk from silently failing.
         requestPermissionsUpfront()
 
-        // Start embedded MCP server so any Claude Code session can call screen-grab tools.
-        // Configure Claude Code with: { "mcpServers": { "autoclawd": { "type": "http", "url": "http://localhost:7892/mcp" } } }
-        let screenGrab = ScreenGrabService()
-        MCPServer.shared.start(
-            screenGrab: screenGrab,
-            transcriptProvider: { [weak self] in self?.appState.liveTranscriptText ?? "" },
-            onHookEvent: { event in
-                Log.info(.system, "[Hook] Received: \(event.eventName) tool=\(event.toolName ?? "nil")")
-            }
-        )
-
-        // Auto-register Claude Code hooks so PostToolUse events arrive at /hook.
-        MCPConfigManager.writeHooksConfig()
-
         // Toast window disabled — logs are now shown inline inside the widget.
         // Capability suggestion toast — show in top-right when detected
-        appState.$detectedCapability
+        appState.$detectedSuggestion
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] cap in
+            .sink { [weak self] match in
                 guard let self else { return }
-                if let cap {
-                    self.showCapabilityToast(cap)
+                if let match {
+                    self.showCapabilityToast(match)
                 } else {
                     self.dismissCapabilityToast()
                 }
@@ -229,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Capability Suggestion Toast
 
-    private func showCapabilityToast(_ capability: Capability) {
+    private func showCapabilityToast(_ match: SuggestionMatch) {
         guard appState.showToasts else { return }
         toastDismissWork?.cancel()
 
@@ -238,15 +224,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard let toast = toastWindow else { return }
 
-        toast.showCapability(capability,
+        toast.showCapability(match,
             onTap: { [weak self] in
                 guard let self else { return }
-                self.appState.executeCapability(capability)
+                self.appState.executeCapability(match.capability)
                 self.dismissCapabilityToast()
                 self.showMainPanel(tab: .agents)
             },
-            onDismiss: { [weak self] in
-                self?.appState.dismissDetectedCapability()
+            onSnooze: { [weak self] in
+                guard let self else { return }
+                CapabilityStore.shared.snooze(capabilityID: match.capability.id)
+                self.appState.dismissDetectedCapability()
+            },
+            onMarkIrrelevant: { [weak self] in
+                guard let self else { return }
+                CapabilityStore.shared.markIrrelevant(capabilityID: match.capability.id)
+                self.appState.dismissDetectedCapability()
             }
         )
 
@@ -396,8 +389,6 @@ struct PillContentView: View {
     let onToggleScreenShare:  () -> Void
     let onCollapseChange:     (WidgetCollapseLevel) -> Void
 
-    @State private var isWhatsAppEnabled: Bool = SettingsManager.shared.whatsAppEnabled
-
     @State private var collapseLevel:          WidgetCollapseLevel = .full
     @State private var displayLevel:           Float = 0
     @State private var logLines:               [(dot: Color, text: String, time: String)] = []
@@ -435,10 +426,6 @@ struct PillContentView: View {
             onToggleSpeakerMode:    onToggleSpeakerMode,
             onToggleScreenShare:    onToggleScreenShare,
             onToggleCamera:         { },
-            onToggleWhatsApp: {
-                SettingsManager.shared.whatsAppEnabled.toggle()
-                isWhatsAppEnabled = SettingsManager.shared.whatsAppEnabled
-            },
             onSessionConfigure:     { appState.configureSession() },
             onSessionPlay: {
                 switch appState.sessionLifecycle {
@@ -463,7 +450,6 @@ struct PillContentView: View {
             isMultiSpeaker:         appState.speakerMode == .multiple,
             isScreenShareEnabled:   appState.systemAudioEnabled,
             isCameraEnabled:        false,
-            isWhatsAppEnabled:      isWhatsAppEnabled,
             sessionLifecycle:       appState.sessionLifecycle,
             logLines:               logLines,
             isSessionProcessing:    appState.isSessionProcessing,
@@ -713,10 +699,10 @@ struct PillContentView: View {
         }
 
         // ── FUCBC capability suggestion ("Automate now") ──────────────────────────
-        if let cap = appState.detectedCapability {
+        if let match = appState.detectedSuggestion {
             return AnyView(CapabilitySuggestionCanvasView(
-                capability: cap,
-                onRun:     { appState.executeCapability(cap) },
+                capability: match.capability,
+                onRun:     { appState.executeCapability(match.capability) },
                 onDismiss: { appState.dismissDetectedCapability() }
             ))
         }

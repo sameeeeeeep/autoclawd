@@ -1,74 +1,191 @@
 import SwiftUI
+import AppKit
 
-/// Capability suggestion toast — shown in top-right corner when `AppState.detectedCapability` is set.
+/// Capability suggestion toast — shown in top-right corner when `AppState.detectedSuggestion` is set.
 struct CapabilityToastView: View {
-    let capability: Capability
+    let match: SuggestionMatch
     let onTap: () -> Void
-    let onDismiss: () -> Void
+    let onSnooze: () -> Void
+    let onMarkIrrelevant: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 10) {
-                // Emoji icon
-                Text(capability.emoji.isEmpty ? "⚡" : capability.emoji)
-                    .font(.title2)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(capability.name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Glass.textPrimary)
-                        .lineLimit(1)
-
-                    Text("Automate this?")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Glass.textSecondary)
-                }
-
+        VStack(alignment: .leading, spacing: 8) {
+            // ── Top row: icon strip + X ──
+            HStack(alignment: .center, spacing: 0) {
+                ToolIconStrip(capability: match.capability)
                 Spacer()
-
-                // Dismiss button
-                Button(action: onDismiss) {
+                Button(action: onSnooze) {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(Glass.textTertiary)
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(width: 260, height: 52)
-            .background(glassBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+
+            // ── Headline ──
+            Text(match.contextualHeadline)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Glass.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            // ── Subtitle + action row ──
+            HStack(alignment: .center) {
+                Text("AutoClawd can automate this · \(match.capability.subWorkflows.count) steps")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Glass.textSecondary)
+                    .lineLimit(1)
+
+                Spacer()
+
+                GlassButton("Run now", action: onTap)
+
+                Button(action: onMarkIrrelevant) {
+                    Image(systemName: "hand.thumbsdown")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Glass.textTertiary)
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(width: 300)
+        .background(glassBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
     }
 
     @ViewBuilder
     private var glassBackground: some View {
-#if NATIVE_GLASS_AVAILABLE
-        if #available(macOS 26, *) {
-            Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        } else {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                LinearGradient(colors: [Color.white.opacity(0.10), Color.clear],
-                               startPoint: .top, endPoint: .center)
-            }
-        }
-#else
         ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(.ultraThinMaterial)
             LinearGradient(colors: [Color.white.opacity(0.10), Color.clear],
                            startPoint: .top, endPoint: .center)
         }
-#endif
+    }
+}
+
+/// Horizontal strip of small app icons derived from a capability's trigger apps and subworkflows.
+private struct ToolIconStrip: View {
+    let capability: Capability
+    private let maxIcons = 4
+    private let iconSize: CGFloat = 28
+    private let overlap: CGFloat = 8
+
+    private var appNames: [String] {
+        var names: [String] = []
+        names.append(contentsOf: capability.triggers.apps)
+        for sw in capability.subWorkflows {
+            if let inv = sw.invocation {
+                let lower = inv.lowercased()
+                if lower.contains("slack") { names.append("Slack") }
+                else if lower.contains("sheets") || lower.contains("google") { names.append("Numbers") }
+                else if lower.contains("github") { names.append("Xcode") }
+            }
+        }
+        var seen = Set<String>()
+        return names.filter { seen.insert($0).inserted }
+    }
+
+    private var displayNames: [String] { Array(appNames.prefix(maxIcons)) }
+    private var extraCount: Int { max(0, appNames.count - maxIcons) }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ZStack(alignment: .leading) {
+                ForEach(Array(displayNames.enumerated()), id: \.offset) { index, name in
+                    AppIconView(appName: name, size: iconSize)
+                        .offset(x: CGFloat(index) * (iconSize - overlap))
+                }
+                if extraCount > 0 {
+                    Text("+\(extraCount)")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Glass.textSecondary)
+                        .frame(width: iconSize, height: iconSize)
+                        .background(Circle().fill(Color.white.opacity(0.15)))
+                        .offset(x: CGFloat(displayNames.count) * (iconSize - overlap))
+                }
+            }
+            .frame(
+                width: CGFloat(min(appNames.count, maxIcons + (extraCount > 0 ? 1 : 0))) * (iconSize - overlap) + overlap,
+                height: iconSize
+            )
+        }
+    }
+}
+
+/// Single app icon circle — uses NSWorkspace app icon with SF Symbol fallback.
+private struct AppIconView: View {
+    let appName: String
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let nsImage = appIcon(for: appName) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "app.fill")
+                    .font(.system(size: size * 0.5))
+                    .foregroundStyle(Glass.textSecondary)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
+    }
+
+    private func appIcon(for name: String) -> NSImage? {
+        let workspace = NSWorkspace.shared
+        let bid = bundleID(for: name)
+        let url: URL?
+        if !bid.isEmpty {
+            if let appURL = workspace.urlForApplication(withBundleIdentifier: bid) {
+                url = appURL
+            } else {
+                url = findAppURL(name: name)
+            }
+        } else {
+            url = findAppURL(name: name)
+        }
+        guard let appURL = url else { return nil }
+        let icon = workspace.icon(forFile: appURL.path).copy() as? NSImage
+        icon?.size = NSSize(width: size * 2, height: size * 2)
+        return icon
+    }
+
+    private func bundleID(for name: String) -> String {
+        switch name.lowercased() {
+        case "xcode":    return "com.apple.dt.Xcode"
+        case "vs code":  return "com.microsoft.VSCode"
+        case "cursor":   return "com.todesktop.230313mzl4w4u92"
+        case "figma":    return "com.figma.Desktop"
+        case "canva":    return "com.canva.DesktopApp"
+        case "linear":   return "com.linear"
+        case "notion":   return "notion.id"
+        case "slack":    return "com.tinyspeck.slackmacgap"
+        case "threads":  return "com.burbn.instagram.Threads"
+        case "twitter":  return "com.twitter.twitter-mac"
+        case "numbers":  return "com.apple.iWork.Numbers"
+        case "excel":    return "com.microsoft.Excel"
+        default:         return ""
+        }
+    }
+
+    private func findAppURL(name: String) -> URL? {
+        let paths = ["/Applications", "/System/Applications", "/Applications/Utilities"]
+        for path in paths {
+            let url = URL(fileURLWithPath: path).appendingPathComponent("\(name).app")
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
     }
 }
 

@@ -11,7 +11,7 @@ import Foundation
 //   1. Reads the story + identifies the repeating use-case pattern
 //   2. Breaks it into modular sub-workflows with REAL executable steps
 //   3. Writes a SKILL.md to ~/.autoclawd/openclaw-skills/{slug}/SKILL.md
-//      — using actual MCP tool calls / shell commands / API invocations
+//      — using shell commands / API invocations
 //   4. Outputs a JSON capability manifest
 // AutoClawd then saves the Capability, refreshes OpenClaw skills, shows grid.
 
@@ -137,17 +137,17 @@ final class LearnModeService: ObservableObject {
             transcript: currentSession.events.compactMap { $0.speechSnippet.isEmpty ? nil : $0.speechSnippet }.joined(separator: " "),
             app: snapshot?.appName,
             urls: snapshot?.detectedURLs ?? []
-        ).filter { $0.id != capID }
+        ).filter { $0.capability.id != capID }
 
         session?.builtCapability = capability
-        session?.suggestedCapabilities = Array(similar.prefix(5))
+        session?.suggestedCapabilities = Array(similar.prefix(5).map { $0.capability })
         session?.phase = .done(capID)
-        Log.info(.ui, "FUCBC: built '\(capability.name)' slug=\(capability.slug) suggested=\(similar.prefix(5).map { $0.slug })")
+        Log.info(.ui, "FUCBC: built '\(capability.name)' slug=\(capability.slug) suggested=\(similar.prefix(5).map { $0.capability.slug })")
     }
 
     // MARK: - Suggest Capabilities
 
-    func suggestCapabilities(screenText: String = "", app: String? = nil, urls: [String] = []) -> [Capability] {
+    func suggestCapabilities(screenText: String = "", app: String? = nil, urls: [String] = []) -> [SuggestionMatch] {
         CapabilityStore.shared.suggest(screenText: screenText, app: app, urls: urls)
     }
 
@@ -321,16 +321,6 @@ final class LearnModeService: ObservableObject {
 
     private func buildFUCBCPrompt(story: String, events: [LearnEvent], snapshot: ScreenSnapshot?, openClawDir: String) -> String {
 
-        // AutoClawd MCP server (always available on localhost:7892)
-        let mcpToolsSection = """
-        Available MCP tools (autoclawd server on localhost:7892):
-        - autoclawd_get_screen_context — full screenshot + OCR of current screen
-        - autoclawd_get_cursor_context — 600×400 crop around cursor: OCR + AX element
-        - autoclawd_get_selection      — currently selected text + selection screenshot
-        - autoclawd_get_audio_transcript — rolling mic transcript buffer
-        Use these to read the current screen state before taking action.
-        """
-
         return """
         # FUCBC: Find Use-Case, Build Capability
 
@@ -342,14 +332,12 @@ final class LearnModeService: ObservableObject {
         2. Design a modular, EXECUTABLE capability with sub-workflows.
         3. Write a complete SKILL.md with REAL executable steps — not descriptions.
            - Use shell commands (curl, python3, osascript, ffmpeg, yt-dlp, etc.)
-           - Reference MCP tools where available
            - Each step must be something Claude Code can literally execute
         4. Output the JSON manifest at the end.
 
         ## Execution Environment
         - macOS, bash/zsh available
         - Claude Code SDK with tool use (Bash, Read, Write, WebSearch, etc.)
-        - \(mcpToolsSection)
         - Python 3, curl, osascript available
         - AutoClawd can paste results to frontmost app via clipboard
 
@@ -367,9 +355,8 @@ final class LearnModeService: ObservableObject {
           -d "kind=self&sr=SUBREDDIT&title=TITLE&text=CONTENT"
 
         # Threads/Instagram via Graph API
-        # Twitter MCP, Reddit MCP — use if available in MCP servers list
         ```
-        For Threads, Instagram: use the Meta Graph API or MCP tools if available.
+        For Threads, Instagram: use the Meta Graph API.
 
         ---
 
@@ -407,7 +394,7 @@ final class LearnModeService: ObservableObject {
         {Processing step with actual code}
 
         ### 3. Execute (for each platform)
-        {Real API calls or MCP tool invocations, with placeholder env vars}
+        {Real API calls or shell invocations, with placeholder env vars}
 
         ### 4. Notify
         {How to report result to user — paste to clipboard, show notification, etc.}
