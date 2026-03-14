@@ -7,6 +7,7 @@ final class CapabilityToastModel: ObservableObject {
     var onTap: () -> Void = {}
     var onSnooze: () -> Void = {}
     var onMarkIrrelevant: () -> Void = {}
+    var onQuestionOption: (String) -> Void = { _ in }
 }
 
 /// SwiftUI wrapper that renders the capability toast.
@@ -19,7 +20,8 @@ private struct CapabilityToastModelView: View {
                 item: i,
                 onTap: model.onTap,
                 onSnooze: model.onSnooze,
-                onMarkIrrelevant: model.onMarkIrrelevant
+                onMarkIrrelevant: model.onMarkIrrelevant,
+                onQuestionOption: model.onQuestionOption
             )
             .transition(.move(edge: .trailing).combined(with: .opacity))
         }
@@ -53,11 +55,18 @@ final class ToastWindow: NSPanel {
     }
 
     /// Show a suggestion toast in the top-right corner.
-    func show(_ item: SuggestionItem, onTap: @escaping () -> Void, onSnooze: @escaping () -> Void, onMarkIrrelevant: @escaping () -> Void) {
+    func show(
+        _ item: SuggestionItem,
+        onTap: @escaping () -> Void,
+        onSnooze: @escaping () -> Void,
+        onMarkIrrelevant: @escaping () -> Void,
+        onQuestionOption: @escaping (String) -> Void = { _ in }
+    ) {
         capModel.item = item
         capModel.onTap = onTap
         capModel.onSnooze = onSnooze
         capModel.onMarkIrrelevant = onMarkIrrelevant
+        capModel.onQuestionOption = onQuestionOption
         positionTopRight()
         orderFront(nil)
     }

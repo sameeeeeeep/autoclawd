@@ -35,4 +35,18 @@ final class WorldModelService: @unchecked Sendable {
         existing += "\n- \(info)"
         write(existing, for: projectID)
     }
+
+    /// Append a suggestion feedback note to the global world model.
+    /// Used to teach the system what the user considers actionable vs. irrelevant.
+    func appendSuggestionFeedback(_ note: String) {
+        queue.async { [self] in
+            var content = self.read()
+            if !content.contains("## Suggestion Feedback") {
+                content += "\n\n## Suggestion Feedback\n"
+            }
+            let date = ISO8601DateFormatter().string(from: Date())
+            content += "- [\(date)] \(note)\n"
+            self.write(content)
+        }
+    }
 }

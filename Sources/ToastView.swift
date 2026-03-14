@@ -7,6 +7,7 @@ struct CapabilityToastView: View {
     let onTap: () -> Void
     let onSnooze: () -> Void
     let onMarkIrrelevant: () -> Void
+    var onQuestionOption: (String) -> Void = { _ in }
 
     var body: some View {
         switch item {
@@ -14,6 +15,8 @@ struct CapabilityToastView: View {
             capabilityBody(match: match)
         case .task(let task):
             taskBody(task: task)
+        case .question(let question):
+            questionBody(question: question)
         }
     }
 
@@ -129,6 +132,60 @@ struct CapabilityToastView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+    }
+
+    // MARK: Question rendering
+
+    private func questionBody(question: SuggestionQuestion) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("AutoClawd noticed", systemImage: "sparkles")
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(Color.purple.opacity(0.18))
+                    .clipShape(Capsule())
+                    .foregroundStyle(Color.purple)
+                Spacer()
+                Button(action: onSnooze) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Glass.textTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(question.question)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Glass.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 4) {
+                ForEach(question.options, id: \.self) { option in
+                    Button {
+                        onQuestionOption(option)
+                    } label: {
+                        Text(option)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(option.lowercased() == "not relevant" ? Glass.textTertiary : Glass.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .background(Color.white.opacity(option.lowercased() == "not relevant" ? 0.04 : 0.10))
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(width: 300)
+        .background(glassBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.purple.opacity(0.25), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
     }

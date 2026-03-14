@@ -2,412 +2,314 @@
 import Foundation
 import AppKit
 
-/// Unified suggestion pipeline. Runs on every OCR+transcript frame.
+/// Two-phase suggestion pipeline:
 ///
-/// Three parallel paths:
-///   1. Capability scoring (sync, keyword/URL/app matching) — always runs
-///   2. Context-aware task/compose extraction — fires when screen OR transcript changes
-///      Uses llama3.2 (same model as pipeline; keep_alive keeps it hot between calls).
-///   3. Passive automation detection — fires every 90s from rolling activity buffer
-///      Detects repetitive multi-app workflows; surfaces FUCBC-style automations.
+///   Phase 1 — `evaluate()` (synchronous, every OCR frame):
+///     Pure keyword / URL / app scoring via CapabilityStore. No inference.
 ///
-/// Single model: llama3.2 (3B) for ALL local inference.
-/// llama3.1:8b was removed — 4.9GB + 2.0GB concurrent = memory pressure + 100s+ cold starts.
+///   Phase 2 — Haiku inference (async, two trigger points):
+///     a. `sessionEndSuggest(context:)` — fires once at session end (10s silence)
+///     b. `scheduleScreenSuggestion(...)` — fires on OCR change with 3-min debounce
+///        (handles silent screen work where there is no voice session)
 ///
-/// Guards (prevent Ollama overload):
-///   - In-flight lock (`isExtracting`) — only one model call at a time
-///   - 5s debounce (`lastExtractionAt`) — absorbs rapid OCR frame changes
-///   - 30s capability cooldown (`lastSuggestedCapabilityID`)
-///
-/// Declared @MainActor — async awaits suspend on main actor (acceptable for periodic checks).
+///   Both paths use Claude Haiku via `claude --print` (OAuth / API key, same as execution).
+///   Output confidence determines routing:
+///     ≥ 0.80 → `.task` → toast, run immediately
+///     0.65–0.79 → `.question` → toast with option buttons (interactive clarification)
+///     < 0.65 → nil (suppressed)
 @MainActor
 final class SuggestionPipeline {
 
-    // Single model: llama3.2 (3B). Same model used by cleaning/analysis pipeline.
-    // llama3.1:8b was tried but 4.9GB + 2.0GB = 6.9GB concurrent RAM killed everything.
-    // With keep_alive=300 in OllamaService, the model stays hot between calls — no cold-start.
-    private let ollama = OllamaService()
+    // MARK: - Phase 1: Capability Cooldown
 
-    // MARK: - Extraction Guards
-
-    // Hash of (transcript + screenText) — fires extraction when EITHER changes.
-    private var lastContextHash: Int = 0
-
-    // In-flight lock — one Llama/Groq call at a time; prevents call pile-ups.
-    private var isExtracting = false
-
-    // Debounce — minimum 5s between extraction attempts; absorbs rapid OCR frame changes.
-    private var lastExtractionAt: Date = .distantPast
-    private let extractionDebounce: TimeInterval = 5.0
-
-    // Deduplication: don't re-surface the same capability within cooldown window.
     private var lastSuggestedCapabilityID: String?
     private var lastSuggestedAt: Date = .distantPast
     private let capabilityCooldown: TimeInterval = 30.0
 
-    // MARK: - Activity Buffer (passive automation detection)
+    // MARK: - Phase 2: Screen-Triggered Haiku Guards
 
-    private struct ActivityFrame {
-        let timestamp: Date
-        let app: String
-        let windowTitle: String
-        let ocrSnippet: String  // first 200 chars — enough for pattern matching
-    }
+    private let haiku = ClaudeHaikuService()
+    private var lastScreenHash: Int = 0
+    private var lastScreenHaikuAt: Date = .distantPast
+    private let screenHaikuDebounce: TimeInterval = 180.0   // 3 min for passive OCR-change trigger
+    private let appSwitchHaikuDebounce: TimeInterval = 60.0 // 60s for explicit app-switch events
+    private var lastAppSwitchHaikuAt: Date = .distantPast
+    private var isHaikuRunning = false
 
-    private var activityBuffer: [ActivityFrame] = []
-    private let activityBufferMax = 120           // ~10 min at 5s OCR interval
-    private var lastAutomationCheckAt: Date = .distantPast
-    private let automationCheckInterval: TimeInterval = 90.0
+    // MARK: - Phase 1: Synchronous Evaluate
 
-    // MARK: - Evaluate
-
-    /// Returns the top suggestion for the current frame, or nil if nothing is relevant.
     func evaluate(
         screenText: String,
         transcript: String,
         app: String?,
-        urls: [String],
-        isOllamaEnabled: Bool
-    ) async -> SuggestionItem? {
-
-        let appName = app ?? "Unknown"
-
-        // 0. Buffer this frame for passive automation detection
-        bufferActivity(app: appName, ocrSnippet: screenText)
-
-        // 1. Capability scoring (synchronous — always runs)
+        urls: [String]
+    ) -> SuggestionItem? {
         let capMatches = CapabilityStore.shared.suggest(
             screenText: screenText,
             transcript: transcript,
             app: app,
             urls: urls
         )
+        guard let top = capMatches.first else { return nil }
 
-        // 2. Context-aware task/compose extraction.
-        // Guards: in-flight lock + 5s debounce + hash change.
-        var taskSuggestion: TaskSuggestion?
-        let contextHash = (transcript + screenText).hashValue
-        let debounceOk  = Date().timeIntervalSince(lastExtractionAt) >= extractionDebounce
-
-        if isOllamaEnabled, !screenText.isEmpty,
-           contextHash != lastContextHash,
-           !isExtracting, debounceOk {
-            lastContextHash  = contextHash
-            lastExtractionAt = Date()
-            isExtracting     = true
-            taskSuggestion   = await extractTask(
-                transcript: transcript,
-                screenText: screenText,
-                app: app,
-                urls: urls
-            )
-            isExtracting = false
-        }
-
-        // 3. Passive automation detection (every 90s, only when path 2 is idle).
-        if isOllamaEnabled,
-           Date().timeIntervalSince(lastAutomationCheckAt) >= automationCheckInterval,
-           !isExtracting, taskSuggestion == nil {
-            lastAutomationCheckAt = Date()
-            isExtracting = true
-            if let autoSuggestion = await detectAutomation() {
-                taskSuggestion = autoSuggestion
-            }
-            isExtracting = false
-        }
-
-        // 4. Merge: high-confidence tasks win; else capability (with cooldown); else low-confidence task
-        if let task = taskSuggestion, task.confidence >= 0.7 {
-            return .task(task)
-        }
-        if let top = capMatches.first {
-            let id      = top.capability.id
-            let elapsed = Date().timeIntervalSince(lastSuggestedAt)
-            if id == lastSuggestedCapabilityID, elapsed < capabilityCooldown {
-                // Same capability shown recently — suppress until cooldown expires
-            } else {
-                lastSuggestedCapabilityID = id
-                lastSuggestedAt = Date()
-                return .capability(top)
-            }
-        }
-        if let task = taskSuggestion {
-            return .task(task)
-        }
-        return nil
+        let id      = top.capability.id
+        let elapsed = Date().timeIntervalSince(lastSuggestedAt)
+        if id == lastSuggestedCapabilityID, elapsed < capabilityCooldown { return nil }
+        lastSuggestedCapabilityID = id
+        lastSuggestedAt = Date()
+        return .capability(top)
     }
 
-    // MARK: - Activity Buffer
+    // MARK: - Phase 2a: Session-End Haiku Pass
 
-    private func bufferActivity(app: String, ocrSnippet: String) {
-        let windowTitle = Self.accessibilityWindowTitle() ?? ""
-        let frame = ActivityFrame(
-            timestamp:   Date(),
-            app:         app,
-            windowTitle: windowTitle,
-            ocrSnippet:  String(ocrSnippet.prefix(200))
-                .replacingOccurrences(of: "\n", with: " ")
-        )
-        activityBuffer.append(frame)
-        if activityBuffer.count > activityBufferMax {
-            activityBuffer.removeFirst(activityBuffer.count - activityBufferMax)
-        }
+    /// One Haiku call fired at session end (voice session → 10s silence).
+    /// Returns `.task` (high confidence), `.question` (medium), or nil.
+    func sessionEndSuggest(context: SuggestionContext) async -> SuggestionItem? {
+        guard !context.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return await runHaiku(context: context)
     }
 
-    // MARK: - Context-Aware Task Extraction
+    // MARK: - Phase 2b: Screen-Triggered Haiku (silent screen work)
 
-    /// Screen-aware extraction. Understands two situations:
-    ///   - COMPOSING: user is actively writing something → offer compose assistance
-    ///   - TASK IN CONTENT: visible text contains a request/action item → extract and run it
-    ///
-    /// Uses llama3.2 (already hot from the cleaning/analysis pipeline).
-    private func extractTask(
+    /// Non-blocking. Fires a Haiku Task if OCR changed AND 3-min debounce allows.
+    /// `onResult` called on @MainActor with the suggestion item.
+    func scheduleScreenSuggestion(
+        screenText: String,
         transcript: String,
-        screenText: String,
         app: String?,
-        urls: [String]
-    ) async -> TaskSuggestion? {
-        let appName      = app ?? "Unknown"
-        let screenSample = String(screenText.prefix(1500))
-        let urlList      = urls.prefix(5).joined(separator: ", ")
+        urls: [String],
+        clipboard: [String],
+        worldModel: String,
+        onResult: @escaping @MainActor (SuggestionItem) -> Void
+    ) {
+        let hash    = screenText.hashValue
+        let elapsed = Date().timeIntervalSince(lastScreenHaikuAt)
 
-        let prompt = """
-        You are an ambient AI agent that can see the user's screen. Analyze what is visible and extract one actionable suggestion.
+        guard !isHaikuRunning,
+              elapsed >= screenHaikuDebounce,
+              hash != lastScreenHash,
+              !screenText.isEmpty
+        else { return }
 
-        App: \(appName)
-        Screen (OCR):
-        \(screenSample)
-        Speech (if any): \(transcript.isEmpty ? "(silent)" : transcript)
-        URLs: \(urlList.isEmpty ? "none" : urlList)
+        lastScreenHash    = hash
+        lastScreenHaikuAt = Date()
+        isHaikuRunning    = true
 
-        Detect ONE of these situations:
+        let ctx = SuggestionContext(
+            transcript: transcript,
+            screenText: screenText,
+            app:        app,
+            urls:       urls,
+            clipboard:  clipboard,
+            worldModel: worldModel
+        )
 
-        1. COMPOSING — user is actively writing an email draft, message, or document in progress:
-           Indicators: "To:", "Subject:", "Cc:", partial draft text in a compose window, unfinished message in an input box.
-           → {"type":"compose","title":"Help write this [email/message]","draft":"<the visible draft text, verbatim>","subject":"<subject line if present>","contacts":"<recipient name if visible>","confidence":0.85}
-
-        2. TASK IN CONTENT — visible text contains work to be done (a request, TODO, action item):
-           Indicators: someone asking the user to do something ("can you fix", "please send", "we need"), task lists, bug reports, work messages in WhatsApp/Slack/email.
-           → {"type":"task","title":"<verb-first action, max 10 words>","details":"<what needs doing and any relevant context>","contacts":"<who sent/requested it if visible>","confidence":0.8}
-
-        3. NOTHING ACTIONABLE — user is browsing, reading news, watching a video, no clear next action:
-           → {}
-
-        Rules:
-        - Only output if confidence > 0.65
-        - Use actual text visible on screen — do not invent content
-        - Title must start with an action verb: Write, Fix, Reply, Send, Complete, Review, etc.
-        - Output ONLY valid JSON. No explanation, no markdown fences.
-        """
-
-        do {
-            let response = try await ollama.generate(prompt: prompt, numPredict: 320)
-            return parseTask(from: response, app: appName, screenText: screenText, fallbackURLs: urls)
-        } catch {
-            // Silently discard — capability suggestions still surface even if extraction fails.
-            return nil
-        }
-    }
-
-    // MARK: - Passive Automation Detection
-
-    /// Analyses the rolling activity buffer (~2 min window) for repetitive multi-app workflows.
-    /// Fires every 90s. Returns a `TaskSuggestion` with intent="automation" if a pattern is found.
-    private func detectAutomation() async -> TaskSuggestion? {
-        // Need at least 6 frames (~30s) to detect a pattern
-        guard activityBuffer.count >= 6 else { return nil }
-
-        // Build compact narrative of unique recent steps (last 24 frames ≈ 2 min)
-        let recentFrames = activityBuffer.suffix(24)
-        guard let firstTime = recentFrames.first?.timestamp else { return nil }
-
-        var seenKeys: [String] = []
-        var narrativeLines: [String] = []
-        for frame in recentFrames {
-            let key = "\(frame.app)|\(frame.windowTitle)"
-            guard !seenKeys.contains(key) else { continue }
-            seenKeys.append(key)
-            let elapsed  = Int(frame.timestamp.timeIntervalSince(firstTime))
-            let appLabel = frame.windowTitle.isEmpty ? frame.app : "\(frame.app) — \(frame.windowTitle)"
-            narrativeLines.append("T+\(elapsed)s [\(appLabel)] \(frame.ocrSnippet.prefix(80))")
-        }
-
-        // Need at least 3 distinct steps across 2+ apps to be interesting
-        let distinctApps = Set(recentFrames.map { $0.app })
-        guard narrativeLines.count >= 3, distinctApps.count >= 2 else { return nil }
-
-        let narrative  = narrativeLines.joined(separator: "\n")
-        let appsInvolved = distinctApps.prefix(5).joined(separator: ", ")
-
-        let prompt = """
-        You are an automation analyst observing a user's workflow. Detect if there is a REPETITIVE MULTI-STEP WORKFLOW that could be automated.
-
-        Recent activity (last ~2 minutes):
-        \(narrative)
-
-        If you see a clear repeatable workflow spanning 2+ apps or 3+ manual steps the user performs regularly:
-        → {"type":"automation","title":"<verb-first, max 10 words>","details":"<what the workflow does and why automating it saves time>","confidence":0.75}
-
-        If this is just normal browsing / one-off activity with no repeatable pattern:
-        → {}
-
-        Rules:
-        - Only suggest if confidence > 0.70 AND the pattern is genuinely repetitive
-        - Title must start with: Automate, Build, Create, or Set up
-        - Output ONLY valid JSON. No explanation.
-        """
-
-        do {
-            let response: String = try await ollama.generate(prompt: prompt, numPredict: 200)
-
-            // Parse JSON — automation intent maps to a task suggestion with executionPrompt for FUCBC
-            var raw = response.trimmingCharacters(in: .whitespacesAndNewlines)
-            if raw.hasPrefix("```") {
-                let lines = raw.components(separatedBy: "\n")
-                raw = lines.dropFirst().dropLast().joined(separator: "\n")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let item = await self.runHaiku(context: ctx) {
+                onResult(item)
             }
-            guard let data  = raw.data(using: .utf8),
-                  let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let type  = json["type"]  as? String, type == "automation",
-                  let title = json["title"] as? String, !title.isEmpty
-            else { return nil }
+            self.isHaikuRunning = false
+        }
+    }
 
-            let confidence = (json["confidence"] as? Double).map { Float($0) } ?? 0.5
-            guard confidence > 0.70 else { return nil }
+    // MARK: - Phase 2c: App-Switch Haiku (high-signal event, 60s debounce)
 
-            let details = json["details"] as? String ?? ""
+    /// Called after `captureOnAppSwitch()` resolves. 60s debounce — much shorter than the
+    /// 3-min passive screen trigger since an app switch is an intentional context change.
+    func scheduleAppSwitchSuggestion(
+        screenText: String,
+        transcript: String,
+        app: String?,
+        urls: [String],
+        clipboard: [String],
+        worldModel: String,
+        onResult: @escaping @MainActor (SuggestionItem) -> Void
+    ) {
+        let elapsed = Date().timeIntervalSince(lastAppSwitchHaikuAt)
+        guard !isHaikuRunning,
+              elapsed >= appSwitchHaikuDebounce,
+              !screenText.isEmpty
+        else { return }
 
-            let executionPrompt = """
-            Automation opportunity detected from screen activity.
+        lastAppSwitchHaikuAt = Date()
+        isHaikuRunning = true
 
-            Workflow: \(title)
-            \(details.isEmpty ? "" : "Details: \(details)\n")
-            Apps involved: \(appsInvolved)
+        let ctx = SuggestionContext(
+            transcript: transcript,
+            screenText: screenText,
+            app:        app,
+            urls:       urls,
+            clipboard:  clipboard,
+            worldModel: worldModel
+        )
 
-            Recent activity:
-            \(narrative)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let item = await self.runHaiku(context: ctx) {
+                onResult(item)
+            }
+            self.isHaikuRunning = false
+        }
+    }
 
-            Build a FUCBC capability (SKILL.md) that automates this workflow. Steps:
-            1. Identify the exact repeated manual steps
-            2. Automate each step using available tools (shell commands, APIs, Claude)
-            3. Chain them into a single command the user can run next time
+    // MARK: - Shared Haiku Runner
 
-            Start by describing what you'll automate, then write the SKILL.md.
-            """
-
-            let context = TaskContext(
-                files: [], contacts: [], urls: [], rawOCR: narrative
-            )
-            return TaskSuggestion(
-                id:               UUID().uuidString,
-                title:            title,
-                intent:           "automation",
-                detectedContext:  context,
-                executionPrompt:  executionPrompt,
-                confidence:       confidence
-            )
+    private func runHaiku(context: SuggestionContext) async -> SuggestionItem? {
+        let prompt = buildPrompt(context: context)
+        do {
+            let response = try await haiku.generate(prompt: prompt)
+            Log.info(.pipeline, "Haiku response (\(response.count) chars)")
+            return parseResponse(from: response, context: context)
         } catch {
+            Log.warn(.pipeline, "Haiku inference failed: \(error.localizedDescription)")
             return nil
         }
     }
 
-    // MARK: - Task Parsing
+    // MARK: - Prompt
 
-    private func parseTask(
-        from response: String,
-        app: String,
-        screenText: String,
-        fallbackURLs: [String]
-    ) -> TaskSuggestion? {
-        // Strip markdown fences if model wraps the output
+    private func buildPrompt(context: SuggestionContext) -> String {
+        var sections: [String] = []
+
+        sections.append("""
+        You are an ambient AI agent that can see the user's screen and hear their conversation. \
+        Analyze everything below and produce ONE actionable suggestion or clarifying question.
+        """)
+
+        sections.append("## App\n\(context.app ?? "Unknown")")
+
+        if !context.urls.isEmpty {
+            sections.append("## URLs visible\n" + context.urls.prefix(8).joined(separator: "\n"))
+        }
+
+        if !context.screenText.isEmpty {
+            // Full OCR — Haiku has 200k context, no need to truncate
+            sections.append("## Screen (full OCR)\n\(context.screenText)")
+        }
+
+        if !context.clipboard.isEmpty {
+            sections.append("## Recent clipboard\n" + context.clipboard.joined(separator: "\n"))
+        }
+
+        if !context.transcript.isEmpty {
+            sections.append("## Voice transcript (this session)\n\(context.transcript)")
+        }
+
+        if !context.worldModel.isEmpty {
+            sections.append("## Project world model\n\(String(context.worldModel.prefix(1500)))")
+        }
+
+        sections.append("""
+        ## Output format — pick exactly ONE:
+
+        HIGH CONFIDENCE (≥ 0.80): clear task or compose opportunity
+        1. COMPOSING — user is writing / discussed writing an email, message, or document:
+           → {"type":"compose","title":"Help write this [email/message/doc]","draft":"<draft or intent>","subject":"<subject if present>","contacts":"<recipient if visible>","confidence":0.85}
+
+        2. TASK — visible content or transcript contains work to be done (request, bug, TODO, follow-up):
+           → {"type":"task","title":"<verb-first, max 10 words>","details":"<what and why>","contacts":"<who requested>","confidence":0.8}
+
+        MEDIUM CONFIDENCE (0.65–0.79): interesting context but one clarification needed
+        3. QUESTION — you see something relevant but need one answer to act:
+           → {"type":"question","question":"<one specific question, max 20 words>","options":["<action A, max 8 words>","<action B, max 8 words>","Not relevant"],"confidence":0.72}
+
+        LOW CONFIDENCE / NOTHING:
+        4. → {}
+
+        Rules:
+        - Be specific — use actual names, subjects, URLs from the context. Never invent content.
+        - TASK/COMPOSE titles must start with a verb: Write, Fix, Reply, Send, Review, Build, etc.
+        - QUESTION options must be concrete actions, not abstract ("Not relevant" always last).
+        - Output ONLY valid JSON. No explanation, no markdown fences.
+        """)
+
+        return sections.joined(separator: "\n\n")
+    }
+
+    // MARK: - Response Parsing
+
+    private func parseResponse(from response: String, context: SuggestionContext) -> SuggestionItem? {
         var raw = response.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.hasPrefix("```") {
             let lines = raw.components(separatedBy: "\n")
             raw = lines.dropFirst().dropLast().joined(separator: "\n")
         }
+        // Strip any leading prose before the JSON object
+        if let jsonStart = raw.firstIndex(of: "{") {
+            raw = String(raw[jsonStart...])
+        }
 
-        guard let data  = raw.data(using: .utf8),
-              let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type  = json["type"]  as? String, !type.isEmpty,
-              let title = json["title"] as? String, !title.isEmpty
+        guard let data = raw.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = json["type"] as? String, !type.isEmpty
         else { return nil }
 
         let confidence = (json["confidence"] as? Double).map { Float($0) } ?? 0.5
         guard confidence > 0.65 else { return nil }
 
-        let contactStr = json["contacts"] as? String ?? ""
-        let contacts   = contactStr.isEmpty ? [] : [contactStr]
-        let context    = TaskContext(files: [], contacts: contacts, urls: fallbackURLs, rawOCR: screenText)
-
-        let intent: String
-        let executionPrompt: String
-
         switch type {
 
+        case "question":
+            guard let questionText = json["question"] as? String, !questionText.isEmpty else { return nil }
+            let options = (json["options"] as? [String]) ?? ["Yes, do it", "Not relevant"]
+            let q = SuggestionQuestion(
+                id:        UUID().uuidString,
+                question:  questionText,
+                options:   options,
+                context:   context,
+                createdAt: Date()
+            )
+            return .question(q)
+
         case "compose":
-            // User is actively writing — help them write it better
-            intent = "compose"
+            guard let title = json["title"] as? String, !title.isEmpty else { return nil }
+            guard confidence >= 0.80 else {
+                // Medium-confidence compose → ask instead of guessing
+                let q = SuggestionQuestion(
+                    id:        UUID().uuidString,
+                    question:  "Should I help you write this?",
+                    options:   ["Yes, improve the draft", "Not relevant"],
+                    context:   context,
+                    createdAt: Date()
+                )
+                return .question(q)
+            }
             let draft   = json["draft"]   as? String ?? ""
             let subject = json["subject"] as? String ?? ""
+            let contact = json["contacts"] as? String ?? ""
+            let taskCtx = TaskContext(files: [], contacts: contact.isEmpty ? [] : [contact], urls: context.urls, rawOCR: context.screenText)
+            var parts   = ["The user is composing content in \(context.app ?? "an app") and needs help."]
+            if !subject.isEmpty { parts.append("Subject: \(subject)") }
+            if !contact.isEmpty { parts.append("To: \(contact)") }
+            parts += ["", "Draft / intent:", draft.isEmpty ? "(see transcript below)" : draft]
+            if draft.isEmpty { parts += ["", "Transcript:", context.transcript] }
+            parts += ["", "Rewrite to be clear, professional, and effective. Output the improved version only."]
+            let task = TaskSuggestion(id: UUID().uuidString, title: title, intent: "compose", detectedContext: taskCtx, executionPrompt: parts.joined(separator: "\n"), confidence: confidence)
+            return .task(task)
 
-            var parts: [String] = [
-                "The user is composing content in \(app) and needs help improving it."
-            ]
-            if !subject.isEmpty    { parts.append("Subject: \(subject)") }
-            if !contactStr.isEmpty { parts.append("To: \(contactStr)") }
-            parts.append("")
-            parts.append("Current draft:")
-            parts.append(draft.isEmpty ? "(see screen context below)" : draft)
-            if draft.isEmpty {
-                parts.append("")
-                parts.append("Screen context:")
-                parts.append(String(screenText.prefix(800)))
+        default: // "task"
+            guard let title = json["title"] as? String, !title.isEmpty else { return nil }
+            guard confidence >= 0.80 else {
+                let q = SuggestionQuestion(
+                    id:        UUID().uuidString,
+                    question:  "I noticed: \"\(title)\". Should I help?",
+                    options:   ["Yes, let's do it", "Not relevant"],
+                    context:   context,
+                    createdAt: Date()
+                )
+                return .question(q)
             }
-            parts.append("")
-            parts.append("Rewrite this to be clear, professional, and effective. Output the improved version only — ready to be pasted back. Do not add commentary or explanation.")
-            executionPrompt = parts.joined(separator: "\n")
-
-        default:
-            // type == "task" — visible content contains work to do
-            intent = "task"
-            let details = json["details"] as? String ?? ""
-
-            var parts: [String] = [
-                "Task detected from screen content in \(app):",
-                title,
-                ""
-            ]
-            if !details.isEmpty      { parts.append("Context: \(details)"); parts.append("") }
-            if !contacts.isEmpty     { parts.append("Requested by / involves: \(contacts.joined(separator: ", "))"); parts.append("") }
-            if !fallbackURLs.isEmpty { parts.append("Relevant URLs: \(fallbackURLs.joined(separator: ", "))"); parts.append("") }
-            parts.append("Screen context:")
-            parts.append(String(screenText.prefix(600)))
-            parts.append("")
-            parts.append("Complete this task. If anything is ambiguous, ask one clarifying question before proceeding.")
-            executionPrompt = parts.joined(separator: "\n")
+            let details = json["details"]  as? String ?? ""
+            let contact = json["contacts"] as? String ?? ""
+            let taskCtx = TaskContext(files: [], contacts: contact.isEmpty ? [] : [contact], urls: context.urls, rawOCR: context.screenText)
+            var parts: [String] = ["Task from screen/conversation in \(context.app ?? "unknown"):", title, ""]
+            if !details.isEmpty { parts += ["Context: \(details)", ""] }
+            if !contact.isEmpty { parts += ["Requested by: \(contact)", ""] }
+            if !context.urls.isEmpty { parts += ["Relevant URLs: \(context.urls.joined(separator: ", "))", ""] }
+            parts += ["Conversation:", context.transcript, "", "Complete this task. Ask one clarifying question if anything is ambiguous."]
+            let task = TaskSuggestion(id: UUID().uuidString, title: title, intent: "task", detectedContext: taskCtx, executionPrompt: parts.joined(separator: "\n"), confidence: confidence)
+            return .task(task)
         }
-
-        return TaskSuggestion(
-            id:              UUID().uuidString,
-            title:           title,
-            intent:          intent,
-            detectedContext: context,
-            executionPrompt: executionPrompt,
-            confidence:      confidence
-        )
-    }
-
-    // MARK: - AX Window Title Helper
-
-    private static func accessibilityWindowTitle() -> String? {
-        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
-        let axApp = AXUIElementCreateApplication(pid)
-        var windowRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &windowRef) == .success,
-              let window = windowRef else { return nil }
-        var titleRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &titleRef) == .success
-        else { return nil }
-        return titleRef as? String
     }
 }

@@ -20,11 +20,36 @@ struct SuggestionMatch: Sendable {
     let contextualHeadline: String     // resolved question, e.g. "Launching a Threads campaign?"
 }
 
+// MARK: - Suggestion Context (rich signal package for Haiku inference)
+
+/// Assembled on @MainActor at trigger time, then passed into async inference calls.
+struct SuggestionContext: Sendable {
+    let transcript:  String    // full session transcript (no truncation)
+    let screenText:  String    // full background OCR (no truncation)
+    let app:         String?   // frontmost app at trigger time
+    let urls:        [String]  // URLs detected by ScreenVisionAnalyzer
+    let clipboard:   [String]  // last 5 clipboard previews ("[\(type)] \(preview)")
+    let worldModel:  String    // world model markdown (first 1500 chars)
+}
+
+// MARK: - Suggestion Question (interactive clarification via toast)
+
+/// Surfaced when Haiku detects a situation but needs one clarification before acting.
+/// Rendered as a toast with option buttons; user taps or responds by voice.
+struct SuggestionQuestion: Identifiable, Sendable {
+    let id:        String
+    let question:  String           // "I see a Slack message from Alice — should I:"
+    let options:   [String]         // ["Write a reply", "Open the thread", "Not relevant"]
+    let context:   SuggestionContext // preserved for follow-up execution
+    let createdAt: Date
+}
+
 // MARK: - Unified Suggestion Item
 
 enum SuggestionItem: Sendable {
     case capability(SuggestionMatch)
     case task(TaskSuggestion)
+    case question(SuggestionQuestion)  // interactive clarification — user picks an option
 
     /// Stable ID used to detect whether the suggestion has changed between frames.
     /// Prevents AppState from clearing the toast when the cooldown suppresses a repeat.
@@ -32,6 +57,7 @@ enum SuggestionItem: Sendable {
         switch self {
         case .capability(let m): return "cap-\(m.capability.id)"
         case .task(let t):       return "task-\(t.id)"
+        case .question(let q):   return "q-\(q.id)"
         }
     }
 }

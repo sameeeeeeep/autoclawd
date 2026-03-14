@@ -247,10 +247,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if task.detectedContext.isComplete {
                         self.appState.executeSuggestedTask(task)
                     } else {
-                        // Open tasks panel for context gap-filling
                         self.appState.dismissDetectedSuggestion()
                         self.showMainPanel(tab: .tasks)
                     }
+                case .question:
+                    break  // question uses onQuestionOption, not onTap
                 }
             },
             onSnooze: { [weak self] in
@@ -264,15 +265,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     CapabilityStore.shared.markIrrelevant(capabilityID: match.capability.id)
                 }
                 self?.appState.dismissDetectedSuggestion()
+            },
+            onQuestionOption: { [weak self] option in
+                guard let self, case .question(let q) = item else { return }
+                self.appState.handleSuggestionQuestionOption(option, question: q)
             }
         )
 
-        // Auto-dismiss after 5 seconds
+        // Questions stay 10s (need time to read + pick); everything else 5s
+        let dismissDelay: TimeInterval = {
+            if case .question = item { return 10 }
+            return 5
+        }()
         let work = DispatchWorkItem { [weak self] in
             self?.appState.dismissDetectedSuggestion()
         }
         toastDismissWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay, execute: work)
     }
 
     // MARK: - Main Panel

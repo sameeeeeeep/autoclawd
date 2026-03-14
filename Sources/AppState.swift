@@ -645,12 +645,11 @@ final class AppState: ObservableObject {
                     // TODO: pass real URLs when ScreenVisionAnalyzer exposes them
                     // (detectedURLs come from on-demand captureNow() snapshots only;
                     //  the background processFrame() path doesn't surface barcode URLs)
-                    let item = await self.suggestionPipeline.evaluate(
+                    let item = self.suggestionPipeline.evaluate(
                         screenText: ocrText,
                         transcript: self.liveTranscriptText,
                         app: app,
-                        urls: self.lastScreenSnapshot?.detectedURLs ?? [],
-                        isOllamaEnabled: self.isOllamaEnabled
+                        urls: self.lastScreenSnapshot?.detectedURLs ?? []
                     )
                     // Only update detectedSuggestion when there is a new suggestion to show.
                     // Never clear it here — clearing happens only via user action (dismiss/execute)
@@ -661,6 +660,22 @@ final class AppState: ObservableObject {
                         if self.detectedSuggestion?.id != item.id {
                             self.detectedSuggestion = item
                         }
+                    }
+
+                    // Debounced screen-triggered Haiku (3-min cooldown, only on OCR change).
+                    // Fills the gap when user works silently — no voice session means
+                    // sessionEndSuggest never fires, so screen work would get no suggestions.
+                    self.suggestionPipeline.scheduleScreenSuggestion(
+                        screenText: ocrText,
+                        transcript: self.liveTranscriptText,
+                        app: app,
+                        urls: self.lastScreenSnapshot?.detectedURLs ?? [],
+                        clipboard: ClipboardMonitor.shared.entries.suffix(5).map { "[\($0.type)] \($0.preview)" },
+                        worldModel: self.worldModelContent
+                    ) { [weak self] screenItem in
+                        guard let self, self.detectedSuggestion == nil else { return }
+                        self.detectedSuggestion = screenItem
+                        Log.info(.pipeline, "Screen-triggered suggestion: \(screenItem.id)")
                     }
                 }
             }
@@ -853,6 +868,30 @@ final class AppState: ObservableObject {
                 )
             }
             Log.info(.system, "User session stopped — dispatching session-level processing (\(fullRawText.count) chars)")
+
+            // Session-end Haiku pass: one Claude Haiku call with full context when pipeline goes idle.
+            // Only in ambient mode — not during Learn Mode (user is training, not working).
+            if capturedPillMode == .ambient {
+                // Capture all signals on @MainActor before async handoff
+                let suggCtx = SuggestionContext(
+                    transcript: fullRawText,
+                    screenText: screenSummary ?? "",
+                    app:        NSWorkspace.shared.frontmostApplication?.localizedName,
+                    urls:       lastScreenSnapshot?.detectedURLs ?? [],
+                    clipboard:  ClipboardMonitor.shared.entries.suffix(5).map { "[\($0.type)] \($0.preview)" },
+                    worldModel: worldModelContent
+                )
+                let pipeline = suggestionPipeline
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if let item = await pipeline.sessionEndSuggest(context: suggCtx) {
+                        if self.detectedSuggestion == nil {
+                            self.detectedSuggestion = item
+                            Log.info(.pipeline, "Session-end suggestion: \(item.id)")
+                        }
+                    }
+                }
+            }
 
             // Ambient mode: show post-session review canvas immediately.
             // Tasks and analyses will populate it reactively as the pipeline runs.
@@ -1374,6 +1413,54 @@ final class AppState: ObservableObject {
         detectedSuggestion = nil
     }
 
+    /// Handle a user's answer to an interactive question toast.
+    /// "Not relevant" → dismiss. Any other option → build a task from the chosen action + original context.
+    func handleSuggestionQuestionOption(_ option: String, question: SuggestionQuestion) {
+        dismissDetectedSuggestion()
+        let snippet = String((question.context.screenText + " " + question.context.transcript)
+            .prefix(120)).replacingOccurrences(of: "\n", with: " ")
+        guard option.lowercased() != "not relevant" else {
+            // Teach world model: this context type is not actionable for this user
+            worldModelService.appendSuggestionFeedback(
+                "NOT RELEVANT in \(question.context.app ?? "unknown"): \(question.question) | ctx: \(snippet)"
+            )
+            return
+        }
+        // Positive: teach world model what the user acts on
+        worldModelService.appendSuggestionFeedback(
+            "ACTED '\(option)' in \(question.context.app ?? "unknown"): \(question.question)"
+        )
+
+        let ctx = TaskContext(
+            files:    [],
+            contacts: [],
+            urls:     question.context.urls,
+            rawOCR:   question.context.screenText
+        )
+        let executionPrompt = [
+            "User selected: \(option)",
+            "",
+            "Conversation context:",
+            question.context.transcript,
+            "",
+            "Screen context:",
+            String(question.context.screenText.prefix(600)),
+            "",
+            "Complete the selected action: \(option). If anything is ambiguous, ask one clarifying question first."
+        ].joined(separator: "\n")
+
+        let task = TaskSuggestion(
+            id:              UUID().uuidString,
+            title:           option,
+            intent:          "task",
+            detectedContext: ctx,
+            executionPrompt: executionPrompt,
+            confidence:      1.0  // user explicitly chose this
+        )
+        executeSuggestedTask(task)
+        Log.info(.pipeline, "Question option selected: '\(option)'")
+    }
+
     /// Execute a task suggestion detected by the SuggestionPipeline.
     func executeSuggestedTask(_ task: TaskSuggestion) {
         detectedSuggestion = nil
@@ -1490,8 +1577,26 @@ final class AppState: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             guard let self, self.pillMode != .aiSearch else { return }
-            Task {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
                 await self.screenVisionAnalyzer.captureOnAppSwitch()
+                // App switch = high-signal context change → fire Haiku with 60s debounce
+                // (much shorter than the 3-min passive screen trigger)
+                guard self.pillMode != .learn, self.detectedSuggestion == nil else { return }
+                let ocrText = self.screenVisionAnalyzer.recentContext() ?? ""
+                guard !ocrText.isEmpty else { return }
+                self.suggestionPipeline.scheduleAppSwitchSuggestion(
+                    screenText: ocrText,
+                    transcript: self.liveTranscriptText,
+                    app:        NSWorkspace.shared.frontmostApplication?.localizedName,
+                    urls:       self.lastScreenSnapshot?.detectedURLs ?? [],
+                    clipboard:  ClipboardMonitor.shared.entries.suffix(5).map { "[\($0.type)] \($0.preview)" },
+                    worldModel: self.worldModelContent
+                ) { [weak self] item in
+                    guard let self, self.detectedSuggestion == nil else { return }
+                    self.detectedSuggestion = item
+                    Log.info(.pipeline, "App-switch suggestion: \(item.id)")
+                }
             }
         }
         Log.info(.system, "AppState: app-switch OCR observer registered")
