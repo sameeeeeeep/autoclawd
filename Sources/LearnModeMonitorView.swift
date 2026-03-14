@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import UniformTypeIdentifiers
 
 // MARK: - Learn Mode Monitor View
 //
@@ -28,10 +27,16 @@ struct LearnModeMonitorView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            CanvasPulsingDot(color: .red)
-            Text("Recording")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Glass.textPrimary)
+            if service.isActive {
+                CanvasPulsingDot(color: .red)
+                Text("Recording")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Glass.textPrimary)
+            } else {
+                Text("Captured")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Glass.textSecondary)
+            }
             Text("·")
                 .foregroundStyle(Glass.textTertiary)
             Text("\(nodeCount) node\(nodeCount == 1 ? "" : "s")")
@@ -68,7 +73,7 @@ struct LearnModeMonitorView: View {
 
     private func nodeRow(_ node: CanvasNode) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            appIconView(appName: node.app)
+            AppIconView(appName: node.app, size: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(node.app)
                     .font(.system(size: 12, weight: .semibold))
@@ -98,35 +103,20 @@ struct LearnModeMonitorView: View {
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
-    // MARK: - App Icon View (inline fallback — no AppIconView type in this codebase)
-
-    private func appIconView(appName: String) -> some View {
-        let appPath = "/Applications/\(appName).app"
-        let image: NSImage = {
-            if FileManager.default.fileExists(atPath: appPath) {
-                return NSWorkspace.shared.icon(forFile: appPath)
-            }
-            if #available(macOS 12.0, *) {
-                return NSWorkspace.shared.icon(for: UTType.application)
-            } else {
-                return NSWorkspace.shared.icon(forFileType: "app")
-            }
-        }()
-        return Image(nsImage: image)
-            .resizable()
-            .frame(width: 28, height: 28)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
-
     // MARK: - Build Button
 
-    private var buildButton: some View {
-        let isBuilding: Bool = {
-            if case .building = service.session?.phase { return true }
-            return false
-        }()
+    private var isBuilding: Bool {
+        guard let phase = service.session?.phase else { return false }
+        switch phase {
+        case .building:   return true
+        case .done:       return true
+        case .failed:     return true
+        case .collecting: return false
+        }
+    }
 
-        return GlassButton("Stop & Build", icon: "wand.and.stars", tint: .green, isLarge: false) {
+    private var buildButton: some View {
+        GlassButton("Stop & Build", icon: "wand.and.stars", tint: .green, isLarge: false) {
             Task { await service.buildCapability() }
         }
         .disabled(isBuilding)

@@ -212,7 +212,7 @@ private struct ToolIconStrip: View {
 }
 
 /// Single app icon circle — uses NSWorkspace app icon with SF Symbol fallback.
-private struct AppIconView: View {
+struct AppIconView: View {
     let appName: String
     let size: CGFloat
 
