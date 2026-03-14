@@ -538,7 +538,7 @@ final class LearnModeService: ObservableObject {
         var freqB = [Character: Int]()
         for ch in b {
             freqB[ch, default: 0] += 1
-            if let countA = freqA[ch], freqB[ch]! <= countA { common += 1 }
+            if let countA = freqA[ch], (freqB[ch] ?? 0) <= countA { common += 1 }
         }
         return Double(common) / Double(max(a.count, b.count))
     }
