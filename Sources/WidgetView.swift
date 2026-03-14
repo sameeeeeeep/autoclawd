@@ -171,7 +171,6 @@ struct WidgetView: View {
     let onToggleSpeakerMode:  () -> Void
     let onToggleScreenShare:  () -> Void
     let onToggleCamera:       () -> Void
-    let onToggleWhatsApp:     () -> Void
     let onSessionConfigure:   () -> Void
     let onSessionPlay:        () -> Void
     let onSessionPause:       () -> Void
@@ -184,7 +183,6 @@ struct WidgetView: View {
     var isMultiSpeaker:      Bool = false
     var isScreenShareEnabled: Bool = false
     var isCameraEnabled:     Bool = false
-    var isWhatsAppEnabled:   Bool = false
     var sessionLifecycle: SessionLifecycleState = .undefined
     /// Live log lines (max 2) from AutoClawdLogger
     var logLines: [(dot: Color, text: String, time: String)] = []
@@ -815,15 +813,6 @@ struct WidgetView: View {
                 action:  onToggleScreenShare
             )
 
-            Rectangle().fill(appearance.dockSeparator).frame(width: 1, height: 20)
-
-            // WhatsApp toggle
-            dockToggle(
-                icon:   "message.fill",
-                active: isWhatsAppEnabled,
-                color:  Color(red: 0.07, green: 0.73, blue: 0.40),
-                action: onToggleWhatsApp
-            )
         }
         .frame(height: 50)
         .padding(.horizontal, 14)

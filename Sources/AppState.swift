@@ -261,10 +261,6 @@ final class AppState: ObservableObject {
     let workflowBuilder = WorkflowBuilder()
     private var workflowTask: Task<Void, Never>? = nil
 
-    // WhatsApp state
-    @Published var whatsAppStatus: WhatsAppStatus = .disconnected
-    let whatsAppPoller = WhatsAppPoller()
-
     // MARK: - Services
 
     private let storage = FileStorageManager.shared
@@ -551,11 +547,6 @@ final class AppState: ObservableObject {
 
         refreshExtractionItems()
         refreshPipeline()
-
-        // Start WhatsApp if previously connected
-        if SettingsManager.shared.whatsAppEnabled {
-            startWhatsApp()
-        }
 
         // Start system audio if enabled
         if systemAudioEnabled {
@@ -1185,58 +1176,6 @@ final class AppState: ObservableObject {
         codeIsStreaming = false
     }
 
-    // MARK: - WhatsApp
-
-    /// Start WhatsApp sidecar + poller if enabled.
-    func startWhatsApp() {
-        guard SettingsManager.shared.whatsAppEnabled else { return }
-        WhatsAppSidecar.shared.start()
-        Log.info(.system, "[WhatsApp] Sidecar starting, will poll once ready...")
-
-        // Wait for sidecar to be reachable before starting the poller
-        Task { @MainActor in
-            var ready = false
-            for attempt in 1...15 {
-                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1s
-                let (status, phone) = await WhatsAppService.shared.checkHealth()
-                if status != .disconnected || attempt > 5 {
-                    // Either connected/waitingForQR, or after 5s assume sidecar is up
-                    // (disconnected is a valid sidecar response too)
-                    ready = true
-                    self.whatsAppStatus = status
-                    // Persist phone number for self-chat filtering
-                    if let phone, !phone.isEmpty {
-                        SettingsManager.shared.whatsAppMyJID = phone
-                    }
-                    break
-                }
-            }
-            if ready {
-                self.whatsAppPoller.start(appState: self)
-                Log.info(.system, "[WhatsApp] Integration started — poller active")
-            } else {
-                Log.warn(.system, "[WhatsApp] Sidecar not reachable after 15s — poller not started")
-            }
-        }
-    }
-
-    /// Stop WhatsApp sidecar + poller.
-    func stopWhatsApp() {
-        whatsAppPoller.stop()
-        WhatsAppSidecar.shared.stop()
-        whatsAppStatus = .disconnected
-        Log.info(.system, "WhatsApp integration stopped")
-    }
-
-    /// Send a message via WhatsApp.
-    func sendWhatsAppMessage(jid: String, text: String) async {
-        do {
-            try await WhatsAppService.shared.sendMessage(jid: jid, text: text)
-            Log.info(.system, "[WhatsApp] Sent message to \(jid)")
-        } catch {
-            Log.warn(.system, "[WhatsApp] Failed to send: \(error)")
-        }
-    }
 
     // MARK: - Actions
 

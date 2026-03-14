@@ -133,13 +133,6 @@ final class PipelineOrchestrator: @unchecked Sendable {
 
         await notifyUpdate()
 
-        // WhatsApp messages are self-contained — run full pipeline per-message
-        if source == .whatsapp {
-            Log.info(.pipeline, "Pipeline[whatsapp]: running full per-message pipeline")
-            await executeFullPipeline(job)
-            return
-        }
-
         // All other per-chunk sources: display only, done.
         Log.info(.pipeline, "Pipeline[\(source.rawValue)]: per-chunk display done (analysis deferred to session end)")
     }
@@ -256,57 +249,6 @@ final class PipelineOrchestrator: @unchecked Sendable {
         }
 
         Log.info(.pipeline, "Pipeline[session-end]: complete")
-    }
-
-    // MARK: - Legacy Full Pipeline (WhatsApp per-message)
-
-    /// Full pipeline for self-contained messages (WhatsApp).
-    private func executeFullPipeline(_ job: PipelineJob) async {
-        let text            = job.text
-        let transcriptID    = job.transcriptID
-        let sessionID       = job.sessionID
-        let sessionChunkSeq = job.sessionChunkSeq
-        let durationSeconds = job.durationSeconds
-        let speakerName     = job.speakerName
-
-        // Stage 1: Clean
-        guard let cleaned = await cleaningService.processNewTranscript(
-            text: text,
-            transcriptID: transcriptID,
-            sessionID: sessionID,
-            sessionChunkSeq: sessionChunkSeq,
-            durationSeconds: durationSeconds,
-            speakerName: speakerName
-        ) else {
-            return
-        }
-        await notifyUpdate()
-
-        // Stage 2: Analyze
-        guard let analysis = await analysisService.analyze(cleaned: cleaned) else {
-            return
-        }
-        await notifyUpdate()
-
-        // Stage 3: Create tasks
-        let captures = ContextCaptureStore.shared.recentUnattached(sessionID: sessionID)
-        let capturePaths = captures.map(\.filePath).filter { !$0.isEmpty }
-        if !captures.isEmpty {
-            ContextCaptureStore.shared.markAttached(ids: captures.map(\.id))
-        }
-        let tasks = await taskCreationService.createTasks(from: analysis, attachmentPaths: capturePaths)
-        await notifyUpdate()
-
-        guard !tasks.isEmpty else { return }
-
-        // Stage 4: Execute
-        let execOn = SettingsManager.shared.isCodeExecutionEnabled
-        guard execOn else { return }
-
-        for task in tasks where task.mode == .auto {
-            await taskExecutionService.execute(task: task)
-            await notifyUpdate()
-        }
     }
 
     // MARK: - Private

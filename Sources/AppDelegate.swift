@@ -403,8 +403,6 @@ struct PillContentView: View {
     let onToggleScreenShare:  () -> Void
     let onCollapseChange:     (WidgetCollapseLevel) -> Void
 
-    @State private var isWhatsAppEnabled: Bool = SettingsManager.shared.whatsAppEnabled
-
     @State private var collapseLevel:          WidgetCollapseLevel = .full
     @State private var displayLevel:           Float = 0
     @State private var logLines:               [(dot: Color, text: String, time: String)] = []
@@ -442,10 +440,6 @@ struct PillContentView: View {
             onToggleSpeakerMode:    onToggleSpeakerMode,
             onToggleScreenShare:    onToggleScreenShare,
             onToggleCamera:         { },
-            onToggleWhatsApp: {
-                SettingsManager.shared.whatsAppEnabled.toggle()
-                isWhatsAppEnabled = SettingsManager.shared.whatsAppEnabled
-            },
             onSessionConfigure:     { appState.configureSession() },
             onSessionPlay: {
                 switch appState.sessionLifecycle {
@@ -470,7 +464,6 @@ struct PillContentView: View {
             isMultiSpeaker:         appState.speakerMode == .multiple,
             isScreenShareEnabled:   appState.systemAudioEnabled,
             isCameraEnabled:        false,
-            isWhatsAppEnabled:      isWhatsAppEnabled,
             sessionLifecycle:       appState.sessionLifecycle,
             logLines:               logLines,
             isSessionProcessing:    appState.isSessionProcessing,

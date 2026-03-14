@@ -14,8 +14,6 @@ enum PipelineSource: String, Codable {
     case tasks
     /// Code co-pilot widget → save transcript + Claude Code task; skip LLM analysis
     case code
-    /// WhatsApp self-chat → full pipeline + QA reply
-    case whatsapp
 }
 
 // MARK: - Cleaned Transcript
