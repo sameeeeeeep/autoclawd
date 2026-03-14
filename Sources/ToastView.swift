@@ -87,7 +87,7 @@ struct CapabilityToastView: View {
                     .padding(.horizontal, 6).padding(.vertical, 3)
                     .background(Color.blue.opacity(0.18))
                     .clipShape(Capsule())
-                    .foregroundColor(.blue)
+                    .foregroundStyle(Color.blue)
                 Spacer()
                 Button(action: onSnooze) {
                     Image(systemName: "xmark")
@@ -110,7 +110,7 @@ struct CapabilityToastView: View {
                     Button("Add context →") { onTap() }
                         .buttonStyle(.plain)
                         .font(.system(size: 11))
-                        .foregroundColor(Glass.textSecondary)
+                        .foregroundStyle(Glass.textSecondary)
                 }
                 Spacer()
                 Button(action: onMarkIrrelevant) {
