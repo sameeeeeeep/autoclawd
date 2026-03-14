@@ -163,7 +163,18 @@ final class AppState: ObservableObject {
     /// Transient — current song title set by NowPlayingService via Combine; nil when nothing is playing.
     @Published var nowPlayingSongTitle: String? = nil
     /// Transient — FUCBC auto-trigger: capability detected from screen context (nil = no match).
-    @Published var detectedSuggestion: SuggestionItem? = nil
+    @Published var detectedSuggestion: SuggestionItem? = nil {
+        didSet {
+            // Keep activeQuestion in sync for voice-answer matching
+            if case .question(let q) = detectedSuggestion {
+                activeQuestion = q
+            } else if detectedSuggestion == nil {
+                activeQuestion = nil
+            }
+        }
+    }
+    /// The currently-displayed question toast (if any). Used for voice-answer matching.
+    @Published var activeQuestion: SuggestionQuestion? = nil
     /// Active tab in the main panel — set by AppDelegate.showMainPanel(tab:) to drive tab selection.
     @Published var activeTab: PanelTab = .agents
 
@@ -491,6 +502,35 @@ final class AppState: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Voice answers to question toasts:
+        // When a question is visible, monitor live transcript for option matches.
+        // First spoken phrase that fuzzy-matches an option auto-selects it.
+        $liveTranscriptText
+            .receive(on: RunLoop.main)
+            .sink { [weak self] fullText in
+                guard let self,
+                      let question = self.activeQuestion,
+                      !fullText.isEmpty else { return }
+                // Only examine the most recent ~10 words (tail of transcript)
+                let words = fullText.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+                let tail = words.suffix(12).joined(separator: " ").lowercased()
+                for option in question.options where option.lowercased() != "not relevant" {
+                    let norm = option.lowercased()
+                        .replacingOccurrences(of: "[^a-z0-9 ]", with: "", options: .regularExpression)
+                    // Match if all significant words of the option appear in the spoken tail
+                    let optionWords = norm.components(separatedBy: .whitespaces).filter { $0.count > 2 }
+                    guard !optionWords.isEmpty else { continue }
+                    let matchCount = optionWords.filter { tail.contains($0) }.count
+                    if Double(matchCount) / Double(optionWords.count) >= 0.7 {
+                        Log.info(.pipeline, "Voice answer matched: '\(option)'")
+                        self.activeQuestion = nil
+                        self.handleSuggestionQuestionOption(option, question: question)
+                        return
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
     }
 
     // MARK: - Lifecycle
@@ -671,7 +711,7 @@ final class AppState: ObservableObject {
                         app: app,
                         urls: self.lastScreenSnapshot?.detectedURLs ?? [],
                         clipboard: ClipboardMonitor.shared.entries.suffix(5).map { "[\($0.type)] \($0.preview)" },
-                        worldModel: self.worldModelContent
+                        worldModel: self.worldModelService.excerpt(forApp: app)
                     ) { [weak self] screenItem in
                         guard let self, self.detectedSuggestion == nil else { return }
                         self.detectedSuggestion = screenItem
@@ -873,13 +913,14 @@ final class AppState: ObservableObject {
             // Only in ambient mode — not during Learn Mode (user is training, not working).
             if capturedPillMode == .ambient {
                 // Capture all signals on @MainActor before async handoff
+                let sessionApp = NSWorkspace.shared.frontmostApplication?.localizedName
                 let suggCtx = SuggestionContext(
                     transcript: fullRawText,
                     screenText: screenSummary ?? "",
-                    app:        NSWorkspace.shared.frontmostApplication?.localizedName,
+                    app:        sessionApp,
                     urls:       lastScreenSnapshot?.detectedURLs ?? [],
                     clipboard:  ClipboardMonitor.shared.entries.suffix(5).map { "[\($0.type)] \($0.preview)" },
-                    worldModel: worldModelContent
+                    worldModel: worldModelService.excerpt(forApp: sessionApp)
                 )
                 let pipeline = suggestionPipeline
                 Task { @MainActor [weak self] in
@@ -1411,6 +1452,7 @@ final class AppState: ObservableObject {
     /// Clear the detected capability suggestion (user dismissed it).
     func dismissDetectedSuggestion() {
         detectedSuggestion = nil
+        activeQuestion = nil
     }
 
     /// Handle a user's answer to an interactive question toast.
@@ -1585,13 +1627,14 @@ final class AppState: ObservableObject {
                 guard self.pillMode != .learn, self.detectedSuggestion == nil else { return }
                 let ocrText = self.screenVisionAnalyzer.recentContext() ?? ""
                 guard !ocrText.isEmpty else { return }
+                let switchApp = NSWorkspace.shared.frontmostApplication?.localizedName
                 self.suggestionPipeline.scheduleAppSwitchSuggestion(
                     screenText: ocrText,
                     transcript: self.liveTranscriptText,
-                    app:        NSWorkspace.shared.frontmostApplication?.localizedName,
+                    app:        switchApp,
                     urls:       self.lastScreenSnapshot?.detectedURLs ?? [],
                     clipboard:  ClipboardMonitor.shared.entries.suffix(5).map { "[\($0.type)] \($0.preview)" },
-                    worldModel: self.worldModelContent
+                    worldModel: self.worldModelService.excerpt(forApp: switchApp)
                 ) { [weak self] item in
                     guard let self, self.detectedSuggestion == nil else { return }
                     self.detectedSuggestion = item

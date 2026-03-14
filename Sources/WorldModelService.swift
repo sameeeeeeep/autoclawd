@@ -36,6 +36,47 @@ final class WorldModelService: @unchecked Sendable {
         write(existing, for: projectID)
     }
 
+    /// Returns the most relevant excerpt from the global world model for a Haiku/vision prompt.
+    ///
+    /// Strategy:
+    /// 1. Always include the "## Suggestion Feedback" section (personalisation signal).
+    /// 2. If an app name is provided, include any `##` section whose heading contains the app name.
+    /// 3. Fill remaining budget with the top of the model.
+    func excerpt(forApp app: String?, maxChars: Int = 2000) -> String {
+        let full = read()
+        guard !full.isEmpty else { return "" }
+
+        var result = ""
+
+        // Always include Suggestion Feedback (learning signal)
+        if let feedbackRange = full.range(of: "## Suggestion Feedback") {
+            let feedbackSection = String(full[feedbackRange.lowerBound...])
+            let feedbackLines = feedbackSection.components(separatedBy: "\n").prefix(20)
+            result += feedbackLines.joined(separator: "\n") + "\n\n"
+        }
+
+        // Include section matching the active app
+        if let appName = app, !appName.isEmpty {
+            let sections = full.components(separatedBy: "\n## ")
+            for section in sections {
+                let heading = section.components(separatedBy: "\n").first ?? ""
+                if heading.localizedCaseInsensitiveContains(appName) {
+                    let snip = "## \(section)".prefix(600)
+                    result += snip + "\n\n"
+                }
+            }
+        }
+
+        // Fill remaining budget from the top of the model
+        let remaining = maxChars - result.count
+        if remaining > 200 {
+            let topSlice = String(full.prefix(remaining))
+            result += topSlice
+        }
+
+        return String(result.prefix(maxChars))
+    }
+
     /// Append a suggestion feedback note to the global world model.
     /// Used to teach the system what the user considers actionable vs. irrelevant.
     func appendSuggestionFeedback(_ note: String) {

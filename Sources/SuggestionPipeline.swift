@@ -28,13 +28,36 @@ final class SuggestionPipeline {
 
     // MARK: - Phase 2: Screen-Triggered Haiku Guards
 
-    private let haiku = ClaudeHaikuService()
+    private let haiku  = ClaudeHaikuService()
+    private let vision = ClaudeVisionService()
     private var lastScreenHash: Int = 0
     private var lastScreenHaikuAt: Date = .distantPast
     private let screenHaikuDebounce: TimeInterval = 180.0   // 3 min for passive OCR-change trigger
     private let appSwitchHaikuDebounce: TimeInterval = 60.0 // 60s for explicit app-switch events
     private var lastAppSwitchHaikuAt: Date = .distantPast
     private var isHaikuRunning = false
+    private var lastOCRText: String = ""                     // for OCR diff computation
+
+    // MARK: - Phase 2d: Dwell Detection (user reading/thinking — same content > 20s)
+
+    private var dwellStartedAt: Date = .distantPast
+    private var lastDwellHaikuAt: Date = .distantPast
+    private let dwellThreshold: TimeInterval    = 20.0   // seconds on same content before triggering
+    private let dwellHaikuDebounce: TimeInterval = 300.0 // 5 min between dwell triggers
+
+    // MARK: - OCR Diff Helper
+
+    /// Returns only the lines that are NEW in `current` vs `previous`.
+    /// If more than 60 % of lines changed (big navigation), returns full `current`.
+    private func diffContent(previous: String, current: String) -> String {
+        let prevSet  = Set(previous.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+        let currLines = current.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let newLines  = currLines.filter { !prevSet.contains($0) }
+        // If the majority of content is new it's a page/app change — send full text
+        let changeFraction = Double(newLines.count) / Double(max(currLines.count, 1))
+        if changeFraction > 0.6 { return current }
+        return newLines.joined(separator: "\n")
+    }
 
     // MARK: - Phase 1: Synchronous Evaluate
 
@@ -85,19 +108,47 @@ final class SuggestionPipeline {
         let hash    = screenText.hashValue
         let elapsed = Date().timeIntervalSince(lastScreenHaikuAt)
 
+        // Dwell detection: same OCR for > dwellThreshold AND dwell debounce elapsed → fire
+        let dwellElapsed = Date().timeIntervalSince(lastDwellHaikuAt)
+        if hash == lastScreenHash, !isHaikuRunning, !screenText.isEmpty,
+           Date().timeIntervalSince(dwellStartedAt) >= dwellThreshold,
+           dwellElapsed >= dwellHaikuDebounce {
+            // User has been on the same content — treat like a screen trigger
+            lastDwellHaikuAt = Date()
+            lastScreenHaikuAt = Date()
+            isHaikuRunning = true
+            let diffText = screenText // same content — no diff needed for dwell
+            let ctx = SuggestionContext(transcript: transcript, screenText: diffText, app: app,
+                                        urls: urls, clipboard: clipboard, worldModel: worldModel)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let item = await self.runHaiku(context: ctx) { onResult(item) }
+                self.isHaikuRunning = false
+            }
+            return
+        }
+
         guard !isHaikuRunning,
               elapsed >= screenHaikuDebounce,
               hash != lastScreenHash,
               !screenText.isEmpty
-        else { return }
+        else {
+            // Reset dwell timer on content change
+            if hash != lastScreenHash { dwellStartedAt = Date() }
+            return
+        }
 
+        // Compute diff — pass only new lines as the primary signal
+        let diffText = diffContent(previous: lastOCRText, current: screenText)
+        lastOCRText       = screenText
         lastScreenHash    = hash
         lastScreenHaikuAt = Date()
+        dwellStartedAt    = Date()
         isHaikuRunning    = true
 
         let ctx = SuggestionContext(
             transcript: transcript,
-            screenText: screenText,
+            screenText: diffText.isEmpty ? screenText : diffText,
             app:        app,
             urls:       urls,
             clipboard:  clipboard,
@@ -146,11 +197,28 @@ final class SuggestionPipeline {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if let item = await self.runHaiku(context: ctx) {
+            if let item = await self.runVisionOrHaiku(context: ctx) {
                 onResult(item)
             }
             self.isHaikuRunning = false
         }
+    }
+
+    // MARK: - Vision-First Runner (app-switch path)
+
+    /// Tries vision (screenshot → Anthropic API) first; falls back to text Haiku on any error.
+    /// Vision is only used on app-switch where the visual context delta is highest signal.
+    private func runVisionOrHaiku(context: SuggestionContext) async -> SuggestionItem? {
+        do {
+            let raw = try await vision.captureAndGenerate(context: context)
+            return parseResponse(from: raw, context: context)
+        } catch ClaudeVisionService.VisionError.noAPIKey {
+            // No API key — text Haiku is the right fallback (uses CLI OAuth)
+            Log.info(.pipeline, "Vision: no API key, falling back to text Haiku")
+        } catch {
+            Log.warn(.pipeline, "Vision failed (\(error.localizedDescription)), falling back to text Haiku")
+        }
+        return await runHaiku(context: context)
     }
 
     // MARK: - Shared Haiku Runner
@@ -229,7 +297,7 @@ final class SuggestionPipeline {
 
     // MARK: - Response Parsing
 
-    private func parseResponse(from response: String, context: SuggestionContext) -> SuggestionItem? {
+    func parseResponse(from response: String, context: SuggestionContext) -> SuggestionItem? {
         var raw = response.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.hasPrefix("```") {
             let lines = raw.components(separatedBy: "\n")
