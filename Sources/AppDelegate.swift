@@ -40,10 +40,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Capability suggestion toast — show in top-right when detected
         appState.$detectedSuggestion
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] match in
+            .sink { [weak self] item in
                 guard let self else { return }
-                if let match {
-                    self.showCapabilityToast(match)
+                if let item = item {
+                    // Task toast wiring handled in Task 9 — for now surface capabilities only
+                    if case .capability(let match) = item {
+                        self.showCapabilityToast(match)
+                    }
                 } else {
                     self.dismissCapabilityToast()
                 }
@@ -234,18 +237,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onSnooze: { [weak self] in
                 guard let self else { return }
                 CapabilityStore.shared.snooze(capabilityID: match.capability.id)
-                self.appState.dismissDetectedCapability()
+                self.appState.dismissDetectedSuggestion()
             },
             onMarkIrrelevant: { [weak self] in
                 guard let self else { return }
                 CapabilityStore.shared.markIrrelevant(capabilityID: match.capability.id)
-                self.appState.dismissDetectedCapability()
+                self.appState.dismissDetectedSuggestion()
             }
         )
 
         // Auto-dismiss after 5 seconds
         let work = DispatchWorkItem { [weak self] in
-            self?.appState.dismissDetectedCapability()
+            self?.appState.dismissDetectedSuggestion()
         }
         toastDismissWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
@@ -699,11 +702,11 @@ struct PillContentView: View {
         }
 
         // ── FUCBC capability suggestion ("Automate now") ──────────────────────────
-        if let match = appState.detectedSuggestion {
+        if case .capability(let match) = appState.detectedSuggestion {
             return AnyView(CapabilitySuggestionCanvasView(
                 capability: match.capability,
                 onRun:     { appState.executeCapability(match.capability) },
-                onDismiss: { appState.dismissDetectedCapability() }
+                onDismiss: { appState.dismissDetectedSuggestion() }
             ))
         }
 

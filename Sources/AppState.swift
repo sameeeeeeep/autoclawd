@@ -639,11 +639,14 @@ final class AppState: ObservableObject {
                 let ocrText = self.screenVisionAnalyzer.recentContext() ?? ""
                 if !ocrText.isEmpty {
                     let app = NSWorkspace.shared.frontmostApplication?.localizedName
+                    // TODO: pass real URLs when ScreenVisionAnalyzer exposes them
+                    // (detectedURLs come from on-demand captureNow() snapshots only;
+                    //  the background processFrame() path doesn't surface barcode URLs)
                     let item = await self.suggestionPipeline.evaluate(
                         screenText: ocrText,
                         transcript: self.liveTranscriptText,
                         app: app,
-                        urls: [],
+                        urls: self.lastScreenSnapshot?.detectedURLs ?? [],
                         isOllamaEnabled: self.isOllamaEnabled
                     )
                     self.detectedSuggestion = item
@@ -1387,6 +1390,10 @@ final class AppState: ObservableObject {
         )
 
         pipelineTasks.insert(record, at: 0)
+
+        // Cancel any prior stream before starting a new one
+        codeStreamTask?.cancel()
+        codeStreamTask = nil
 
         codeSessionMessages = []
         codeIsStreaming = true
