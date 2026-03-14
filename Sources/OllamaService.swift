@@ -3,7 +3,7 @@ import Foundation
 // MARK: - OllamaService
 
 /// Wraps the Ollama REST API (localhost:11434).
-/// Sets keep_alive=0 so the model unloads immediately after each inference.
+/// keep_alive=300 keeps the model loaded for 5 minutes after each call — eliminates cold-start penalty.
 final class OllamaService: @unchecked Sendable {
     let baseURL: String
     let model: String
@@ -25,7 +25,7 @@ final class OllamaService: @unchecked Sendable {
             "model": model,
             "prompt": prompt,
             "stream": false,
-            "keep_alive": 0,  // unload model immediately after response
+            "keep_alive": 300,  // keep model loaded 5 min — eliminates cold-start on repeated calls
             "num_predict": numPredict
         ]
 
