@@ -139,9 +139,10 @@ final class ScreenVisionAnalyzer: @unchecked Sendable {
 
     /// Call from `SystemAudioCapturer.onFrame`. Throttled internally — safe at 1fps.
     func processFrame(_ image: CGImage) {
+        let interval = isLearnMode ? learnModeOCRInterval : ocrInterval
         let shouldRun: Bool = lock.withLock {
             guard !isRunning,
-                  Date().timeIntervalSince(lastOCRTime) >= ocrInterval
+                  Date().timeIntervalSince(lastOCRTime) >= interval
             else { return false }
             isRunning = true
             lastOCRTime = Date()

@@ -637,9 +637,10 @@ final class AppState: ObservableObject {
                 if self.learnModeService.isActive {
                     self.learnModeService.receiveFrame(image)
                 }
-                // FUCBC auto-trigger: unified capability detection from all sources (~every 30s)
+                // FUCBC auto-trigger: unified capability detection (ambient only — not during Learn Mode)
+                // In Learn Mode the user is training; suggestions would be intrusive and irrelevant.
                 let ocrText = self.screenVisionAnalyzer.recentContext() ?? ""
-                if !ocrText.isEmpty {
+                if !ocrText.isEmpty, self.pillMode != .learn {
                     let app = NSWorkspace.shared.frontmostApplication?.localizedName
                     // TODO: pass real URLs when ScreenVisionAnalyzer exposes them
                     // (detectedURLs come from on-demand captureNow() snapshots only;
@@ -1480,14 +1481,15 @@ final class AppState: ObservableObject {
     // MARK: - App Switch Observer
 
     /// Register for NSWorkspace.didActivateApplicationNotification.
-    /// In ambient mode, triggers a lightweight OCR capture on every app switch.
+    /// In ambient + learn mode, triggers a lightweight OCR capture on every app switch.
+    /// (Skipped only in aiSearch mode where screen context isn't used.)
     func setupAppSwitchObserver() {
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self, self.pillMode == .ambient else { return }
+            guard let self, self.pillMode != .aiSearch else { return }
             Task {
                 await self.screenVisionAnalyzer.captureOnAppSwitch()
             }
