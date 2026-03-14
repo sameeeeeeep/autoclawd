@@ -36,20 +36,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // recording attempt — preventing the first chunk from silently failing.
         requestPermissionsUpfront()
 
-        // Start embedded MCP server so any Claude Code session can call screen-grab tools.
-        // Configure Claude Code with: { "mcpServers": { "autoclawd": { "type": "http", "url": "http://localhost:7892/mcp" } } }
-        let screenGrab = ScreenGrabService()
-        MCPServer.shared.start(
-            screenGrab: screenGrab,
-            transcriptProvider: { [weak self] in self?.appState.liveTranscriptText ?? "" },
-            onHookEvent: { event in
-                Log.info(.system, "[Hook] Received: \(event.eventName) tool=\(event.toolName ?? "nil")")
-            }
-        )
-
-        // Auto-register Claude Code hooks so PostToolUse events arrive at /hook.
-        MCPConfigManager.writeHooksConfig()
-
         // Toast window disabled — logs are now shown inline inside the widget.
         // Capability suggestion toast — show in top-right when detected
         appState.$detectedSuggestion

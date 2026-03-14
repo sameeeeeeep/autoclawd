@@ -27,7 +27,6 @@ SWIFT_FLAGS = \
 _SDK_MAJOR := $(shell xcrun --show-sdk-version 2>/dev/null | awk -F. '{printf "%d", $$1}')
 ifeq ($(shell test "$(_SDK_MAJOR)" -ge 26 2>/dev/null && echo yes),yes)
 SWIFT_FLAGS     += -DNATIVE_GLASS_AVAILABLE
-MCP_SWIFT_FLAGS += -DNATIVE_GLASS_AVAILABLE
 endif
 
 VERSION ?= 0.1.0
@@ -35,33 +34,15 @@ DMG_NAME = $(APP_NAME)-$(VERSION).dmg
 DMG_STAGING = $(BUILD_DIR)/dmg-staging
 DMG_PATH = $(BUILD_DIR)/$(DMG_NAME)
 
-# ── MCP Server ─────────────────────────────────────────────────────────────────
-MCP_SOURCES = $(wildcard MCPServer/*.swift)
-MCP_BINARY = $(BUILD_DIR)/autoclawd-mcp
-MCP_SWIFT_FLAGS = \
-	-sdk $(SDK) \
-	-target $(TARGET) \
-	-lsqlite3
+.PHONY: all clean run dmg
 
-.PHONY: all clean run dmg mcp-server
+all: $(MACOS_DIR)/$(APP_NAME)
 
-all: $(MACOS_DIR)/$(APP_NAME) mcp-server
-
-mcp-server: $(MCP_BINARY)
-
-$(MCP_BINARY): $(MCP_SOURCES)
-	@mkdir -p "$(BUILD_DIR)"
-	swiftc $(MCP_SWIFT_FLAGS) \
-		-o "$(MCP_BINARY)" \
-		$(MCP_SOURCES)
-	@echo "Built $(MCP_BINARY)"
-
-$(MACOS_DIR)/$(APP_NAME): $(SOURCES) Info.plist $(ICON_ICNS) $(MCP_BINARY)
+$(MACOS_DIR)/$(APP_NAME): $(SOURCES) Info.plist $(ICON_ICNS)
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
 	swiftc $(SWIFT_FLAGS) \
 		-o "$(MACOS_DIR)/$(APP_NAME)" \
 		$(SOURCES)
-	@cp "$(MCP_BINARY)" "$(MACOS_DIR)/"
 	@cp Info.plist "$(CONTENTS)/"
 	@plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
 	@plutil -replace CFBundleDisplayName -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"

@@ -174,9 +174,6 @@ final class ClaudeCodeRunner: Sendable {
         if dangerouslySkipPermissions {
             args.append("--dangerously-skip-permissions")
         }
-        if let mcpConfigPath = MCPConfigManager.configPath() {
-            args += ["--mcp-config", mcpConfigPath]
-        }
         if let sid = resumeSessionID {
             args += ["--resume", sid]
         }
@@ -495,9 +492,6 @@ final class ClaudeCodeRunner: Sendable {
                 let process = Process()
                 process.executableURL = claudeURL
                 var args: [String] = []
-                if let mcpConfigPath = MCPConfigManager.configPath() {
-                    args += ["--mcp-config", mcpConfigPath]
-                }
                 args += ["--print", todo.content]
                 process.arguments = args
                 process.currentDirectoryURL = URL(fileURLWithPath: project.localPath)
@@ -553,9 +547,6 @@ final class ClaudeCodeRunner: Sendable {
                 let process = Process()
                 process.executableURL = claudeURL
                 var args: [String] = []
-                if let mcpConfigPath = MCPConfigManager.configPath() {
-                    args += ["--mcp-config", mcpConfigPath]
-                }
                 args += ["--print", prompt]
                 if dangerouslySkipPermissions {
                     args.append("--dangerously-skip-permissions")
@@ -630,13 +621,8 @@ final class ClaudeCodeRunner: Sendable {
         let claudeExec = claudeURL.path.replacingOccurrences(of: "'", with: "'\\''")
         let safePrompt = prompt.replacingOccurrences(of: "'", with: "'\\''")
         let safePath = project.localPath.replacingOccurrences(of: "'", with: "'\\''")
-        var mcpFlag = ""
-        if let mcpPath = MCPConfigManager.configPath() {
-            let safeMCP = mcpPath.replacingOccurrences(of: "'", with: "'\\''")
-            mcpFlag = " --mcp-config '\(safeMCP)'"
-        }
         let permFlag = dangerouslySkipPermissions ? " --dangerously-skip-permissions" : ""
-        let fullCmd = "cd '\(safePath)' && '\(claudeExec)'\(mcpFlag)\(permFlag) '\(safePrompt)'"
+        let fullCmd = "cd '\(safePath)' && '\(claudeExec)'\(permFlag) '\(safePrompt)'"
 
         let scriptName = "autoclawd-\(UUID().uuidString.prefix(8)).sh"
         let scriptURL = URL(fileURLWithPath: NSTemporaryDirectory())
