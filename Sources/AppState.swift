@@ -651,7 +651,16 @@ final class AppState: ObservableObject {
                         urls: self.lastScreenSnapshot?.detectedURLs ?? [],
                         isOllamaEnabled: self.isOllamaEnabled
                     )
-                    self.detectedSuggestion = item
+                    // Only update detectedSuggestion when there is a new suggestion to show.
+                    // Never clear it here — clearing happens only via user action (dismiss/execute)
+                    // or when a genuinely different suggestion replaces the current one.
+                    // Without this guard: the cooldown suppresses the 2nd-frame repeat → returns nil
+                    // → sets detectedSuggestion = nil → toast disappears one frame after it appeared.
+                    if let item {
+                        if self.detectedSuggestion?.id != item.id {
+                            self.detectedSuggestion = item
+                        }
+                    }
                 }
             }
         }

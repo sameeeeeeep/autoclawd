@@ -15,7 +15,10 @@ import Foundation
 final class CapabilityStore: @unchecked Sendable {
 
     static let shared = CapabilityStore()
-    private init() { loadAll() }
+    private init() {
+        loadDismissals()  // load persisted snooze/irrelevant before capability loading
+        loadAll()
+    }
 
     /// Background queue for file I/O and writes. Never use sync on this queue.
     private let writeQueue = DispatchQueue(label: "com.autoclawd.capability-store.write", qos: .utility)
@@ -54,14 +57,17 @@ final class CapabilityStore: @unchecked Sendable {
     private var openClawCacheDate: Date?
     private let openClawCacheTTL: TimeInterval = 30.0
 
-    // MARK: - Dismissal Memory (in-memory, resets on launch)
+    // MARK: - Dismissal Memory (persisted across launches)
 
     /// capID → suppress until this date (X button — "not now").
     /// Accessed only under `lock` (same NSLock used for `snapshot`).
     private var snoozedUntil: [String: Date] = [:]
-    /// Permanently suppressed for this session (👎 button — "not relevant").
+    /// Permanently suppressed across sessions (👎 button — "not relevant").
     /// Accessed only under `lock`.
     private var irrelevantIDs: Set<String> = []
+
+    private let snoozedKey   = "autoclawd.capability.snoozed"
+    private let irrelevantKey = "autoclawd.capability.irrelevant"
 
     // MARK: - Persistence
 
@@ -194,13 +200,44 @@ final class CapabilityStore: @unchecked Sendable {
         lock.lock()
         snoozedUntil[capabilityID] = Date().addingTimeInterval(7200)
         lock.unlock()
+        saveDismissals()
     }
 
-    /// Permanently suppress for this session ("not relevant" — 👎 button).
+    /// Permanently suppress across sessions ("not relevant" — 👎 button).
     func markIrrelevant(capabilityID: String) {
         lock.lock()
         irrelevantIDs.insert(capabilityID)
         lock.unlock()
+        saveDismissals()
+    }
+
+    // MARK: - Dismissal Persistence
+
+    private func loadDismissals() {
+        let fmt = ISO8601DateFormatter()
+        let now = Date()
+        if let dict = UserDefaults.standard.dictionary(forKey: snoozedKey) as? [String: String] {
+            for (id, dateStr) in dict {
+                if let date = fmt.date(from: dateStr), date > now {
+                    snoozedUntil[id] = date
+                }
+            }
+        }
+        if let ids = UserDefaults.standard.array(forKey: irrelevantKey) as? [String] {
+            irrelevantIDs = Set(ids)
+        }
+    }
+
+    private func saveDismissals() {
+        let fmt = ISO8601DateFormatter()
+        let (snoozed, irrelevant): ([String: Date], Set<String>)
+        lock.lock()
+        snoozed = snoozedUntil
+        irrelevant = irrelevantIDs
+        lock.unlock()
+        let dict = snoozed.mapValues { fmt.string(from: $0) }
+        UserDefaults.standard.set(dict, forKey: snoozedKey)
+        UserDefaults.standard.set(Array(irrelevant), forKey: irrelevantKey)
     }
 
     private func persistFile(_ persisted: [Capability]) {
@@ -230,8 +267,9 @@ final class CapabilityStore: @unchecked Sendable {
         let lowerScreen     = screenText.lowercased()
         let lowerTranscript = transcript.lowercased()
         let lowerApp        = app?.lowercased()
-        let lowerURLs       = urls.map { $0.lowercased() }
-        let combined        = lowerScreen + " " + lowerTranscript
+        // Merge explicit URLs with those extracted from OCR text (e.g. typed/visible URLs)
+        let ocrURLs   = Self.extractURLs(from: screenText).map { $0.lowercased() }
+        let lowerURLs = (urls.map { $0.lowercased() } + ocrURLs)
 
         var results: [SuggestionMatch] = []
 
@@ -243,15 +281,16 @@ final class CapabilityStore: @unchecked Sendable {
             var signals: [MatchSignal] = []
             let t = cap.triggers
 
-            // App match (+4)
+            // App match (+2). Intentionally below threshold (3) so app alone never triggers.
+            // Requires at least one additional signal (URL, OCR pattern, or keyword) to surface.
             if let a = lowerApp {
                 for trigger in t.apps where trigger.lowercased() == a {
-                    score += 4
+                    score += 2
                     signals.append(.app(trigger))
                 }
             }
 
-            // URL pattern match (+3)
+            // URL pattern match (+3). Most specific signal — URL alone can trigger.
             for pattern in t.urlPatterns {
                 let lp = pattern.lowercased()
                 if lowerURLs.contains(where: { $0.contains(lp) }) {
@@ -268,9 +307,15 @@ final class CapabilityStore: @unchecked Sendable {
                 }
             }
 
-            // Keyword match (+1)
+            // Keyword match: transcript (+2, intentional speech) or OCR (+1, ambient context).
+            // Using transcript wins — prevents double-counting if the keyword appears in both.
+            // App (2) + OCR keyword (1) = 3 → fires. App alone (2) = still blocked.
             for kw in t.keywords {
-                if combined.contains(kw.lowercased()) {
+                let lkw = kw.lowercased()
+                if lowerTranscript.contains(lkw) {
+                    score += 2
+                    signals.append(.keyword(kw))
+                } else if lowerScreen.contains(lkw) {
                     score += 1
                     signals.append(.keyword(kw))
                 }
@@ -292,6 +337,17 @@ final class CapabilityStore: @unchecked Sendable {
         }
 
         return results.sorted { $0.score > $1.score }
+    }
+
+    // MARK: - URL Extraction from OCR
+
+    /// Extracts http/https URLs from raw screen/OCR text using NSDataDetector.
+    private static func extractURLs(from text: String) -> [String] {
+        guard !text.isEmpty,
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return detector.matches(in: text, range: range).compactMap { $0.url?.absoluteString }
     }
 
     private func isAppSignal(_ s: MatchSignal) -> Bool {

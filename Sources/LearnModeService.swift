@@ -73,34 +73,63 @@ final class LearnModeService: ObservableObject {
     private func recordEvent() async {
         guard var sess = session else { return }
 
-        let app  = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown"
-        let url: String? = nil  // ScreenVisionAnalyzer does not expose per-frame URL state;
-                                // URLs are only available on ScreenSnapshot (captureNow()).
-        let ocr  = screenAnalyzer?.recentContext() ?? ""
-        let speech = latestSpeechFragment
+        let app         = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown"
+
+        // Never record AutoClawd itself — user looking at the pill/panel during a session
+        // would create meaningless "AutoClawd" nodes that pollute the FUCBC story.
+        guard app != "AutoClawd" else { return }
+
+        let windowTitle = Self.accessibilityWindowTitle()
+        let ocr         = screenAnalyzer?.recentContext() ?? ""
+        let urlsFromOCR = Self.extractURLs(from: ocr)
+        let url         = urlsFromOCR.first
+        let speech      = latestSpeechFragment
         latestSpeechFragment = ""  // consume
 
-        // Determine if this (app, url) matches the most recent node
-        if let lastIndex = sess.nodes.indices.last,
-           sess.nodes[lastIndex].app == app,
-           sess.nodes[lastIndex].url == url {
+        // Nodes are differentiated by app + window title (not URL, which was always nil).
+        // Window title changes as user navigates pages within the same app (e.g. browser tabs).
+        let nodeKey = "\(app)|\(windowTitle ?? "")"
 
-            // Same app+URL — update in place if OCR changed meaningfully
-            let lastOCR = sess.nodes[lastIndex].ocrSnapshots.last ?? ""
-            let overlap = ocrOverlap(ocr, lastOCR)
-            if overlap < 0.5, !ocr.isEmpty {
-                sess.nodes[lastIndex].ocrSnapshots.append(ocr)
-                sess.nodes[lastIndex].lastUpdated = Date()
-            }
-            if !speech.isEmpty {
-                sess.nodes[lastIndex].speechSnippets.append(speech)
+        if let lastIndex = sess.nodes.indices.last {
+            let lastKey = "\(sess.nodes[lastIndex].app)|\(sess.nodes[lastIndex].windowTitle ?? "")"
+            if lastKey == nodeKey {
+                // Same context — update in place if OCR changed meaningfully
+                let lastOCR = sess.nodes[lastIndex].ocrSnapshots.last ?? ""
+                let overlap = ocrOverlap(ocr, lastOCR)
+                if overlap < 0.5, !ocr.isEmpty {
+                    sess.nodes[lastIndex].ocrSnapshots.append(ocr)
+                    sess.nodes[lastIndex].lastUpdated = Date()
+                }
+                if !speech.isEmpty {
+                    sess.nodes[lastIndex].speechSnippets.append(speech)
+                }
+                // Backfill URL if we just found one and node didn't have one yet
+                if url != nil, sess.nodes[lastIndex].url == nil {
+                    sess.nodes[lastIndex].url = url
+                }
+            } else {
+                // New context — create a new node
+                let node = CanvasNode(
+                    id: UUID().uuidString,
+                    app: app,
+                    url: url,
+                    windowTitle: windowTitle,
+                    ocrSnapshots: ocr.isEmpty ? [] : [ocr],
+                    speechSnippets: speech.isEmpty ? [] : [speech],
+                    workSummary: nil,
+                    capturedAt: Date(),
+                    lastUpdated: Date()
+                )
+                sess.nodes.append(node)
+                Log.info(.ui, "LearnMode: new node — \(app) | \(windowTitle ?? url ?? "(no context)")")
             }
         } else {
-            // New app+URL — create a new node
+            // First node
             let node = CanvasNode(
                 id: UUID().uuidString,
                 app: app,
                 url: url,
+                windowTitle: windowTitle,
                 ocrSnapshots: ocr.isEmpty ? [] : [ocr],
                 speechSnippets: speech.isEmpty ? [] : [speech],
                 workSummary: nil,
@@ -108,10 +137,38 @@ final class LearnModeService: ObservableObject {
                 lastUpdated: Date()
             )
             sess.nodes.append(node)
-            Log.info(.ui, "LearnMode: new node — \(app) \(url ?? "(no URL)")")
+            Log.info(.ui, "LearnMode: first node — \(app) | \(windowTitle ?? url ?? "(no context)")")
         }
 
         session = sess
+    }
+
+    // MARK: - Accessibility Window Title
+
+    /// Returns the title of the frontmost window via the macOS Accessibility API.
+    /// Called on @MainActor (timer fires on main thread). Returns nil if permission denied.
+    private static func accessibilityWindowTitle() -> String? {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
+        let axApp = AXUIElementCreateApplication(pid)
+        var windowRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &windowRef) == .success,
+              let window = windowRef
+        else { return nil }
+        var titleRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &titleRef) == .success
+        else { return nil }
+        return titleRef as? String
+    }
+
+    // MARK: - URL Extraction from OCR Text
+
+    /// Extracts http/https URLs from raw OCR text using NSDataDetector.
+    private static func extractURLs(from text: String) -> [String] {
+        guard !text.isEmpty,
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return detector.matches(in: text, range: range).compactMap { $0.url?.absoluteString }
     }
 
     // MARK: - Node Summarisation (Llama pass)

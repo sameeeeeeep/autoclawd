@@ -25,6 +25,15 @@ struct SuggestionMatch: Sendable {
 enum SuggestionItem: Sendable {
     case capability(SuggestionMatch)
     case task(TaskSuggestion)
+
+    /// Stable ID used to detect whether the suggestion has changed between frames.
+    /// Prevents AppState from clearing the toast when the cooldown suppresses a repeat.
+    var id: String {
+        switch self {
+        case .capability(let m): return "cap-\(m.capability.id)"
+        case .task(let t):       return "task-\(t.id)"
+        }
+    }
 }
 
 struct TaskSuggestion: Identifiable, Sendable {
@@ -379,7 +388,8 @@ enum LearnPhase: Equatable {
 struct CanvasNode: Identifiable, Codable {
     let id: String
     let app: String
-    let url: String?
+    var url: String?
+    var windowTitle: String?      // accessibility window title — differentiates pages within same app
     var ocrSnapshots: [String]    // rolling OCR captures while on this app+URL
     var speechSnippets: [String]  // speech heard while here
     var workSummary: String?      // Llama-generated: "User drafted a tweet about WWDC"
@@ -387,6 +397,7 @@ struct CanvasNode: Identifiable, Codable {
     var lastUpdated: Date
 
     var displayTitle: String {
+        if let title = windowTitle, !title.isEmpty { return title }
         if let urlStr = url, let host = URL(string: urlStr)?.host { return host }
         return app
     }
