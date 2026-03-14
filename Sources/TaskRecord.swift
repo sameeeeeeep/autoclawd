@@ -212,10 +212,10 @@ struct TaskRecord: Identifiable {
         case .failed:             status = .failed
         }
 
-        let eventCount = session.events.count
-        let desc = eventCount == 0
+        let nodeCount = session.nodes.count
+        let desc = nodeCount == 0
             ? "Starting learn session…"
-            : "\(eventCount) event\(eventCount == 1 ? "" : "s") captured · \(eventCount * 5)s"
+            : "\(nodeCount) event\(nodeCount == 1 ? "" : "s") captured"
 
         return TaskRecord(
             id: "learn-\(session.id.uuidString)",

@@ -20,6 +20,32 @@ struct SuggestionMatch: Sendable {
     let contextualHeadline: String     // resolved question, e.g. "Launching a Threads campaign?"
 }
 
+// MARK: - Unified Suggestion Item
+
+enum SuggestionItem: Sendable {
+    case capability(SuggestionMatch)
+    case task(TaskSuggestion)
+}
+
+struct TaskSuggestion: Identifiable, Sendable {
+    let id: String
+    let title: String           // e.g. "Send quarterly report to Josh"
+    let intent: String          // "email" | "hire" | "post" | "message" | "other"
+    let detectedContext: TaskContext
+    let executionPrompt: String // built prompt ready for Claude Code
+    let confidence: Float       // 0.0–1.0
+}
+
+struct TaskContext: Sendable {
+    let files: [String]    // filenames from OCR (e.g. "Q4-Report.pdf")
+    let contacts: [String] // names/emails from transcript or OCR
+    let urls: [String]     // relevant URLs visible on screen
+    let rawOCR: String     // full OCR snapshot — canvas fallback
+
+    // Intentionally permissive: Claude Code clarifies at runtime if a piece is missing.
+    var isComplete: Bool { !files.isEmpty || !contacts.isEmpty || !urls.isEmpty }
+}
+
 // MARK: - Learn Mode Data Models (FUCBC Architecture)
 //
 // No Llama. Events are collected every 5 seconds directly from the screen/audio
@@ -347,23 +373,43 @@ enum LearnPhase: Equatable {
     }
 }
 
+// MARK: - Canvas Node (replaces flat LearnEvent array in LearnSession)
+
+// Codable required: LearnSession is persisted and CanvasNode travels with it.
+struct CanvasNode: Identifiable, Codable {
+    let id: String
+    let app: String
+    let url: String?
+    var ocrSnapshots: [String]    // rolling OCR captures while on this app+URL
+    var speechSnippets: [String]  // speech heard while here
+    var workSummary: String?      // Llama-generated: "User drafted a tweet about WWDC"
+    let capturedAt: Date
+    var lastUpdated: Date
+
+    var displayTitle: String {
+        if let urlStr = url, let host = URL(string: urlStr)?.host { return host }
+        return app
+    }
+    var isPending: Bool { workSummary == nil }
+}
+
 // MARK: - Learn Session
 
 struct LearnSession: Identifiable {
     let id = UUID()
     let startedAt: Date
     var phase: LearnPhase = .collecting
-    var events: [LearnEvent] = []         // 5-second snapshots, no Llama
+    var nodes: [CanvasNode] = []
     var buildOutput: String = ""          // FUCBC Claude Code stream
     var builtCapability: Capability?
     var suggestedCapabilities: [Capability] = []
 
     var hasEnoughContext: Bool {
-        events.count >= 3  // at least 15 seconds of observation
+        nodes.count >= 3
     }
 
     var eventSummary: String {
-        "\(events.count) event(s) · \(Int(events.count * 5))s"
+        "\(nodes.count) node(s) captured"
     }
 }
 

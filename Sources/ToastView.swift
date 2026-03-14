@@ -3,16 +3,32 @@ import AppKit
 
 /// Capability suggestion toast — shown in top-right corner when `AppState.detectedSuggestion` is set.
 struct CapabilityToastView: View {
-    let match: SuggestionMatch
+    let item: SuggestionItem
     let onTap: () -> Void
     let onSnooze: () -> Void
     let onMarkIrrelevant: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        switch item {
+        case .capability(let match):
+            capabilityBody(match: match)
+        case .task(let task):
+            taskBody(task: task)
+        }
+    }
+
+    // MARK: Capability rendering
+
+    private func capabilityBody(match: SuggestionMatch) -> some View {
+        let capability = match.capability
+        // Filter blank subWorkflows before rendering
+        let steps = capability.subWorkflows.filter { !$0.name.isEmpty }
+        let stepCount = steps.isEmpty ? 1 : steps.count
+
+        return VStack(alignment: .leading, spacing: 8) {
             // ── Top row: icon strip + X ──
             HStack(alignment: .center, spacing: 0) {
-                ToolIconStrip(capability: match.capability)
+                ToolIconStrip(triggers: capability.triggers, subWorkflows: steps)
                 Spacer()
                 Button(action: onSnooze) {
                     Image(systemName: "xmark")
@@ -31,7 +47,7 @@ struct CapabilityToastView: View {
 
             // ── Subtitle + action row ──
             HStack(alignment: .center) {
-                Text("AutoClawd can automate this · \(match.capability.subWorkflows.count) steps")
+                Text("AutoClawd can automate this · \(stepCount) step\(stepCount == 1 ? "" : "s")")
                     .font(.system(size: 11))
                     .foregroundStyle(Glass.textSecondary)
                     .lineLimit(1)
@@ -60,6 +76,80 @@ struct CapabilityToastView: View {
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
     }
 
+    // MARK: Task rendering
+
+    private func taskBody(task: TaskSuggestion) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                // Intent chip
+                Label(task.intent, systemImage: "bolt.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(Color.blue.opacity(0.18))
+                    .clipShape(Capsule())
+                    .foregroundStyle(Color.blue)
+                Spacer()
+                Button(action: onSnooze) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Glass.textTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+            Text(task.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Glass.textPrimary)
+                .lineLimit(2)
+            // Context chips
+            if task.detectedContext.isComplete {
+                contextChips(task.detectedContext)
+            }
+            HStack(spacing: 8) {
+                GlassButton("Run", action: onTap)
+                if !task.detectedContext.isComplete {
+                    Button("Add context →") { onTap() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Glass.textSecondary)
+                }
+                Spacer()
+                Button(action: onMarkIrrelevant) {
+                    Image(systemName: "hand.thumbsdown")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Glass.textTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(width: 300)
+        .background(glassBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+    }
+
+    @ViewBuilder
+    private func contextChips(_ context: TaskContext) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(context.files, id: \.self) { f in
+                    GlassChip(f, icon: "paperclip")
+                }
+                ForEach(context.contacts, id: \.self) { c in
+                    GlassChip(c, icon: "person.fill")
+                }
+                ForEach(context.urls.prefix(2), id: \.self) { u in
+                    GlassChip(URL(string: u)?.host ?? u, icon: "link")
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private var glassBackground: some View {
         ZStack {
@@ -73,15 +163,16 @@ struct CapabilityToastView: View {
 
 /// Horizontal strip of small app icons derived from a capability's trigger apps and subworkflows.
 private struct ToolIconStrip: View {
-    let capability: Capability
+    let triggers: CapabilityTriggers
+    let subWorkflows: [SubWorkflow]
     private let maxIcons = 4
     private let iconSize: CGFloat = 28
     private let overlap: CGFloat = 8
 
     private var appNames: [String] {
         var names: [String] = []
-        names.append(contentsOf: capability.triggers.apps)
-        for sw in capability.subWorkflows {
+        names.append(contentsOf: triggers.apps)
+        for sw in subWorkflows {
             if let inv = sw.invocation {
                 let lower = inv.lowercased()
                 if lower.contains("slack") { names.append("Slack") }
@@ -121,7 +212,7 @@ private struct ToolIconStrip: View {
 }
 
 /// Single app icon circle — uses NSWorkspace app icon with SF Symbol fallback.
-private struct AppIconView: View {
+struct AppIconView: View {
     let appName: String
     let size: CGFloat
 

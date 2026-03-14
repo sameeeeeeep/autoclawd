@@ -149,7 +149,7 @@ struct AICanvasView: View {
     // MARK: - Node Field (the actual canvas)
 
     private var nodeFieldWidth: CGFloat {
-        let count = max(4, (learnService.session?.events.count ?? 0) + 1)
+        let count = max(4, (learnService.session?.nodes.count ?? 0) + 1)
         return CGFloat(count) * (nodeWidth + connectorLength)
     }
 
@@ -160,13 +160,13 @@ struct AICanvasView: View {
     @ViewBuilder
     private var nodefield: some View {
         let session = learnService.session
-        let events = session?.events ?? []
+        let nodes = session?.nodes ?? []
         ZStack(alignment: .topLeading) {
             // ── Bezier connector lines (drawn beneath nodes) ──
-            connectorOverlay(nodeCount: max(events.count, 1))
+            connectorOverlay(nodeCount: max(nodes.count, 1))
 
-            // ── Placeholder nodes when no events yet ──
-            if events.isEmpty {
+            // ── Placeholder nodes when no nodes yet ──
+            if nodes.isEmpty {
                 HStack(spacing: connectorLength) {
                     ForEach(0..<4, id: \.self) { i in
                         placeholderNode(index: i)
@@ -176,10 +176,10 @@ struct AICanvasView: View {
                 .padding(24)
             }
 
-            // ── Real event nodes ──
+            // ── Real canvas nodes ──
             HStack(spacing: connectorLength) {
-                ForEach(Array(events.enumerated()), id: \.offset) { idx, event in
-                    eventNode(event: event, index: idx)
+                ForEach(Array(nodes.enumerated()), id: \.offset) { idx, node in
+                    eventNode(node: node, index: idx)
                         .offset(y: idx % 2 == 0 ? 0 : 30)
                         .transition(.asymmetric(
                             insertion: .scale(scale: 0.8).combined(with: .opacity),
@@ -189,11 +189,11 @@ struct AICanvasView: View {
                 // Live recording node
                 if learnService.isActive {
                     recordingNode
-                        .offset(y: events.count % 2 == 0 ? 0 : 30)
+                        .offset(y: nodes.count % 2 == 0 ? 0 : 30)
                 }
             }
             .padding(24)
-            .animation(.spring(response: 0.5, dampingFraction: 0.8), value: events.count)
+            .animation(.spring(response: 0.5, dampingFraction: 0.8), value: nodes.count)
         }
     }
 
@@ -258,12 +258,12 @@ struct AICanvasView: View {
 
     // MARK: - Event Node Card
 
-    private func eventNode(event: LearnEvent, index: Int) -> some View {
+    private func eventNode(node: CanvasNode, index: Int) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topLeading) {
                 // Glass card background
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(nodeFill(for: event.appName))
+                    .fill(nodeFill(for: node.app))
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .stroke(Glass.borderGradient, lineWidth: 1)
@@ -273,53 +273,24 @@ struct AICanvasView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     // ── App label row ──
                     HStack(spacing: 6) {
-                        if let app = event.appName {
-                            Text(appInitial(app))
-                                .font(.system(size: 10, weight: .bold, design: .rounded))
-                                .foregroundStyle(.black.opacity(0.7))
-                                .frame(width: 20, height: 20)
-                                .background(appColor(for: app))
-                                .clipShape(Circle())
-                            Text(app)
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(appColor(for: app))
-                                .lineLimit(1)
-                        }
+                        Text(appInitial(node.app))
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.black.opacity(0.7))
+                            .frame(width: 20, height: 20)
+                            .background(appColor(for: node.app))
+                            .clipShape(Circle())
+                        Text(node.app)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(appColor(for: node.app))
+                            .lineLimit(1)
                         Spacer()
                         Text("#\(index + 1)")
                             .font(.system(size: 8))
                             .foregroundStyle(Glass.textTertiary)
                     }
 
-                    // ── OCR text snippet ──
-                    if !event.ocrSnippet.isEmpty {
-                        Text(String(event.ocrSnippet.prefix(100)))
-                            .font(.system(size: 9))
-                            .foregroundStyle(Glass.textSecondary)
-                            .lineLimit(4)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    // ── Speech snippet ──
-                    if !event.speechSnippet.isEmpty {
-                        HStack(alignment: .top, spacing: 4) {
-                            Image(systemName: "mic.fill")
-                                .font(.system(size: 7))
-                                .foregroundStyle(Color.cyan.opacity(0.6))
-                            Text(String(event.speechSnippet.prefix(70)))
-                                .font(.system(size: 9, design: .serif))
-                                .foregroundStyle(Color.cyan.opacity(0.75))
-                                .lineLimit(2)
-                                .italic()
-                        }
-                        .padding(6)
-                        .background(Color.cyan.opacity(0.05))
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.cyan.opacity(0.12)))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-
                     // ── URL badge ──
-                    if let url = event.detectedURLs.first {
+                    if let url = node.url {
                         HStack(spacing: 3) {
                             Image(systemName: "link")
                                 .font(.system(size: 7))
@@ -331,10 +302,26 @@ struct AICanvasView: View {
                         }
                     }
 
+                    // ── Work summary or OCR snippet with spinner ──
+                    if let summary = node.workSummary {
+                        Text(summary)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Glass.textSecondary)
+                            .lineLimit(2)
+                    } else {
+                        HStack(spacing: 4) {
+                            ProgressView().scaleEffect(0.6)
+                            Text(node.ocrSnapshots.last.map { String($0.prefix(60)) } ?? "Capturing…")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Glass.textTertiary)
+                                .lineLimit(1)
+                        }
+                    }
+
                     Spacer(minLength: 0)
 
                     // ── Timestamp ──
-                    Text(event.timestamp.formatted(.dateTime.hour().minute().second()))
+                    Text(node.capturedAt.formatted(.dateTime.hour().minute().second()))
                         .font(.system(size: 7))
                         .foregroundStyle(Glass.textTertiary)
                         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -405,7 +392,7 @@ struct AICanvasView: View {
             VStack(spacing: 10) {
                 if let session = learnService.session {
                     // ── Analysis panel ──
-                    if session.events.count >= 2 {
+                    if session.nodes.count >= 2 {
                         analysisPanel(session: session)
                     }
 
@@ -431,7 +418,7 @@ struct AICanvasView: View {
                         Text("Use-Case Analysis")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Glass.textPrimary)
-                        Text("\(session.events.count) events · \(Int(session.events.count * 5))s recorded")
+                        Text("\(session.nodes.count) nodes · \(Int(session.nodes.count * 5))s recorded")
                             .font(.system(size: 9))
                             .foregroundStyle(Glass.textSecondary)
                     }
@@ -451,7 +438,7 @@ struct AICanvasView: View {
                 GlassDivider()
 
                 // App journey
-                let apps = orderedApps(from: session.events)
+                let apps = orderedApps(from: session.nodes)
                 if !apps.isEmpty {
                     HStack(spacing: 4) {
                         Text("Journey:")
@@ -474,8 +461,8 @@ struct AICanvasView: View {
                 }
 
                 // Speech summary
-                let speech = session.events.compactMap { e -> String? in
-                    e.speechSnippet.isEmpty ? nil : e.speechSnippet
+                let speech = session.nodes.compactMap { n -> String? in
+                    n.speechSnippets.last.flatMap { $0.isEmpty ? nil : $0 }
                 }.joined(separator: " · ")
                 if !speech.isEmpty {
                     Text(String(speech.prefix(180)))
@@ -816,9 +803,9 @@ struct AICanvasView: View {
         }
     }
 
-    private func orderedApps(from events: [LearnEvent]) -> [String] {
+    private func orderedApps(from nodes: [CanvasNode]) -> [String] {
         var seen = Set<String>()
-        return events.compactMap { $0.appName }.filter { seen.insert($0).inserted }
+        return nodes.map { $0.app }.filter { seen.insert($0).inserted }
     }
 }
 

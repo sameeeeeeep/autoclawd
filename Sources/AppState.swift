@@ -163,7 +163,9 @@ final class AppState: ObservableObject {
     /// Transient — current song title set by NowPlayingService via Combine; nil when nothing is playing.
     @Published var nowPlayingSongTitle: String? = nil
     /// Transient — FUCBC auto-trigger: capability detected from screen context (nil = no match).
-    @Published var detectedSuggestion: SuggestionMatch? = nil
+    @Published var detectedSuggestion: SuggestionItem? = nil
+    /// Active tab in the main panel — set by AppDelegate.showMainPanel(tab:) to drive tab selection.
+    @Published var activeTab: PanelTab = .agents
 
     @Published var locationName: String {
         didSet { UserDefaults.standard.set(locationName, forKey: "autoclawd.locationName") }
@@ -285,6 +287,7 @@ final class AppState: ObservableObject {
 
     let screenVisionAnalyzer = ScreenVisionAnalyzer()
     let learnModeService = LearnModeService()
+    let suggestionPipeline = SuggestionPipeline()
 
     // Pipeline v2 services
     let pipelineStore: PipelineStore
@@ -638,8 +641,17 @@ final class AppState: ObservableObject {
                 let ocrText = self.screenVisionAnalyzer.recentContext() ?? ""
                 if !ocrText.isEmpty {
                     let app = NSWorkspace.shared.frontmostApplication?.localizedName
-                    let matches = CapabilityStore.shared.suggest(screenText: ocrText, app: app)
-                    self.detectedSuggestion = matches.first
+                    // TODO: pass real URLs when ScreenVisionAnalyzer exposes them
+                    // (detectedURLs come from on-demand captureNow() snapshots only;
+                    //  the background processFrame() path doesn't surface barcode URLs)
+                    let item = await self.suggestionPipeline.evaluate(
+                        screenText: ocrText,
+                        transcript: self.liveTranscriptText,
+                        app: app,
+                        urls: self.lastScreenSnapshot?.detectedURLs ?? [],
+                        isOllamaEnabled: self.isOllamaEnabled
+                    )
+                    self.detectedSuggestion = item
                 }
             }
         }
@@ -1348,8 +1360,67 @@ final class AppState: ObservableObject {
     }
 
     /// Clear the detected capability suggestion (user dismissed it).
-    func dismissDetectedCapability() {
+    func dismissDetectedSuggestion() {
         detectedSuggestion = nil
+    }
+
+    /// Execute a task suggestion detected by the SuggestionPipeline.
+    func executeSuggestedTask(_ task: TaskSuggestion) {
+        detectedSuggestion = nil
+        guard let project = projects.first else {
+            Log.warn(.pipeline, "executeSuggestedTask: no project available")
+            return
+        }
+
+        let taskID = "TASK-\(String(UUID().uuidString.prefix(8)).uppercased())"
+        let record = PipelineTaskRecord(
+            id: taskID,
+            analysisID: "task-\(taskID)",
+            title: "⚡ \(task.title)",
+            prompt: task.executionPrompt,
+            projectID: project.id,
+            projectName: project.name,
+            mode: .auto,
+            status: .ongoing,
+            skillID: nil,
+            workflowID: nil,
+            workflowSteps: [task.intent],
+            missingConnection: nil,
+            pendingQuestion: nil,
+            attachmentPaths: [],
+            createdAt: Date()
+        )
+
+        pipelineTasks.insert(record, at: 0)
+
+        // Cancel any prior stream before starting a new one
+        codeStreamTask?.cancel()
+        codeStreamTask = nil
+
+        codeSessionMessages = []
+        codeIsStreaming = true
+        codeCurrentToolName = nil
+        codeTaskID = taskID
+        codeStepIndex = 0
+        canvasExecutingTask = record
+
+        guard let (session, stream) = claudeCodeRunner.startSession(
+            prompt: task.executionPrompt,
+            in: project,
+            dangerouslySkipPermissions: true
+        ) else {
+            codeSessionMessages.append(CodeMessage(role: .error, text: "Failed to start Claude CLI"))
+            codeIsStreaming = false
+            canvasExecutingTask = nil
+            return
+        }
+
+        codeSession = session
+        codeSessionMessages.append(CodeMessage(role: .status, text: "⚡ \(task.title)"))
+        codeStreamTask = Task { @MainActor in
+            await processCodeStream(stream)
+        }
+        Log.info(.pipeline, "Task execution started: \(task.title) in \(project.name)")
     }
 
     // MARK: - Pipeline Task Re-execution

@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pillWindow: PillWindow?
     private var mainPanel: MainPanelWindow?
     private var toastWindow: ToastWindow?
+    private var monitorWindow: LearnModeMonitorWindow?
     private var setupWindow: SetupWindow?
     private var onboardingWindow: OnboardingWindow?
     private var statusItem: NSStatusItem?
@@ -28,6 +29,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showPill()
         setupMenuBarIcon()
 
+        // Initialise auxiliary windows
+        toastWindow = ToastWindow()
+        monitorWindow = LearnModeMonitorWindow(service: appState.learnModeService)
+
         // Show first-run setup if dependencies are missing
         showSetupIfNeeded()
 
@@ -36,16 +41,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // recording attempt — preventing the first chunk from silently failing.
         requestPermissionsUpfront()
 
-        // Toast window disabled — logs are now shown inline inside the widget.
-        // Capability suggestion toast — show in top-right when detected
+        // Show/hide the Learn Mode monitor window when pill mode changes
+        appState.$pillMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mode in
+                guard let self else { return }
+                if mode == .learn {
+                    self.monitorWindow?.orderFront(nil)
+                } else {
+                    self.monitorWindow?.orderOut(nil)
+                }
+            }
+            .store(in: &cancellables)
+
+        // Capability / task suggestion toast — show in top-right when detected
         appState.$detectedSuggestion
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] match in
+            .sink { [weak self] item in
                 guard let self else { return }
-                if let match {
-                    self.showCapabilityToast(match)
+                if let item = item {
+                    self.showSuggestionToast(item)
                 } else {
-                    self.dismissCapabilityToast()
+                    self.toastWindow?.dismiss()
                 }
             }
             .store(in: &cancellables)
@@ -213,47 +230,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    // MARK: - Capability Suggestion Toast
+    // MARK: - Suggestion Toast
 
-    private func showCapabilityToast(_ match: SuggestionMatch) {
+    private func showSuggestionToast(_ item: SuggestionItem) {
         guard appState.showToasts else { return }
         toastDismissWork?.cancel()
 
-        if toastWindow == nil {
-            toastWindow = ToastWindow()
-        }
-        guard let toast = toastWindow else { return }
-
-        toast.showCapability(match,
+        toastWindow?.show(item,
             onTap: { [weak self] in
                 guard let self else { return }
-                self.appState.executeCapability(match.capability)
-                self.dismissCapabilityToast()
-                self.showMainPanel(tab: .agents)
+                switch item {
+                case .capability(let match):
+                    self.appState.executeCapability(match.capability)
+                    self.showMainPanel(tab: .agents)
+                case .task(let task):
+                    if task.detectedContext.isComplete {
+                        self.appState.executeSuggestedTask(task)
+                    } else {
+                        // Open tasks panel for context gap-filling
+                        self.appState.dismissDetectedSuggestion()
+                        self.showMainPanel(tab: .tasks)
+                    }
+                }
             },
             onSnooze: { [weak self] in
-                guard let self else { return }
-                CapabilityStore.shared.snooze(capabilityID: match.capability.id)
-                self.appState.dismissDetectedCapability()
+                if case .capability(let match) = item {
+                    CapabilityStore.shared.snooze(capabilityID: match.capability.id)
+                }
+                self?.appState.dismissDetectedSuggestion()
             },
             onMarkIrrelevant: { [weak self] in
-                guard let self else { return }
-                CapabilityStore.shared.markIrrelevant(capabilityID: match.capability.id)
-                self.appState.dismissDetectedCapability()
+                if case .capability(let match) = item {
+                    CapabilityStore.shared.markIrrelevant(capabilityID: match.capability.id)
+                }
+                self?.appState.dismissDetectedSuggestion()
             }
         )
 
         // Auto-dismiss after 5 seconds
         let work = DispatchWorkItem { [weak self] in
-            self?.appState.dismissDetectedCapability()
+            self?.appState.dismissDetectedSuggestion()
         }
         toastDismissWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
-    }
-
-    private func dismissCapabilityToast() {
-        toastDismissWork?.cancel()
-        toastWindow?.dismiss()
     }
 
     // MARK: - Main Panel
@@ -262,12 +281,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let panel = mainPanel, panel.isVisible {
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            appState.activeTab = tab
             return
         }
         let panel = MainPanelWindow(appState: appState)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         mainPanel = panel
+        appState.activeTab = tab
         Log.info(.ui, "Main panel opened, tab: \(tab.rawValue)")
     }
 
@@ -699,11 +720,11 @@ struct PillContentView: View {
         }
 
         // ── FUCBC capability suggestion ("Automate now") ──────────────────────────
-        if let match = appState.detectedSuggestion {
+        if case .capability(let match) = appState.detectedSuggestion {
             return AnyView(CapabilitySuggestionCanvasView(
                 capability: match.capability,
                 onRun:     { appState.executeCapability(match.capability) },
-                onDismiss: { appState.dismissDetectedCapability() }
+                onDismiss: { appState.dismissDetectedSuggestion() }
             ))
         }
 

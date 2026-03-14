@@ -26,6 +26,7 @@ final class LearnModeService: ObservableObject {
     var onCapabilityBuilt: ((Capability) -> Void)?
 
     private let runner = ClaudeCodeRunner()
+    private let ollama = OllamaService()
     private var eventTimer: Timer?
     private var latestSpeechFragment: String = ""
 
@@ -70,20 +71,109 @@ final class LearnModeService: ObservableObject {
     }
 
     private func recordEvent() async {
-        guard isActive, session?.phase == .collecting else { return }
-        let ocrText = screenAnalyzer?.recentContext() ?? ""
-        let app = NSWorkspace.shared.frontmostApplication
-        let event = LearnEvent(
-            timestamp: Date(),
-            appName: app?.localizedName,
-            windowTitle: nil,
-            ocrSnippet: String(ocrText.prefix(400)),
-            detectedURLs: [],
-            speechSnippet: latestSpeechFragment
-        )
-        session?.events.append(event)
-        latestSpeechFragment = ""
-        Log.info(.ui, "FUCBC: event #\(session?.events.count ?? 0) — \(app?.localizedName ?? "-")")
+        guard var sess = session else { return }
+
+        let app  = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown"
+        let url: String? = nil  // ScreenVisionAnalyzer does not expose per-frame URL state;
+                                // URLs are only available on ScreenSnapshot (captureNow()).
+        let ocr  = screenAnalyzer?.recentContext() ?? ""
+        let speech = latestSpeechFragment
+        latestSpeechFragment = ""  // consume
+
+        // Determine if this (app, url) matches the most recent node
+        if let lastIndex = sess.nodes.indices.last,
+           sess.nodes[lastIndex].app == app,
+           sess.nodes[lastIndex].url == url {
+
+            // Same app+URL — update in place if OCR changed meaningfully
+            let lastOCR = sess.nodes[lastIndex].ocrSnapshots.last ?? ""
+            let overlap = ocrOverlap(ocr, lastOCR)
+            if overlap < 0.5, !ocr.isEmpty {
+                sess.nodes[lastIndex].ocrSnapshots.append(ocr)
+                sess.nodes[lastIndex].lastUpdated = Date()
+            }
+            if !speech.isEmpty {
+                sess.nodes[lastIndex].speechSnippets.append(speech)
+            }
+        } else {
+            // New app+URL — create a new node
+            let node = CanvasNode(
+                id: UUID().uuidString,
+                app: app,
+                url: url,
+                ocrSnapshots: ocr.isEmpty ? [] : [ocr],
+                speechSnippets: speech.isEmpty ? [] : [speech],
+                workSummary: nil,
+                capturedAt: Date(),
+                lastUpdated: Date()
+            )
+            sess.nodes.append(node)
+            Log.info(.ui, "LearnMode: new node — \(app) \(url ?? "(no URL)")")
+        }
+
+        session = sess
+    }
+
+    // MARK: - Node Summarisation (Llama pass)
+
+    /// Runs a Llama pass on each node to generate a one-sentence work summary.
+    /// Mutations to session.nodes happen on @MainActor after the async group completes.
+    private func summariseNodes() async {
+        guard var sess = session else { return }
+        let nodes = sess.nodes
+
+        // Separate nodes: those needing Llama vs those getting a default (too little OCR).
+        // Fallback defaults are collected first; Llama results are appended after the group.
+        var summaries: [(id: String, summary: String)] = []
+
+        let nodesToSummarise = nodes.filter { $0.workSummary == nil }
+        for node in nodesToSummarise {
+            let combinedOCR = node.ocrSnapshots.joined(separator: " | ")
+            if combinedOCR.count < 20 {
+                summaries.append((node.id, "Opened \(node.app)"))  // default, no Llama needed
+            }
+        }
+        let llamaNodes = nodesToSummarise.filter { $0.ocrSnapshots.joined(separator: " | ").count >= 20 }
+
+        // Run Llama calls in parallel; each task returns (id, summary) — no direct struct mutation.
+        // All mutations to sess.nodes happen after the group on @MainActor (avoids stale-copy trap).
+        await withTaskGroup(of: (String, String).self) { group in
+            for node in llamaNodes {
+                let combinedOCR = node.ocrSnapshots.joined(separator: " | ")
+                let appName = node.app
+                let urlStr = node.url.map { " (\($0))" } ?? ""
+                let speech = node.speechSnippets.joined(separator: " · ")
+                let fallback = "Worked in \(appName)"
+                // Capture ollama reference — do NOT use self inside the task body
+                let ollamaRef = ollama
+                group.addTask {
+                    let prompt = """
+                    In one sentence, what was the user doing in \(appName)\(urlStr)?
+                    OCR: \(String(combinedOCR.prefix(400)))
+                    Speech: \(speech)
+                    One sentence only.
+                    """
+                    do {
+                        let result = try await ollamaRef.generate(prompt: prompt, numPredict: 64)
+                        let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                        return (node.id, trimmed.isEmpty ? fallback : trimmed)
+                    } catch {
+                        return (node.id, fallback)
+                    }
+                }
+            }
+            for await pair in group {
+                summaries.append(pair)
+            }
+        }
+
+        // Apply all summaries back on @MainActor (never mutate inside task body — stale copy trap)
+        for (id, summary) in summaries {
+            if let idx = sess.nodes.firstIndex(where: { $0.id == id }) {
+                sess.nodes[idx].workSummary = summary
+            }
+        }
+        session = sess
     }
 
     // MARK: - Build Capability (FUCBC)
@@ -111,9 +201,12 @@ final class LearnModeService: ObservableObject {
             linkedProjectIDs: []
         )
 
+        // Summarise each node before assembling the journey narrative
+        await summariseNodes()
+
         // Build story FIRST, then send to Claude
-        let story = buildUserJourney(from: currentSession.events, snapshot: snapshot)
-        let prompt = buildFUCBCPrompt(story: story, events: currentSession.events, snapshot: snapshot, openClawDir: openClawDir)
+        let story = buildUserJourney()
+        let prompt = buildFUCBCPrompt(story: story, snapshot: snapshot, openClawDir: openClawDir)
 
         var fullOutput = ""
         let stream = runner.run(prompt, in: project, dangerouslySkipPermissions: true)
@@ -134,7 +227,7 @@ final class LearnModeService: ObservableObject {
 
         let similar = CapabilityStore.shared.suggest(
             screenText: snapshot?.extractedText ?? "",
-            transcript: currentSession.events.compactMap { $0.speechSnippet.isEmpty ? nil : $0.speechSnippet }.joined(separator: " "),
+            transcript: currentSession.nodes.flatMap { $0.speechSnippets }.joined(separator: " "),
             app: snapshot?.appName,
             urls: snapshot?.detectedURLs ?? []
         ).filter { $0.capability.id != capID }
@@ -151,181 +244,32 @@ final class LearnModeService: ObservableObject {
         CapabilityStore.shared.suggest(screenText: screenText, app: app, urls: urls)
     }
 
-    // =========================================================================
-    // MARK: - Story Builder
+    // MARK: - Journey Assembly
     //
-    // Transforms raw LearnEvents into a coherent human-readable user journey.
-    // This is what Claude READS to understand what the user was doing.
-    //
-    // Output looks like:
-    //   T+0s  → User opened Threads
-    //   T+5s  → User scrolled feed · Screen: "New Llama 3.3 from Meta — free weights"
-    //   T+10s → User navigated to youtube.com · Screen: video about Llama 3.3
-    //           User said: "oh I should try this one"
-    //   T+15s → User switched to Safari, navigated to huggingface.co
-    //           Screen: model cards, GGUF download buttons visible
-    //   T+20s → User downloaded "llama-3.3-70b-instruct.Q4_K_M.gguf" (4.8 GB)
-    // =========================================================================
+    // Assembles a timestamped narrative from CanvasNode.workSummary values.
+    // Each node's workSummary is produced by the Llama summariseNodes() pass.
 
-    func buildUserJourney(from events: [LearnEvent], snapshot: ScreenSnapshot?) -> String {
-        guard !events.isEmpty else { return "No events recorded." }
-
+    private func buildUserJourney() -> String {
+        guard let sess = session else { return "" }
         var lines: [String] = []
-        lines.append("## User Journey (observed \(events.count * 5)s)")
-        lines.append("")
-
-        var prevApp: String? = nil
-        let sessionStart = events.first!.timestamp
-
-        for (i, event) in events.enumerated() {
-            let elapsed = Int(event.timestamp.timeIntervalSince(sessionStart))
-            let prefix = "T+\(elapsed)s"
-
-            var actions: [String] = []
-
-            // ── App transition ──
-            if let app = event.appName {
-                if prevApp == nil || prevApp != app {
-                    if prevApp == nil {
-                        actions.append("User opened \(app)")
-                    } else {
-                        actions.append("User switched to \(app)")
-                    }
-                    prevApp = app
-                }
-            }
-
-            // ── URL navigation ──
-            for url in event.detectedURLs.prefix(2) {
-                let domain = urlDomain(url)
-                let action = navigationVerb(for: domain, ocr: event.ocrSnippet)
-                actions.append("User \(action) \(domain)")
-            }
-
-            // ── OCR-based action inference ──
-            let ocrActions = inferActionsFromOCR(event.ocrSnippet, prevEvent: i > 0 ? events[i-1] : nil)
-            actions.append(contentsOf: ocrActions)
-
-            // ── Speech ──
-            if !event.speechSnippet.isEmpty {
-                actions.append("User said: \"\(event.speechSnippet)\"")
-            }
-
-            // ── Screen content (condensed) ──
-            let screenLabel = condenseOCR(event.ocrSnippet)
-            let screenNote = screenLabel.isEmpty ? "" : "· Screen: \"\(screenLabel)\""
-
-            if !actions.isEmpty {
-                let actionText = actions.joined(separator: " · ")
-                lines.append("\(prefix)  → \(actionText) \(screenNote)".trimmingCharacters(in: .whitespaces))
-            } else if !screenNote.isEmpty {
-                lines.append("\(prefix)  · \(screenNote)")
-            }
+        for (_, node) in sess.nodes.enumerated() {
+            let elapsed = Int(node.capturedAt.timeIntervalSince(sess.startedAt))
+            let summary = node.workSummary ?? "Opened \(node.app)"
+            lines.append("T+\(elapsed)s → \(summary) [\(node.displayTitle)]")
         }
-
-        // ── Final state ──
-        if let snap = snapshot {
-            lines.append("")
-            lines.append("## Final State (at build time)")
-            if let app = snap.appName { lines.append("App: \(app)") }
-            if !snap.detectedURLs.isEmpty { lines.append("URLs open: \(snap.detectedURLs.prefix(3).joined(separator: ", "))") }
-            if !snap.extractedText.isEmpty {
-                let condensed = snap.extractedText.count > 800
-                    ? String(snap.extractedText.prefix(800)) + "\n[…]"
-                    : snap.extractedText
-                lines.append("Screen content:\n\(condensed)")
-            }
-        }
-
         return lines.joined(separator: "\n")
     }
 
-    // ── Navigation verb based on context ──
-    private func navigationVerb(for domain: String, ocr: String) -> String {
-        let lowerOCR = ocr.lowercased()
-        if lowerOCR.contains("search") || domain.contains("google") || domain.contains("bing") { return "searched on" }
-        if lowerOCR.contains("download") || lowerOCR.contains(".gguf") || lowerOCR.contains(".zip") { return "downloaded from" }
-        if lowerOCR.contains("reddit") || domain.contains("reddit") { return "explored Reddit at" }
-        return "navigated to"
-    }
-
-    // ── Infer actions from OCR text changes ──
-    private func inferActionsFromOCR(_ ocr: String, prevEvent: LearnEvent?) -> [String] {
-        var actions: [String] = []
-        let lower = ocr.lowercased()
-
-        // Download detection
-        if lower.contains(".gguf") || lower.contains(".safetensors") || lower.contains(".zip") || lower.contains("downloading") {
-            if let filename = extractFilename(from: ocr) {
-                actions.append("User downloaded \"\(filename)\"")
-            } else {
-                actions.append("User initiated a download")
-            }
-        }
-        // Search detection
-        if lower.contains("search results") || lower.contains("results for") {
-            if let query = extractSearchQuery(from: ocr) {
-                actions.append("User searched for \"\(query)\"")
-            }
-        }
-        // Video detection
-        if lower.contains("watch") || lower.contains("video") || lower.contains("youtube.com/watch") {
-            actions.append("User watched a video")
-        }
-        // Post/compose detection
-        if lower.contains("what's on your mind") || lower.contains("compose") || lower.contains("new post") || lower.contains("tweet") {
-            actions.append("User opened post composer")
-        }
-        // Form/input detection (typing)
-        if let prev = prevEvent, abs(ocr.count - prev.ocrSnippet.count) > 20 && lower.contains("typing") {
-            actions.append("User typed content")
-        }
-
-        return actions
-    }
-
-    private func extractFilename(from ocr: String) -> String? {
-        let pattern = #"[\w\-\.]+\.(gguf|safetensors|zip|tar|gz|pdf|mp4|mov)"#
-        if let range = ocr.range(of: pattern, options: .regularExpression) {
-            return String(ocr[range])
-        }
-        return nil
-    }
-
-    private func extractSearchQuery(from ocr: String) -> String? {
-        // Look for quoted strings or text after "results for"
-        if let range = ocr.range(of: "results for \"", options: .caseInsensitive) {
-            let after = ocr[range.upperBound...]
-            if let end = after.firstIndex(of: "\"") {
-                return String(after[..<end])
-            }
-        }
-        return nil
-    }
-
-    private func condenseOCR(_ ocr: String) -> String {
-        // Extract the most meaningful line from OCR (first non-trivial line)
-        let lines = ocr.components(separatedBy: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { $0.count > 12 && $0.count < 80 }
-        return lines.first.map { String($0.prefix(70)) } ?? ""
-    }
-
-    private func urlDomain(_ url: String) -> String {
-        URL(string: url)?.host ?? url
-    }
-
-    // =========================================================================
     // MARK: - FUCBC Prompt Builder (with story + executable instructions)
-    // =========================================================================
 
-    private func buildFUCBCPrompt(story: String, events: [LearnEvent], snapshot: ScreenSnapshot?, openClawDir: String) -> String {
+    private func buildFUCBCPrompt(story: String, snapshot: ScreenSnapshot?, openClawDir: String) -> String {
+        let nodeCount = session?.nodes.count ?? 0
 
         return """
         # FUCBC: Find Use-Case, Build Capability
 
-        You are AutoClawd's intelligence engine. I observed a user's screen + voice for \(events.count * 5) seconds.
-        Below is a coherent story of what they did, followed by raw event data for reference.
+        You are AutoClawd's intelligence engine. I observed a user's screen + voice across \(nodeCount) activity node(s).
+        Below is a coherent story of what they did.
 
         ## Your Job
         1. Read the user journey story. Identify the ONE repeating use-case worth automating.
@@ -361,11 +305,6 @@ final class LearnModeService: ObservableObject {
         ---
 
         \(story)
-
-        ---
-
-        ## Raw Events (reference only — the story above is the truth)
-        \(events.map { $0.eventLine() }.joined(separator: "\n"))
 
         ---
 
@@ -405,6 +344,8 @@ final class LearnModeService: ObservableObject {
 
         ## JSON Manifest (output last, no trailing content after this block)
 
+        IMPORTANT: Always output at least 2 subWorkflows. Every subWorkflow must have a non-empty "name" AND a non-empty "invocation" (a shell command or skill slug). Never output a subWorkflow with blank fields.
+
         ```json
         {
           "name": "<Friendly name, max 50 chars>",
@@ -417,10 +358,10 @@ final class LearnModeService: ObservableObject {
           "triggerKeywords": ["<speech/screen keywords>"],
           "triggerOCRPatterns": ["<exact screen text phrases>"],
           "subWorkflows": [
-            {"name": "detect_trigger", "description": "<how/when to trigger>", "invocation": null},
-            {"name": "extract_content", "description": "<what to extract>", "invocation": "<shell cmd or null>"},
-            {"name": "execute", "description": "<main action>", "invocation": "<shell cmd or null>"},
-            {"name": "notify", "description": "<how to tell user>", "invocation": null}
+            {"name": "detect_trigger", "description": "<how/when to trigger>", "invocation": "osascript -e 'tell application \"System Events\" to get frontmost application'"},
+            {"name": "extract_content", "description": "<what to extract>", "invocation": "<shell cmd or skill slug>"},
+            {"name": "execute", "description": "<main action>", "invocation": "<shell cmd or skill slug>"},
+            {"name": "notify", "description": "<how to tell user>", "invocation": "osascript -e 'display notification \"Done\" with title \"AutoClawd\"'"}
           ]
         }
         ```
@@ -493,5 +434,26 @@ final class LearnModeService: ObservableObject {
             return String(text[start.lowerBound...end.upperBound])
         }
         return nil
+    }
+
+    // MARK: - OCR Deduplication
+
+    /// Returns the character-level overlap ratio between two strings (0.0–1.0).
+    /// Uses character counts (with duplicates), not unique-character sets, so that
+    /// two different screens sharing a common alphabet don't falsely score as identical.
+    /// Formula: common / max(a.count, b.count) where common = characters in the shorter
+    /// string that also appear in the longer (approximated by counting shared chars).
+    private func ocrOverlap(_ a: String, _ b: String) -> Double {
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        // Build frequency maps and count matching characters
+        var freqA = [Character: Int]()
+        for ch in a { freqA[ch, default: 0] += 1 }
+        var common = 0
+        var freqB = [Character: Int]()
+        for ch in b {
+            freqB[ch, default: 0] += 1
+            if let countA = freqA[ch], (freqB[ch] ?? 0) <= countA { common += 1 }
+        }
+        return Double(common) / Double(max(a.count, b.count))
     }
 }

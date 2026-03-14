@@ -60,6 +60,9 @@ struct MainPanelView: View {
         .onChange(of: appState.learnModeService.isActive) { active in
             if active { selectedTab = .tasks }
         }
+        .onReceive(appState.$activeTab) { newTab in
+            selectedTab = newTab
+        }
     }
 
     // MARK: - Content
