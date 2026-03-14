@@ -10,3 +10,4 @@ build/
 # Editor
 .swp
 *.orig
+.worktrees/
