@@ -248,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.appState.executeSuggestedTask(task)
                     } else {
                         // Open tasks panel for context gap-filling
+                        self.appState.dismissDetectedSuggestion()
                         self.showMainPanel(tab: .tasks)
                     }
                 }
@@ -280,12 +281,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let panel = mainPanel, panel.isVisible {
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            appState.activeTab = tab
             return
         }
         let panel = MainPanelWindow(appState: appState)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         mainPanel = panel
+        appState.activeTab = tab
         Log.info(.ui, "Main panel opened, tab: \(tab.rawValue)")
     }
 

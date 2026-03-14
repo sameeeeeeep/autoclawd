@@ -164,6 +164,8 @@ final class AppState: ObservableObject {
     @Published var nowPlayingSongTitle: String? = nil
     /// Transient — FUCBC auto-trigger: capability detected from screen context (nil = no match).
     @Published var detectedSuggestion: SuggestionItem? = nil
+    /// Active tab in the main panel — set by AppDelegate.showMainPanel(tab:) to drive tab selection.
+    @Published var activeTab: PanelTab = .agents
 
     @Published var locationName: String {
         didSet { UserDefaults.standard.set(locationName, forKey: "autoclawd.locationName") }
