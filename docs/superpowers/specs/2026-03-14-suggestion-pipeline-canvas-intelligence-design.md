@@ -49,7 +49,13 @@ struct TaskContext {
     let rawOCR: String       // full OCR snapshot — passed to canvas if context incomplete
 
     var isComplete: Bool {
-        // context is "complete enough" to run without user input
+        // Context is "complete enough" to attempt execution without user input.
+        // Intentionally permissive: any detected signal is treated as sufficient.
+        // Known limitation: a task like "email Josh the report" may show "Run" when
+        // only the contact ("Josh") is detected but no file is resolved. Claude Code
+        // will surface a clarifying question in the stream if a required piece is
+        // missing at execution time. "Add context →" remains available alongside
+        // "Run" so the user can fill gaps before running if they prefer.
         !files.isEmpty || !contacts.isEmpty || !urls.isEmpty
     }
 }
@@ -77,9 +83,13 @@ New `SuggestionPipeline` class replaces the inline `CapabilityStore.suggest()` c
 
 - `detectedSuggestion: SuggestionMatch?` → `detectedSuggestion: SuggestionItem?`
 - `dismissDetectedCapability()` → `dismissDetectedSuggestion()`
-- `executeCapability(_ capability: Capability)` — unchanged
-- Add `executeTask(_ task: TaskSuggestion)` — builds `PipelineTaskRecord` (id: `TASK-{8hex}`), runs Claude Code with `task.executionPrompt`
+- `executeCapability(_ capability: Capability)` — unchanged; update the `detectedSuggestion = nil` line at the top of that method (currently line 1275) to use the new type
+- Add `executeSuggestedTask(_ task: TaskSuggestion)` — named distinctly to avoid collision with existing `executeTask(id: String)` on AppState. Builds `PipelineTaskRecord` (id: `TASK-{8hex}`), runs Claude Code with `task.executionPrompt`
 - OCR frame callback calls `suggestionPipeline.evaluate(...)` instead of `CapabilityStore.shared.suggest(...)`
+
+**`SuggestionPipeline` actor context:** Declared `@MainActor`. Both the capability scoring path (synchronous) and the Llama task extraction path (`async throws`) run on the main actor — the `await OllamaService.generate()` call suspends on the main actor, which is acceptable for a lightweight periodic check. The `AppState.detectedSuggestion` write-back requires no cross-actor hop.
+
+**Ollama offline / disabled handling:** If `AppState.isOllamaEnabled == false`, the task extraction Llama call is skipped entirely (capability scoring still runs). If Ollama is enabled but the call throws, the error is silently discarded — task suggestions are dropped for that frame, capability suggestions still surface. This matches the existing pipeline's pattern for Llama failures.
 
 ---
 
@@ -97,6 +107,14 @@ New `SuggestionPipeline` class replaces the inline `CapabilityStore.suggest()` c
 **FUCBC prompt fix:**
 - Add explicit constraint in `buildFUCBCPrompt()`: "Always output at least 2 subWorkflows. Every subWorkflow must have a non-empty `name` and a non-empty `invocation` (shell command or skill slug)."
 
+### ToastWindow API Migration
+
+`ToastWindow` currently exposes `showCapability(_ match: SuggestionMatch, ...)` and holds a `CapabilityToastModel` typed to `SuggestionMatch?`. Both are updated:
+
+- `CapabilityToastModel.match: SuggestionMatch?` → `item: SuggestionItem?`
+- `ToastWindow.showCapability(_:onTap:onSnooze:onMarkIrrelevant:)` → `show(_ item: SuggestionItem, onTap:onSnooze:onMarkIrrelevant:)`
+- `AppDelegate.showCapabilityToast(_ match: SuggestionMatch)` → `showSuggestionToast(_ item: SuggestionItem)` — all call sites in `AppDelegate` updated accordingly
+
 ### Unified Toast Rendering
 
 `CapabilityToastView` accepts `SuggestionItem` instead of `SuggestionMatch`:
@@ -111,7 +129,7 @@ New `SuggestionPipeline` class replaces the inline `CapabilityStore.suggest()` c
 - Intent chip (⚡ + intent label, e.g. "⚡ email")
 - Task title ("Send quarterly report to Josh")
 - Detected context chips: 📎 filename, 👤 contact name, 🔗 URL — shown inline below title
-- **If context is complete:** "Run" button → `executeTask()`
+- **If context is complete:** "Run" button → `executeSuggestedTask()`
 - **If context incomplete:** "Run" + "Add context →" button → opens canvas panel for gap-filling
 
 Both types share: 300px width, `.ultraThinMaterial` glass background, 12px shadow, auto-dismiss after 5s, same snooze/irrelevant callbacks.
@@ -142,6 +160,8 @@ struct CanvasNode: Identifiable, Codable {
 
 `LearnSession.events: [LearnEvent]` → `LearnSession.nodes: [CanvasNode]`
 
+`LearnSession.hasEnoughContext` updates from `events.count >= 3` to `nodes.count >= 3` (still represents ~15 seconds of distinct app/URL contexts). `eventSummary` computed property updates similarly to reference `nodes.count`.
+
 ### `recordEvent()` Logic
 
 Every 5 seconds in `LearnModeService`:
@@ -167,7 +187,7 @@ OCR snapshots: {snapshots joined by ' | '}
 Speech: {speechSnippets joined by ' · '}"
 ```
 
-Result stored as `node.workSummary`. Runs nodes in parallel (async group). Nodes without enough content (< 20 chars of OCR) get a default: `"Opened {app}"`.
+Result stored as `node.workSummary`. Runs nodes in parallel using `withTaskGroup`. Each task `await`s the Llama call then returns `(id: String, summary: String)`. After the group completes, all mutations to `session.nodes` happen back on `@MainActor` via a single loop over the results — never inside the concurrent task body, which would mutate a stale struct copy. Nodes without enough content (< 20 chars of OCR) skip the Llama call entirely and get a default: `"Opened {app}"`.
 
 `buildUserJourney()` assembles narrative from `node.workSummary` values instead of raw event lines.
 
@@ -222,6 +242,8 @@ New `NSPanel` subclass:
 
 **Live updates:** `LearnModeMonitorView` takes `@ObservedObject var service: LearnModeService`. SwiftUI re-renders on `session.nodes` changes — no polling needed.
 
+**Ownership / initialisation:** `LearnModeMonitorWindow` is initialised in `AppDelegate.applicationDidFinishLaunching` with a reference to `appState.learnModeService`, following the same pattern as `MainPanelWindow(appState:)`. The window passes the service into `LearnModeMonitorView` at init; no environment injection.
+
 **"Stop & Build" button:** `GlassButton` at bottom, calls `learnModeService.buildCapability()`. Disabled while `session.phase == .building`.
 
 ---
@@ -234,14 +256,13 @@ New `NSPanel` subclass:
 | `LearnModeService.swift` | Rewrite `recordEvent()` with app+URL keying; add Llama summarisation pass; update `buildUserJourney()` |
 | `SuggestionPipeline.swift` | **New file** — unified capability scoring + task extraction |
 | `CapabilityStore.swift` | Move scoring logic to `SuggestionPipeline`; keep `save/load/delete/snooze` |
-| `AppState.swift` | `detectedSuggestion: SuggestionItem?`; add `executeTask()`; wire `SuggestionPipeline` |
+| `AppState.swift` | `detectedSuggestion: SuggestionItem?`; add `executeSuggestedTask()`; wire `SuggestionPipeline`; update `detectedSuggestion = nil` in `executeCapability()` |
 | `ToastView.swift` | `CapabilityToastView` accepts `SuggestionItem`; add task rendering branch; filter blank subWorkflows |
-| `ToastWindow.swift` | Update to pass `SuggestionItem` to view |
-| `AICanvasView.swift` | Render `[CanvasNode]` instead of `[LearnEvent]`; update node cards |
+| `ToastWindow.swift` | `show(_ item: SuggestionItem, ...)` replaces `showCapability(_:...)`; update `CapabilityToastModel` |
+| `AICanvasView.swift` | Render `[CanvasNode]` instead of `[LearnEvent]`; update node cards; update `hasEnoughContext` references |
 | `LearnModeMonitorWindow.swift` | **New file** — NSPanel wrapper |
 | `LearnModeMonitorView.swift` | **New file** — SwiftUI node list view |
-| `AppDelegate.swift` | Wire `LearnModeMonitorWindow` lifecycle to `pillMode` |
-| `LearnModeService.swift` | Tighten FUCBC prompt for well-formed subWorkflows |
+| `AppDelegate.swift` | Wire `LearnModeMonitorWindow` lifecycle to `pillMode`; `showSuggestionToast(_:)` replaces `showCapabilityToast(_:)` |
 
 ---
 
