@@ -22,12 +22,12 @@ struct SuggestionMatch: Sendable {
 
 // MARK: - Unified Suggestion Item
 
-enum SuggestionItem {
+enum SuggestionItem: Sendable {
     case capability(SuggestionMatch)
     case task(TaskSuggestion)
 }
 
-struct TaskSuggestion: Identifiable {
+struct TaskSuggestion: Identifiable, Sendable {
     let id: String
     let title: String           // e.g. "Send quarterly report to Josh"
     let intent: String          // "email" | "hire" | "post" | "message" | "other"
@@ -36,7 +36,7 @@ struct TaskSuggestion: Identifiable {
     let confidence: Float       // 0.0–1.0
 }
 
-struct TaskContext {
+struct TaskContext: Sendable {
     let files: [String]    // filenames from OCR (e.g. "Q4-Report.pdf")
     let contacts: [String] // names/emails from transcript or OCR
     let urls: [String]     // relevant URLs visible on screen
