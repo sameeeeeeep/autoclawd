@@ -70,20 +70,47 @@ final class LearnModeService: ObservableObject {
     }
 
     private func recordEvent() async {
-        guard isActive, session?.phase == .collecting else { return }
-        let ocrText = screenAnalyzer?.recentContext() ?? ""
-        let app = NSWorkspace.shared.frontmostApplication
-        let event = LearnEvent(
-            timestamp: Date(),
-            appName: app?.localizedName,
-            windowTitle: nil,
-            ocrSnippet: String(ocrText.prefix(400)),
-            detectedURLs: [],
-            speechSnippet: latestSpeechFragment
-        )
-        session?.events.append(event)
-        latestSpeechFragment = ""
-        Log.info(.ui, "FUCBC: event #\(session?.events.count ?? 0) — \(app?.localizedName ?? "-")")
+        guard var sess = session else { return }
+
+        let app  = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown"
+        let url: String? = nil  // ScreenVisionAnalyzer does not expose per-frame URL state;
+                                // URLs are only available on ScreenSnapshot (captureNow()).
+        let ocr  = screenAnalyzer?.recentContext() ?? ""
+        let speech = latestSpeechFragment
+        latestSpeechFragment = ""  // consume
+
+        // Determine if this (app, url) matches the most recent node
+        if let lastIndex = sess.nodes.indices.last,
+           sess.nodes[lastIndex].app == app,
+           sess.nodes[lastIndex].url == url {
+
+            // Same app+URL — update in place if OCR changed meaningfully
+            let lastOCR = sess.nodes[lastIndex].ocrSnapshots.last ?? ""
+            let overlap = ocrOverlap(ocr, lastOCR)
+            if overlap < 0.5, !ocr.isEmpty {
+                sess.nodes[lastIndex].ocrSnapshots.append(ocr)
+                sess.nodes[lastIndex].lastUpdated = Date()
+            }
+            if !speech.isEmpty {
+                sess.nodes[lastIndex].speechSnippets.append(speech)
+            }
+        } else {
+            // New app+URL — create a new node
+            let node = CanvasNode(
+                id: UUID().uuidString,
+                app: app,
+                url: url,
+                ocrSnapshots: ocr.isEmpty ? [] : [ocr],
+                speechSnippets: speech.isEmpty ? [] : [speech],
+                workSummary: nil,
+                capturedAt: Date(),
+                lastUpdated: Date()
+            )
+            sess.nodes.append(node)
+            Log.info(.ui, "LearnMode: new node — \(app) \(url ?? "(no URL)")")
+        }
+
+        session = sess
     }
 
     // MARK: - Build Capability (FUCBC)
@@ -493,5 +520,26 @@ final class LearnModeService: ObservableObject {
             return String(text[start.lowerBound...end.upperBound])
         }
         return nil
+    }
+
+    // MARK: - OCR Deduplication
+
+    /// Returns the character-level overlap ratio between two strings (0.0–1.0).
+    /// Uses character counts (with duplicates), not unique-character sets, so that
+    /// two different screens sharing a common alphabet don't falsely score as identical.
+    /// Formula: common / max(a.count, b.count) where common = characters in the shorter
+    /// string that also appear in the longer (approximated by counting shared chars).
+    private func ocrOverlap(_ a: String, _ b: String) -> Double {
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        // Build frequency maps and count matching characters
+        var freqA = [Character: Int]()
+        for ch in a { freqA[ch, default: 0] += 1 }
+        var common = 0
+        var freqB = [Character: Int]()
+        for ch in b {
+            freqB[ch, default: 0] += 1
+            if let countA = freqA[ch], freqB[ch]! <= countA { common += 1 }
+        }
+        return Double(common) / Double(max(a.count, b.count))
     }
 }
