@@ -106,13 +106,8 @@ struct LearnModeMonitorView: View {
     // MARK: - Build Button
 
     private var isBuilding: Bool {
-        guard let phase = service.session?.phase else { return false }
-        switch phase {
-        case .building:   return true
-        case .done:       return true
-        case .failed:     return true
-        case .collecting: return false
-        }
+        if case .building = service.session?.phase { return true }
+        return false
     }
 
     private var buildButton: some View {

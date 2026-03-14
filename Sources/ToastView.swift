@@ -138,13 +138,13 @@ struct CapabilityToastView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(context.files, id: \.self) { f in
-                    GlassChip("📎 \(f)")
+                    GlassChip(f, icon: "paperclip")
                 }
                 ForEach(context.contacts, id: \.self) { c in
-                    GlassChip("👤 \(c)")
+                    GlassChip(c, icon: "person.fill")
                 }
                 ForEach(context.urls.prefix(2), id: \.self) { u in
-                    GlassChip("🔗 \(URL(string: u)?.host ?? u)")
+                    GlassChip(URL(string: u)?.host ?? u, icon: "link")
                 }
             }
         }
