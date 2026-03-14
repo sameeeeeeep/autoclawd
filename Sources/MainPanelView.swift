@@ -6,6 +6,7 @@ import SwiftUI
 enum PanelTab: String, CaseIterable, Identifiable {
     case agents   = "Agents"
     case tasks    = "Tasks"
+    case canvas   = "Canvas"
     case projects = "Projects"
     case logs     = "Logs"
     case settings = "Settings"
@@ -16,6 +17,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
         switch self {
         case .agents:   return "bolt.fill"
         case .tasks:    return "checklist"
+        case .canvas:   return "sparkles"
         case .projects: return "folder"
         case .logs:     return "doc.text"
         case .settings: return "gearshape"
@@ -94,6 +96,11 @@ struct MainPanelView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(selectedTab == .tasks ? 1 : 0)
                 .allowsHitTesting(selectedTab == .tasks)
+
+            CanvasWorkspaceView(appState: appState)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(selectedTab == .canvas ? 1 : 0)
+                .allowsHitTesting(selectedTab == .canvas)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

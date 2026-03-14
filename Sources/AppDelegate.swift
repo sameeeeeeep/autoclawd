@@ -272,9 +272,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         )
 
-        // Questions stay 10s (need time to read + pick); everything else 5s
+        // For questions: also open the Canvas workspace for a richer interactive view
+        if case .question = item {
+            showMainPanel(tab: .canvas)
+        }
+
+        // Questions stay 15s (canvas workspace visible + voice time); everything else 5s
         let dismissDelay: TimeInterval = {
-            if case .question = item { return 10 }
+            if case .question = item { return 15 }
             return 5
         }()
         let work = DispatchWorkItem { [weak self] in
