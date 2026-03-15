@@ -37,6 +37,12 @@ final class SuggestionPipeline {
     private var lastAppSwitchHaikuAt: Date = .distantPast
     private var isHaikuRunning = false
     private var lastOCRText: String = ""                     // for OCR diff computation
+    private let screenHaikuDebounce_passive: TimeInterval = 90.0 // ↓ from 3 min: OCR-change passive trigger
+
+    // MARK: - Phase 2e: Clipboard-Triggered Suggestions (highest intent signal)
+
+    private var lastClipboardSuggestionAt: Date = .distantPast
+    private let clipboardDebounce: TimeInterval = 5.0  // very short — user just acted
 
     // MARK: - Phase 2d: Dwell Detection (user reading/thinking — same content > 20s)
 
@@ -44,6 +50,27 @@ final class SuggestionPipeline {
     private var lastDwellHaikuAt: Date = .distantPast
     private let dwellThreshold: TimeInterval    = 20.0   // seconds on same content before triggering
     private let dwellHaikuDebounce: TimeInterval = 300.0 // 5 min between dwell triggers
+
+    // MARK: - Suggestion Deduplication
+
+    private struct RecentSuggestion {
+        let title: String
+        let shownAt: Date
+    }
+    private var recentSuggestions: [RecentSuggestion] = []
+    private let deduplicationWindow: TimeInterval = 1200.0 // 20 min — don't re-suggest same title
+
+    /// Returns true if this title was already suggested recently (within deduplicationWindow).
+    private func isDuplicate(title: String) -> Bool {
+        let cutoff = Date().addingTimeInterval(-deduplicationWindow)
+        recentSuggestions.removeAll { $0.shownAt < cutoff }  // prune stale entries
+        let norm = title.lowercased().trimmingCharacters(in: .whitespaces)
+        return recentSuggestions.contains { $0.title.lowercased() == norm }
+    }
+
+    private func recordSuggestion(title: String) {
+        recentSuggestions.append(RecentSuggestion(title: title, shownAt: Date()))
+    }
 
     // MARK: - OCR Diff Helper
 
@@ -129,7 +156,7 @@ final class SuggestionPipeline {
         }
 
         guard !isHaikuRunning,
-              elapsed >= screenHaikuDebounce,
+              elapsed >= screenHaikuDebounce_passive,
               hash != lastScreenHash,
               !screenText.isEmpty
         else {
@@ -204,21 +231,165 @@ final class SuggestionPipeline {
         }
     }
 
+    // MARK: - Phase 2e: Clipboard-Triggered Suggestion (user explicitly copied something)
+
+    /// Fired immediately when the user copies text or a URL.
+    /// This is the highest-intent signal — user said "I care about this content."
+    /// Short debounce (5s) and lower confidence floor (0.5) vs ambient triggers.
+    /// `contentType`: "text" | "url". `copiedContent`: full clipboard string.
+    func scheduleClipboardSuggestion(
+        contentType: String,
+        copiedContent: String,
+        screenText: String,
+        transcript: String,
+        app: String?,
+        urls: [String],
+        worldModel: String,
+        onResult: @escaping @MainActor (SuggestionItem) -> Void
+    ) {
+        let elapsed = Date().timeIntervalSince(lastClipboardSuggestionAt)
+        guard !isHaikuRunning,
+              elapsed >= clipboardDebounce,
+              !copiedContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+
+        lastClipboardSuggestionAt = Date()
+        isHaikuRunning = true
+
+        let ctx = SuggestionContext(
+            transcript: transcript,
+            screenText: screenText,
+            app:        app,
+            urls:       urls,
+            clipboard:  [copiedContent],   // copied content IS the primary signal
+            worldModel: worldModel
+        )
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let item = await self.runClipboardHaiku(contentType: contentType,
+                                                        copiedContent: copiedContent,
+                                                        context: ctx) {
+                onResult(item)
+            }
+            self.isHaikuRunning = false
+        }
+    }
+
+    /// Clipboard-focused Haiku prompt — different from the screen/ambient prompt.
+    /// Tells Haiku exactly what the user copied and asks what to do with it.
+    private func runClipboardHaiku(contentType: String, copiedContent: String, context: SuggestionContext) async -> SuggestionItem? {
+        let prompt = buildClipboardPrompt(contentType: contentType, copiedContent: copiedContent, context: context)
+        do {
+            let response = try await haiku.generate(prompt: prompt)
+            Log.info(.pipeline, "Clipboard Haiku response (\(response.count) chars)")
+            return deduplicateClipboard(parseResponse(from: response, context: context))
+        } catch {
+            Log.warn(.pipeline, "Clipboard Haiku failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Like `deduplicate` but with a shorter window for clipboard — 5 min instead of 20 min.
+    /// Clipboard content changes fast; we don't want to block a new copy of different text.
+    private func deduplicateClipboard(_ item: SuggestionItem?) -> SuggestionItem? {
+        guard let item else { return nil }
+        let title: String
+        switch item {
+        case .capability(let m):  title = m.capability.name
+        case .task(let t):        title = t.title
+        case .question(let q):    title = q.question
+        }
+        // Short window: only suppress if IDENTICAL title appeared in last 5 min
+        let cutoff = Date().addingTimeInterval(-300)
+        let recentDupe = recentSuggestions.filter { $0.shownAt >= cutoff }
+            .contains { $0.title.lowercased() == title.lowercased() }
+        if recentDupe {
+            Log.info(.pipeline, "Suppressing duplicate clipboard suggestion: \"\(title)\"")
+            return nil
+        }
+        recordSuggestion(title: title)
+        return item
+    }
+
+    private func buildClipboardPrompt(contentType: String, copiedContent: String, context: SuggestionContext) -> String {
+        var sections: [String] = []
+
+        let contentLabel = contentType == "url" ? "URL" : "text"
+        sections.append("""
+        The user just copied the following \(contentLabel) to their clipboard. \
+        This is the primary signal — they explicitly selected this content. \
+        Determine the single most useful action AutoClawd could take with it.
+        """)
+
+        // Copied content front and center
+        let preview = copiedContent.count > 1500 ? String(copiedContent.prefix(1500)) + "\n…[truncated]" : copiedContent
+        sections.append("## Copied \(contentLabel)\n\(preview)")
+
+        sections.append("## Active app\n\(context.app ?? "Unknown")")
+
+        if !context.urls.isEmpty {
+            sections.append("## Other visible URLs\n" + context.urls.prefix(5).joined(separator: "\n"))
+        }
+
+        if !context.screenText.isEmpty {
+            let screen = context.screenText.count > 400
+                ? String(context.screenText.prefix(400)) + "…"
+                : context.screenText
+            sections.append("## Screen context\n\(screen)")
+        }
+
+        if !context.transcript.isEmpty {
+            sections.append("## Recent voice\n\(context.transcript)")
+        }
+
+        if !context.worldModel.isEmpty {
+            sections.append("## World model\n\(String(context.worldModel.prefix(600)))")
+        }
+
+        sections.append("""
+        ## Output — pick exactly ONE:
+
+        HIGH CONFIDENCE (≥ 0.50 for clipboard — user explicitly copied this):
+        1. COMPOSING — user copied content to use in something they're writing:
+           → {"type":"compose","title":"<verb-first, max 10 words>","draft":"<draft>","subject":"","contacts":"","confidence":0.8}
+
+        2. TASK — clear action to take with the copied content:
+           → {"type":"task","title":"<verb-first, max 10 words>","details":"<what and why>","contacts":"","confidence":0.8}
+
+        NEEDS CLARIFICATION (0.40–0.69):
+        3. QUESTION:
+           → {"type":"question","question":"<what do you want to do with this?>","options":["<action A>","<action B>","Not relevant"],"confidence":0.55}
+
+        NOTHING ACTIONABLE:
+        4. → {}
+
+        Rules:
+        - Clipboard content is the PRIMARY signal. Base your suggestion on it.
+        - Title must start with a verb: Write, Reply, Summarise, Send, Search, Translate, etc.
+        - Output ONLY valid JSON. No explanation, no markdown fences.
+        """)
+
+        return sections.joined(separator: "\n\n")
+    }
+
     // MARK: - Vision-First Runner (app-switch path)
 
     /// Tries vision (screenshot → Anthropic API) first; falls back to text Haiku on any error.
     /// Vision is only used on app-switch where the visual context delta is highest signal.
     private func runVisionOrHaiku(context: SuggestionContext) async -> SuggestionItem? {
+        let item: SuggestionItem?
         do {
             let raw = try await vision.captureAndGenerate(context: context)
-            return parseResponse(from: raw, context: context)
+            item = parseResponse(from: raw, context: context)
         } catch ClaudeVisionService.VisionError.noAPIKey {
-            // No API key — text Haiku is the right fallback (uses CLI OAuth)
             Log.info(.pipeline, "Vision: no API key, falling back to text Haiku")
+            item = await runHaiku(context: context)
         } catch {
             Log.warn(.pipeline, "Vision failed (\(error.localizedDescription)), falling back to text Haiku")
+            item = await runHaiku(context: context)
         }
-        return await runHaiku(context: context)
+        return deduplicate(item)
     }
 
     // MARK: - Shared Haiku Runner
@@ -228,11 +399,32 @@ final class SuggestionPipeline {
         do {
             let response = try await haiku.generate(prompt: prompt)
             Log.info(.pipeline, "Haiku response (\(response.count) chars)")
-            return parseResponse(from: response, context: context)
+            let item = parseResponse(from: response, context: context)
+            return deduplicate(item)
         } catch {
             Log.warn(.pipeline, "Haiku inference failed: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    // MARK: - Deduplication
+
+    /// Suppresses items whose title was already shown within `deduplicationWindow`.
+    /// Records new unique titles for future deduplication.
+    private func deduplicate(_ item: SuggestionItem?) -> SuggestionItem? {
+        guard let item else { return nil }
+        let title: String
+        switch item {
+        case .capability(let m):  title = m.capability.name
+        case .task(let t):        title = t.title
+        case .question(let q):    title = q.question
+        }
+        if isDuplicate(title: title) {
+            Log.info(.pipeline, "Suppressing duplicate suggestion: \"\(title)\"")
+            return nil
+        }
+        recordSuggestion(title: title)
+        return item
     }
 
     // MARK: - Prompt

@@ -34,11 +34,18 @@ final class ClaudeHaikuService: @unchecked Sendable {
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = claudeURL
-            process.arguments = ["--print", "--model", Self.model, prompt]
+            // --model before --print; prompt as final positional arg
+            process.arguments = ["--model", Self.model, "--print", prompt]
 
-            // Auth: mirror ClaudeCodeRunner — API key from settings takes priority;
-            // if absent, claude CLI falls back to its own OAuth credentials (~/.config/claude/).
+            // Mirror ClaudeCodeRunner env setup:
+            // 1. Strip CLAUDECODE so the nested-session guard doesn't fire when AutoClawd
+            //    was itself launched from a Claude Code session (e.g. `make run` in dev).
+            // 2. Strip CLAUDE_CODE_ENTRYPOINT for the same reason.
+            // 3. Inject API key if configured; otherwise claude falls back to OAuth creds.
             var env = ProcessInfo.processInfo.environment
+            env.removeValue(forKey: "CLAUDECODE")
+            env.removeValue(forKey: "CLAUDE_CODE_ENTRYPOINT")
+            env.removeValue(forKey: "CLAUDE_CODE_OAUTH_TOKEN")
             let apiKey = SettingsManager.shared.anthropicAPIKey
             if !apiKey.isEmpty {
                 env["ANTHROPIC_API_KEY"] = apiKey

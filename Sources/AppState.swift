@@ -171,10 +171,18 @@ final class AppState: ObservableObject {
             } else if detectedSuggestion == nil {
                 activeQuestion = nil
             }
+            // Record in history when a new suggestion appears
+            if let item = detectedSuggestion {
+                let entry = SuggestionHistoryEntry(item: item, shownAt: Date())
+                suggestionHistory.insert(entry, at: 0)
+                if suggestionHistory.count > 20 { suggestionHistory = Array(suggestionHistory.prefix(20)) }
+            }
         }
     }
     /// The currently-displayed question toast (if any). Used for voice-answer matching.
     @Published var activeQuestion: SuggestionQuestion? = nil
+    /// Rolling history of all suggestions shown (most recent first).
+    @Published var suggestionHistory: [SuggestionHistoryEntry] = []
     /// Active tab in the main panel — set by AppDelegate.showMainPanel(tab:) to drive tab selection.
     @Published var activeTab: PanelTab = .agents
 
@@ -559,6 +567,36 @@ final class AppState: ObservableObject {
             }
             Log.info(.system, "Clipboard text auto-pasted to canvas (\(text.count) chars)")
         }
+
+        // Clipboard suggestion trigger — highest-intent signal (user explicitly copied something).
+        // Fires for text and URLs in ambient mode; not during learn mode or active execution.
+        ClipboardMonitor.shared.onContentCopied = { [weak self] type, _, full in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.pillMode != .learn,
+                      self.canvasExecutingTask == nil,
+                      self.detectedSuggestion == nil,
+                      type == "text" || type == "url"
+                else { return }
+
+                let app = NSWorkspace.shared.frontmostApplication?.localizedName
+                self.suggestionPipeline.scheduleClipboardSuggestion(
+                    contentType: type,
+                    copiedContent: full,
+                    screenText: self.screenVisionAnalyzer.recentContext() ?? "",
+                    transcript: self.liveTranscriptText,
+                    app: app,
+                    urls: self.lastScreenSnapshot?.detectedURLs ?? [],
+                    worldModel: self.worldModelService.excerpt(forApp: app)
+                ) { [weak self] item in
+                    guard let self, self.detectedSuggestion == nil else { return }
+                    self.detectedSuggestion = item
+                    Log.info(.pipeline, "Clipboard suggestion: \(item.id)")
+                }
+            }
+        }
+
         locationService.onUnknownSSID = { [weak self] ssid in
             self?.pendingUnknownSSID = ssid
         }
@@ -713,7 +751,9 @@ final class AppState: ObservableObject {
                         clipboard: ClipboardMonitor.shared.entries.suffix(5).map { "[\($0.type)] \($0.preview)" },
                         worldModel: self.worldModelService.excerpt(forApp: app)
                     ) { [weak self] screenItem in
-                        guard let self, self.detectedSuggestion == nil else { return }
+                        // Don't surface suggestions while Claude Code is actively running (distracting)
+                        guard let self, self.detectedSuggestion == nil,
+                              self.canvasExecutingTask == nil else { return }
                         self.detectedSuggestion = screenItem
                         Log.info(.pipeline, "Screen-triggered suggestion: \(screenItem.id)")
                     }
@@ -1636,7 +1676,8 @@ final class AppState: ObservableObject {
                     clipboard:  ClipboardMonitor.shared.entries.suffix(5).map { "[\($0.type)] \($0.preview)" },
                     worldModel: self.worldModelService.excerpt(forApp: switchApp)
                 ) { [weak self] item in
-                    guard let self, self.detectedSuggestion == nil else { return }
+                    guard let self, self.detectedSuggestion == nil,
+                          self.canvasExecutingTask == nil else { return }
                     self.detectedSuggestion = item
                     Log.info(.pipeline, "App-switch suggestion: \(item.id)")
                 }

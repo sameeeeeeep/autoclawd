@@ -81,6 +81,37 @@ struct TaskContext: Sendable {
     var isComplete: Bool { !files.isEmpty || !contacts.isEmpty || !urls.isEmpty }
 }
 
+// MARK: - Suggestion History
+
+/// A single entry in the rolling suggestion history shown in the Canvas workspace.
+struct SuggestionHistoryEntry: Identifiable, Sendable {
+    let id: String
+    let item: SuggestionItem
+    let shownAt: Date
+
+    init(item: SuggestionItem, shownAt: Date) {
+        self.id     = item.id + "-\(shownAt.timeIntervalSince1970)"
+        self.item   = item
+        self.shownAt = shownAt
+    }
+
+    var title: String {
+        switch item {
+        case .capability(let m): return m.capability.name
+        case .task(let t):       return t.title
+        case .question(let q):   return q.question
+        }
+    }
+
+    var typeLabel: String {
+        switch item {
+        case .capability: return "capability"
+        case .task(let t): return t.intent
+        case .question:    return "question"
+        }
+    }
+}
+
 // MARK: - Learn Mode Data Models (FUCBC Architecture)
 //
 // No Llama. Events are collected every 5 seconds directly from the screen/audio

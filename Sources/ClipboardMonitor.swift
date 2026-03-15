@@ -31,6 +31,11 @@ final class ClipboardMonitor: @unchecked Sendable {
     /// Wire this up in AppState to auto-paste into the canvas text input.
     var onTextCopied: ((String) -> Void)?
 
+    /// Called on the main thread for ANY clipboard change (text, URL, image).
+    /// `type` is "text" | "url" | "image". `preview` is the first 200 chars / "[image]".
+    /// Used by SuggestionPipeline as the highest-intent trigger — user explicitly copied something.
+    var onContentCopied: ((_ type: String, _ preview: String, _ full: String) -> Void)?
+
     private init() {}
 
     func start() {
@@ -95,6 +100,19 @@ final class ClipboardMonitor: @unchecked Sendable {
             DispatchQueue.main.async { [weak self] in
                 self?.onTextCopied?(fullText)
             }
+        }
+
+        // Always fire content-copied callback — clipboard copy is the highest-intent signal
+        // regardless of whether a session is active. SuggestionPipeline uses this as primary trigger.
+        let fullContent: String = {
+            switch type {
+            case "text":  return pasteboard.string(forType: .string) ?? preview
+            case "url":   return pasteboard.string(forType: .URL) ?? preview
+            default:      return preview
+            }
+        }()
+        DispatchQueue.main.async { [weak self] in
+            self?.onContentCopied?(type, preview, fullContent)
         }
     }
 
