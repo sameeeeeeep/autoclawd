@@ -3,23 +3,173 @@ import SwiftUI
 
 /// AI Canvas panel tab — shown when PanelTab.canvas is active.
 ///
-/// Two modes:
-///   • Question active → full-screen question card with voice transcript preview
-///   • No question → AICanvasView (FUCBC event canvas + capabilities)
+/// Three modes:
+///   • Question active  → QuestionWorkspaceView (full-screen question + voice hint)
+///   • History exists   → SuggestionHistoryView (review past suggestions, re-run or dismiss)
+///   • Nothing yet      → AICanvasView (FUCBC event canvas + capabilities)
 struct CanvasWorkspaceView: View {
     @ObservedObject var appState: AppState
 
     var body: some View {
-        if let question = appState.activeQuestion {
-            QuestionWorkspaceView(question: question, appState: appState)
-                .transition(.asymmetric(
-                    insertion: .move(edge: .top).combined(with: .opacity),
-                    removal:   .opacity
-                ))
-        } else {
-            AICanvasView(learnService: appState.learnModeService)
-                .transition(.opacity)
+        Group {
+            if let question = appState.activeQuestion {
+                QuestionWorkspaceView(question: question, appState: appState)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal:   .opacity
+                    ))
+            } else if !appState.suggestionHistory.isEmpty {
+                SuggestionHistoryView(appState: appState)
+                    .transition(.opacity)
+            } else {
+                AICanvasView(learnService: appState.learnModeService)
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: appState.activeQuestion?.id)
+        .animation(.easeInOut(duration: 0.2), value: appState.suggestionHistory.count)
+    }
+}
+
+// MARK: - SuggestionHistoryView
+
+/// Scrollable list of the last 20 suggestions — shown in the Canvas tab idle state.
+/// Each entry shows what triggered it, what was suggested, and buttons to re-run or dismiss.
+private struct SuggestionHistoryView: View {
+    @ObservedObject var appState: AppState
+
+    var body: some View {
+        ZStack {
+            AppTheme.glassAmbientBackground.ignoresSafeArea()
+            VStack(spacing: 0) {
+                // Header
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Suggestion History")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(Glass.textPrimary)
+                        Text("\(appState.suggestionHistory.count) suggestions this session")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Glass.textSecondary)
+                    }
+                    Spacer()
+                    Button("Clear") {
+                        appState.suggestionHistory.removeAll()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Glass.textTertiary)
+                }
+                .padding(.horizontal, 20).padding(.vertical, 14)
+                .background(Color.black.opacity(0.2))
+
+                GlassDivider()
+
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(appState.suggestionHistory) { entry in
+                            SuggestionHistoryRow(entry: entry, appState: appState)
+                        }
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - SuggestionHistoryRow
+
+private struct SuggestionHistoryRow: View {
+    let entry: SuggestionHistoryEntry
+    @ObservedObject var appState: AppState
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            // Type icon
+            Image(systemName: typeIcon)
+                .font(.system(size: 13))
+                .foregroundStyle(typeColor)
+                .frame(width: 24, height: 24)
+                .background(typeColor.opacity(0.12))
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Glass.textPrimary)
+                    .lineLimit(2)
+                HStack(spacing: 6) {
+                    Text(entry.typeLabel)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(typeColor)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(typeColor.opacity(0.1))
+                        .clipShape(Capsule())
+                    Text(timeAgo(entry.shownAt))
+                        .font(.system(size: 10))
+                        .foregroundStyle(Glass.textTertiary)
+                }
+            }
+
+            Spacer()
+
+            // Re-run button (only for tasks/capabilities)
+            if canRerun {
+                Button {
+                    rerun()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Glass.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .opacity(isHovered ? 1 : 0)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isHovered ? Color.white.opacity(0.06) : Color.white.opacity(0.03))
+        )
+        .onHover { isHovered = $0 }
+    }
+
+    private var typeIcon: String {
+        switch entry.item {
+        case .capability: return "bolt.fill"
+        case .task:       return "checkmark.circle.fill"
+        case .question:   return "questionmark.circle.fill"
+        }
+    }
+
+    private var typeColor: Color {
+        switch entry.item {
+        case .capability: return .orange
+        case .task:       return .blue
+        case .question:   return .purple
+        }
+    }
+
+    private var canRerun: Bool {
+        if case .question = entry.item { return false }
+        return true
+    }
+
+    private func rerun() {
+        switch entry.item {
+        case .capability(let m): appState.executeCapability(m.capability)
+        case .task(let t):       appState.executeSuggestedTask(t)
+        case .question:          break
+        }
+    }
+
+    private func timeAgo(_ date: Date) -> String {
+        let s = Int(-date.timeIntervalSinceNow)
+        if s < 60  { return "just now" }
+        if s < 3600 { return "\(s / 60)m ago" }
+        return "\(s / 3600)h ago"
     }
 }
 

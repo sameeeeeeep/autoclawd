@@ -170,6 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "AI Search Mode  ⌃S",  action: #selector(menuSearch),     keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "View Logs",           action: #selector(menuViewLogs),   keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Test Suggestion Now", action: #selector(menuTestSuggestion), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit AutoClawd",      action: #selector(NSApp.terminate), keyEquivalent: ""))
 
@@ -185,6 +186,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func menuViewLogs()     { showMainPanel() }
     @objc private func menuAmbient()      { appState.pillMode = .ambient; if !appState.isListening { appState.startListening() } }
     @objc private func menuSearch()       { appState.pillMode = .aiSearch; if !appState.isListening { appState.startListening() } }
+    @objc private func menuTestSuggestion() {
+        // Force a Haiku call immediately with current context — useful for testing pipeline health.
+        // Opens canvas tab so you can see the result, then fires sessionEndSuggest.
+        showMainPanel(tab: .canvas)
+        let app     = NSWorkspace.shared.frontmostApplication?.localizedName
+        let ctx     = SuggestionContext(
+            transcript:  appState.liveTranscriptText.isEmpty ? "Testing suggestion pipeline" : appState.liveTranscriptText,
+            screenText:  appState.screenVisionAnalyzer.recentContext() ?? "",
+            app:         app,
+            urls:        appState.lastScreenSnapshot?.detectedURLs ?? [],
+            clipboard:   ClipboardMonitor.shared.entries.suffix(3).map { "[\($0.type)] \($0.preview)" },
+            worldModel:  String(appState.worldModelContent.prefix(2000))
+        )
+        let pipeline = appState.suggestionPipeline
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            Log.info(.pipeline, "Manual suggestion test triggered from menu")
+            if let item = await pipeline.sessionEndSuggest(context: ctx) {
+                self.appState.detectedSuggestion = item
+                Log.info(.pipeline, "Test suggestion result: \(item.id)")
+            } else {
+                Log.warn(.pipeline, "Test suggestion: Haiku returned nothing actionable")
+            }
+        }
+    }
 
     // MARK: - Menu Bar Icon
 
