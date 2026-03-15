@@ -34,8 +34,19 @@ struct MainPanelView: View {
     var body: some View {
         NavigationSplitView {
             List(PanelTab.allCases, selection: $selectedTab) { tab in
-                Label(tab.rawValue, systemImage: tab.icon)
-                    .tag(tab)
+                HStack(spacing: 0) {
+                    Label(tab.rawValue, systemImage: tab.icon)
+                    if tab == .canvas, appState.suggestionHistory.count > 0 {
+                        Spacer()
+                        Text("\(min(appState.suggestionHistory.count, 9))")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Color.purple.opacity(0.85))
+                            .clipShape(Capsule())
+                    }
+                }
+                .tag(tab)
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 140, ideal: 170, max: 220)

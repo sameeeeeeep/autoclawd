@@ -283,7 +283,7 @@ final class SuggestionPipeline {
         do {
             let response = try await haiku.generate(prompt: prompt)
             Log.info(.pipeline, "Clipboard Haiku response (\(response.count) chars)")
-            return deduplicateClipboard(parseResponse(from: response, context: context))
+            return deduplicateClipboard(parseResponse(from: response, context: context, minimumConfidence: 0.50))
         } catch {
             Log.warn(.pipeline, "Clipboard Haiku failed: \(error.localizedDescription)")
             return nil
@@ -489,15 +489,15 @@ final class SuggestionPipeline {
 
     // MARK: - Response Parsing
 
-    func parseResponse(from response: String, context: SuggestionContext) -> SuggestionItem? {
+    func parseResponse(from response: String, context: SuggestionContext, minimumConfidence: Float = 0.65) -> SuggestionItem? {
         var raw = response.trimmingCharacters(in: .whitespacesAndNewlines)
-        if raw.hasPrefix("```") {
-            let lines = raw.components(separatedBy: "\n")
-            raw = lines.dropFirst().dropLast().joined(separator: "\n")
-        }
-        // Strip any leading prose before the JSON object
+        // Strip leading prose / markdown fence before the JSON object
         if let jsonStart = raw.firstIndex(of: "{") {
             raw = String(raw[jsonStart...])
+        }
+        // Strip trailing markdown fence / prose after the closing brace
+        if let jsonEnd = raw.lastIndex(of: "}") {
+            raw = String(raw[...jsonEnd])
         }
 
         guard let data = raw.data(using: .utf8),
@@ -506,7 +506,7 @@ final class SuggestionPipeline {
         else { return nil }
 
         let confidence = (json["confidence"] as? Double).map { Float($0) } ?? 0.5
-        guard confidence > 0.65 else { return nil }
+        guard confidence >= minimumConfidence else { return nil }
 
         switch type {
 
